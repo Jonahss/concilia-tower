@@ -100,7 +100,7 @@ static SDL_Surface *raw_to_surface(NEResource *res, SpriteAtlas *atlas)
         int srcx = i % 8;
         int srcy = i / 8;
         int dstx = srcx + (srcy / 36) * 8;
-        int dsty = 35 - (srcy % 36);
+        int dsty = srcy % 36;  /* No flip — SDL surfaces are top-down */
         
         if (dstx < width && dsty < height) {
             uint8_t *c = atlas->palette[src[i]];

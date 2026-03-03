@@ -104,7 +104,7 @@ YootTower code map  ──→ Function names/structure       │
 - `0x84a8-0x84ab` — Condo sprites
 - `0x84e8-0x84ef` — Restaurant sprites
 - `0x8528-0x852b` — Shop sprites
-- `0x8568-0x8571` — Lobby sprites (multiple states!)
+- `0x8568-0x8571` — Restaurant sprites (Jonah confirmed — NOT lobby!)
 - `0x85a8-0x85ab` — Fast food sprites
 - `0x85e8-0x85ee` — Cinema/party hall sprites
 - `0x8628-0x8636` — Hotel room sprites
@@ -114,9 +114,9 @@ YootTower code map  ──→ Function names/structure       │
 - `0x87e8-0x87ed` — Metro station sprites
 - `0x8828` — Cathedral
 - `0x8868` — Medical center
-- `0x88a8` — Recycling center(?)
+- `0x88a8` — Recycling center (Jonah confirmed)
 - `0x88e8-0x88ed` — Stairway sprites
-- `0x8928-0x892e` — Escalator sprites
+- `0x8928-0x892e` — Recycling center sprites (Jonah corrected — NOT escalator)
 - `0x8968-0x8969` — Housekeeping/maintenance
 - `0x89a8-0x89a9` — Additional escalator
 - `0x8f28` — Underground dirt tile
