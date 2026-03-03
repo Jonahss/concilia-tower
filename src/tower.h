@@ -21,7 +21,9 @@
 
 /* Pixel dimensions per cell */
 #define CELL_W  8
-#define CELL_H  36
+#define CELL_H  36     /* Total floor height: ceiling (12px) + tenant (24px) */
+#define CEIL_H  12     /* Ceiling/roof strip height */
+#define TENANT_H 24    /* Tenant content height (below ceiling) */
 
 /* Tenant/item types (from the original game) */
 typedef enum {

@@ -198,13 +198,14 @@ static void render_tower(void)
     int top_floor, bot_floor, dummy;
     screen_to_grid(0, 0, &top_floor, &dummy);
     screen_to_grid(0, game.screen_h, &bot_floor, &dummy);
-    top_floor += 2;  /* Some margin */
+    top_floor += 2;
     bot_floor -= 2;
-    
     if (top_floor > TOWER_MAX_FLOOR) top_floor = TOWER_MAX_FLOOR;
     if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
     
-    /* Render each visible floor */
+    Sprite *ceil_spr = sprites_find(&game.sprites, SPR_FLOOR_CEIL);
+    Sprite *under_spr = sprites_find(&game.sprites, SPR_UNDERGROUND);
+    
     for (int floor = bot_floor; floor <= top_floor; floor++) {
         int fidx = floor_to_index(floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
@@ -212,19 +213,55 @@ static void render_tower(void)
         int sx_base, sy_base;
         grid_to_screen(floor, 0, &sx_base, &sy_base);
         
+        /* Check if this floor has ANY content */
+        int floor_has_content = 0;
+        for (int x = 0; x < TOWER_WIDTH; x++) {
+            if (game.tower.grid[fidx][x].type != ITEM_NONE) {
+                floor_has_content = 1;
+                break;
+            }
+        }
+        
+        if (!floor_has_content) continue;
+        
+        /* Render ceiling strip across the occupied floor.
+         * Ceiling is the top 12px of the 36px floor. */
+        if (ceil_spr && floor > 0) {
+            /* Find the leftmost and rightmost occupied cells */
+            int left = TOWER_WIDTH, right = 0;
+            for (int x = 0; x < TOWER_WIDTH; x++) {
+                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
+                    if (x < left) left = x;
+                    if (x > right) right = x;
+                }
+            }
+            /* Tile ceiling sprite across occupied width */
+            for (int cx = left; cx <= right; cx += (ceil_spr->w / CELL_W)) {
+                int csx = sx_base + cx * CELL_W;
+                if (csx > game.screen_w || csx + ceil_spr->w < 0) continue;
+                SDL_Rect dst = { csx, sy_base, ceil_spr->w, CEIL_H };
+                SDL_Rect src = { 0, 0, ceil_spr->w, CEIL_H };
+                if (src.h > ceil_spr->h) src.h = ceil_spr->h;
+                SDL_RenderCopy(game.renderer, ceil_spr->texture, &src, &dst);
+            }
+        }
+        
+        /* Underground floors: tile dirt behind any empty cells */
+        if (floor < 0 && under_spr) {
+            for (int x = 0; x < TOWER_WIDTH; x += (under_spr->w / CELL_W)) {
+                int ux = sx_base + x * CELL_W;
+                if (ux > game.screen_w || ux + under_spr->w < 0) continue;
+                SDL_Rect dst = { ux, sy_base, under_spr->w, under_spr->h };
+                SDL_RenderCopy(game.renderer, under_spr->texture, NULL, &dst);
+            }
+        }
+        
+        /* Render tenants on this floor */
         for (int x = 0; x < TOWER_WIDTH; ) {
             TowerCell *cell = &game.tower.grid[fidx][x];
             
-            if (cell->type == ITEM_NONE) {
-                x++;
-                continue;
-            }
-            
-            /* Only render from the leftmost cell of each tenant */
-            if (cell->cell_index != 0) {
-                x++;
-                continue;
-            }
+            if (cell->type == ITEM_NONE) { x++; continue; }
+            if (cell->cell_index != 0) { x++; continue; }
             
             Tenant *tenant = tower_tenant(&game.tower, cell->tenant_id);
             if (!tenant) { x++; continue; }
@@ -236,26 +273,28 @@ static void render_tower(void)
             int tx, ty;
             grid_to_screen(floor, tenant->x, &tx, &ty);
             int tw = tenant->width * CELL_W;
-            int th = CELL_H;
+            
+            /* Tenant sprite goes below the ceiling strip */
+            int tenant_y = ty + CEIL_H;
             
             if (spr) {
                 if (tenant->type == ITEM_LOBBY) {
-                    /* Lobby: tile the full sprite across the lobby width */
+                    /* Lobby uses full-height sprite (36px), no ceiling strip */
                     int lobby_pw = TOWER_WIDTH * CELL_W;
                     for (int lx = 0; lx < lobby_pw; lx += spr->w) {
                         int lsx = sx_base + lx;
                         if (lsx + spr->w < 0 || lsx > game.screen_w) continue;
-                        /* Use full sprite height (which may differ from CELL_H) */
-                        SDL_Rect dst = { lsx, sy_base, spr->w, spr->h };
+                        SDL_Rect dst = { lsx, ty, spr->w, spr->h };
                         SDL_RenderCopy(game.renderer, spr->texture, NULL, &dst);
                     }
                 } else {
-                    /* For other items: extract one frame from the sprite sheet.
-                     * Sprite sheets have multiple frames packed horizontally.
-                     * We take just the first tw pixels as one frame. */
+                    /* Extract one frame from the sprite sheet.
+                     * Sprite sheets have frames packed horizontally,
+                     * each frame is tw pixels wide.
+                     * Tenant sprites are 24px tall, drawn below the 12px ceiling. */
                     SDL_Rect src = { 0, 0, tw, spr->h };
                     if (src.w > spr->w) src.w = spr->w;
-                    SDL_Rect dst = { tx, ty, tw, spr->h };
+                    SDL_Rect dst = { tx, tenant_y, tw, TENANT_H };
                     SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
                 }
             } else {
@@ -271,9 +310,8 @@ static void render_tower(void)
                 default: break;
                 }
                 SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
-                SDL_Rect rect = { tx, ty, tw, th };
+                SDL_Rect rect = { tx, tenant_y, tw, TENANT_H };
                 SDL_RenderFillRect(game.renderer, &rect);
-                /* Border */
                 SDL_SetRenderDrawColor(game.renderer, 80, 80, 80, 255);
                 SDL_RenderDrawRect(game.renderer, &rect);
             }
