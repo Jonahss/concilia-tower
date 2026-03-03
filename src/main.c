@@ -2,243 +2,421 @@
  *
  * A native Linux port of SimTower, using game mechanics extracted from
  * decompilation of SIMTOWER.EXE and guided by the YootTower code map.
- *
- * Platform: SDL2 (graphics, sound, input)
- * Assets: loaded from original SIMTOWER.EXE (NE format)
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <SDL.h>
 #include "ne_resource.h"
+#include "sprites.h"
+#include "tower.h"
 
-/* ---------- Constants from the original game ---------- */
-#define TOWER_MAX_FLOORS_ABOVE  15   /* Ground + 14 above (up to 100 in later stars) */
-#define TOWER_MAX_FLOORS_BELOW  9    /* B1 through B9 */
-#define TOWER_MAX_WIDTH         63   /* Units (each unit = 8 pixels) */
-#define CELL_WIDTH              8    /* Pixels per horizontal cell */
-#define CELL_HEIGHT             36   /* Pixels per floor */
-#define LOBBY_FLOOR             0
+/* ---------- Window / display ---------- */
+#define WINDOW_W    960
+#define WINDOW_H    720
 
-/* Window dimensions */
-#define WINDOW_W    800
-#define WINDOW_H    600
+/* ---------- Sprite IDs for rendering ---------- */
+/* Sky background tiles (32×360 each, palette-swapped for time of day)
+ * 0x8351-0x835b are 11 sky column strips, tiled horizontally.
+ * 0x8352 is the second strip (with clouds/rain marks). */
+#define SPR_SKY_BASE    0x8351
+#define SPR_SKY_COUNT   11
 
-/* ---------- Resource IDs for key bitmaps ---------- */
-/* These come from OpenSkyscraper's SimTowerLoader analysis */
-#define BMP_LOBBY       0x8568   /* Lobby bitmap */
-#define BMP_SKY         0x8200   /* Sky background */
-#define BMP_UNDERGROUND 0x8201   /* Underground background */
+/* Lobby: 0x8468/0x8469 — 640×36 (80 cells, multiple states) */
+#define SPR_LOBBY_DAY   0x8468
+#define SPR_LOBBY_NIGHT 0x8469
 
-/* ---------- Palette ---------- */
-/* SimTower uses a 256-color indexed palette, stored in resource 0x83e8 
- * of type 0xFF03. Each entry is 8 bytes: 
- *   [2 bytes index] [2 bytes R] [2 bytes G] [2 bytes B]
- * where only the low byte of each color matters. */
+/* Office: 0x85A8-0x85AB — 288×24 (36 cells) */
+#define SPR_OFFICE_BASE 0x85a8
 
-typedef struct {
-    uint8_t r, g, b;
-} PaletteEntry;
+/* Condo: 0x8628 + i*5 — series of 128×24 sprites */
+#define SPR_CONDO_BASE  0x8628
 
-static PaletteEntry palette[256];
-static int palette_loaded = 0;
+/* Floor/ceiling */
+#define SPR_FLOOR_CEIL  0x8428
+#define SPR_FLOOR_WALK  0x842b
 
-static int load_palette(NEResourceTable *exe)
+/* Restaurant: 0x8568 + i*2 — 384×24 (48 cells) */
+#define SPR_RESTAURANT_BASE 0x8568
+
+/* Fast food: 0x85e8 */
+#define SPR_FASTFOOD_BASE 0x85e8
+
+/* Hotel single: 0x84A8 + i*2 */
+#define SPR_HOTEL_S_BASE 0x84a8
+
+/* Hotel double: 0x84E8 + i*2 */
+#define SPR_HOTEL_D_BASE 0x84e8
+
+/* Underground dirt */
+#define SPR_UNDERGROUND  0x8f28
+
+/* Clouds */
+#define SPR_CLOUD_BASE   0x8258
+
+/* Elevator shaft */
+#define SPR_ELEVATOR_BASE 0x8351
+
+/* Stairs */
+#define SPR_STAIRS_BASE   0x88e8
+
+/* Escalator */
+#define SPR_ESCALATOR_BASE 0x8928
+
+/* UI */
+#define SPR_TOOLBAR      0x8140
+
+/* ---------- Sprite mapping for item types ---------- */
+/* Sprite mapping: returns sprite ID and the pixel width of one frame */
+static uint16_t item_sprite_id(ItemType type, int *frame_w)
 {
-    NEResource *pal = ne_find(exe, 0xFF03, 0x83e8);
-    if (!pal) {
-        fprintf(stderr, "Palette resource 0x83e8 not found\n");
-        return -1;
+    switch (type) {
+    case ITEM_LOBBY:         *frame_w = 640; return SPR_LOBBY_DAY;
+    case ITEM_OFFICE:        *frame_w = 288; return SPR_OFFICE_BASE;
+    case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;
+    case ITEM_HOTEL_SINGLE:  *frame_w = 128; return SPR_HOTEL_S_BASE;
+    case ITEM_RESTAURANT:    *frame_w = 384; return SPR_RESTAURANT_BASE;
+    case ITEM_FAST_FOOD:     *frame_w = 288; return SPR_FASTFOOD_BASE;
+    case ITEM_STAIRS:        *frame_w = 200; return SPR_STAIRS_BASE;
+    case ITEM_ESCALATOR:     *frame_w = 200; return SPR_ESCALATOR_BASE;
+    case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEVATOR_BASE;
+    case ITEM_FLOOR:         *frame_w = 336; return SPR_FLOOR_WALK;
+    default:                 *frame_w = 0;   return 0;
     }
-    
-    /* Each entry is 8 bytes in the resource */
-    int entry_count = pal->length / 8;
-    if (entry_count > 256) entry_count = 256;
-    
-    for (int i = 0; i < entry_count; i++) {
-        uint8_t *p = pal->data + i * 8;
-        /* Byte layout per OpenSkyscraper: [idx_lo idx_hi] [r_lo r_hi] [g_lo g_hi] [b_lo b_hi]
-         * But the BMP palette assembly in OpenSkyscraper reads:
-         *   B = data[i*8+6], G = data[i*8+4], R = data[i*8+2]
-         * So the bytes at +2,+4,+6 ARE R,G,B respectively */
-        palette[i].r = p[2];
-        palette[i].g = p[4];
-        palette[i].b = p[6];
-    }
-    
-    /* Debug: check if the palette looks sane (entry 0 should be near-black for SimTower) */
-    printf("  Entry 0: R=%d G=%d B=%d\n", palette[0].r, palette[0].g, palette[0].b);
-    printf("  Entry 255: R=%d G=%d B=%d\n", palette[255].r, palette[255].g, palette[255].b);
-    
-    palette_loaded = 1;
-    printf("Loaded palette: %d entries\n", entry_count);
-    return 0;
-}
-
-/* ---------- Bitmap conversion ---------- */
-/* Convert a DIB resource (type 0x8002) to an SDL surface.
- * The NE resource contains a BITMAPINFOHEADER + palette + pixel data. */
-
-static SDL_Surface *dib_to_surface(NEResource *res)
-{
-    if (!res || res->length < 40) return NULL;
-    
-    uint8_t *data = res->data;
-    
-    /* Read BITMAPINFOHEADER */
-    uint32_t hdr_size  = *(uint32_t *)(data + 0);
-    int32_t  width     = *(int32_t  *)(data + 4);
-    int32_t  height    = *(int32_t  *)(data + 8);
-    uint16_t bpp       = *(uint16_t *)(data + 14);
-    
-    if (hdr_size < 40 || bpp != 8) {
-        fprintf(stderr, "Unsupported bitmap: hdr=%u bpp=%u\n", hdr_size, bpp);
-        return NULL;
-    }
-    
-    int abs_height = height < 0 ? -height : height;
-    int top_down = height < 0;
-    
-    /* Color table follows the header */
-    uint8_t *color_table = data + hdr_size;
-    
-    /* Pixel data follows the color table (256 entries × 4 bytes) */
-    int row_bytes = (width + 3) & ~3;  /* Rows are DWORD-aligned */
-    uint8_t *pixels = color_table + 256 * 4;
-    
-    /* Check we have enough data */
-    int expected = (int)(hdr_size + 256 * 4 + row_bytes * abs_height);
-    if (res->length < expected) {
-        /* Try with palette from the global palette instead */
-        pixels = color_table;  /* No local palette */
-    }
-    
-    /* Create SDL surface */
-    SDL_Surface *surf = SDL_CreateRGBSurface(0, width, abs_height, 32,
-        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-    if (!surf) return NULL;
-    
-    SDL_LockSurface(surf);
-    
-    for (int y = 0; y < abs_height; y++) {
-        /* DIB rows are stored bottom-up unless height is negative */
-        int src_y = top_down ? y : (abs_height - 1 - y);
-        uint8_t *src_row = pixels + src_y * row_bytes;
-        uint32_t *dst_row = (uint32_t *)((uint8_t *)surf->pixels + y * surf->pitch);
-        
-        for (int x = 0; x < width; x++) {
-            uint8_t idx = src_row[x];
-            PaletteEntry *c;
-            
-            /* Use local color table if available, otherwise global palette */
-            if (pixels != color_table) {
-                uint8_t *ct = color_table + idx * 4;
-                /* RGBQUAD is actually BGRA */
-                dst_row[x] = (0xFF << 24) | (ct[2] << 16) | (ct[1] << 8) | ct[0];
-            } else if (palette_loaded) {
-                c = &palette[idx];
-                dst_row[x] = (0xFF << 24) | (c->r << 16) | (c->g << 8) | c->b;
-            } else {
-                dst_row[x] = (0xFF << 24) | (idx << 16) | (idx << 8) | idx;
-            }
-        }
-    }
-    
-    SDL_UnlockSurface(surf);
-    return surf;
-}
-
-/* ---------- Raw bitmap conversion (type 0xFF02) ---------- */
-/* These are raw 8-bit pixel arrays, 8 pixels wide, with cells stacked vertically.
- * Each cell is 8×36 pixels. */
-static SDL_Surface *raw_bitmap_to_surface(NEResource *res)
-{
-    if (!res || !palette_loaded) return NULL;
-    
-    int cell_pixels = 36 * 8;
-    int cell_count = res->length / cell_pixels;
-    if (cell_count <= 0) return NULL;
-    
-    int width = cell_count * 8;
-    int height = 36;
-    
-    SDL_Surface *surf = SDL_CreateRGBSurface(0, width, height, 32,
-        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-    if (!surf) return NULL;
-    
-    SDL_LockSurface(surf);
-    
-    uint8_t *src = res->data;
-    for (int i = 0; i < res->length; i++) {
-        int srcx = i % 8;
-        int srcy = i / 8;
-        int dstx = srcx + (srcy / 36) * 8;
-        int dsty = 35 - (srcy % 36);  /* Flip vertically */
-        
-        if (dstx < width && dsty < height) {
-            PaletteEntry *c = &palette[src[i]];
-            uint32_t *row = (uint32_t *)((uint8_t *)surf->pixels + dsty * surf->pitch);
-            row[dstx] = (0xFF << 24) | (c->r << 16) | (c->g << 8) | c->b;
-        }
-    }
-    
-    SDL_UnlockSurface(surf);
-    return surf;
 }
 
 /* ---------- Game state ---------- */
 typedef struct {
     NEResourceTable exe;
+    SpriteAtlas     sprites;
+    Tower           tower;
     SDL_Window     *window;
     SDL_Renderer   *renderer;
     int             running;
-    int             scroll_x;
-    int             scroll_y;
+    int             screen_w, screen_h;
     
-    /* Resource catalog */
-    int   bitmap_count;
-    int   sound_count;
-    int   raw_bitmap_count;
-} GameState;
+    /* Build mode */
+    ItemType        build_type;
+    int             mouse_x, mouse_y;
+    int             mouse_floor, mouse_cell;
+    
+    /* Camera smoothing */
+    float           cam_fx, cam_fy;
+} Game;
 
-static GameState game;
+static Game game;
 
-/* ---------- Dump mode ---------- */
-/* Save first N bitmaps as BMP files for visual verification */
-static int dump_bitmaps(NEResourceTable *exe, const char *outdir, int max)
+/* ---------- Coordinate conversion ---------- */
+
+/* Convert screen coordinates to tower grid position */
+static void screen_to_grid(int sx, int sy, int *floor, int *cell)
 {
-    char path[256];
-    int saved = 0;
+    /* Tower pixel origin: the lobby floor at the center of the world */
+    int world_x = sx + (int)game.cam_fx - game.screen_w / 2;
+    int world_y = sy + (int)game.cam_fy - game.screen_h / 2;
     
-    NEResourceList *bitmaps = ne_find_type(exe, NE_RT_BITMAP);
-    if (bitmaps) {
-        for (int i = 0; i < bitmaps->count && saved < max; i++) {
-            SDL_Surface *surf = dib_to_surface(&bitmaps->items[i]);
-            if (surf) {
-                snprintf(path, sizeof(path), "%s/bmp_%04x.bmp", outdir, bitmaps->items[i].id);
-                SDL_SaveBMP(surf, path);
-                printf("  Saved %s (%dx%d)\n", path, surf->w, surf->h);
-                SDL_FreeSurface(surf);
-                saved++;
+    *cell = world_x / CELL_W;
+    /* Y axis: floor 0 is at world_y = 0, positive floors go up (negative world_y) */
+    *floor = -(world_y / CELL_H);
+    
+    /* Clamp */
+    if (*cell < 0) *cell = 0;
+    if (*cell >= TOWER_WIDTH) *cell = TOWER_WIDTH - 1;
+}
+
+/* Convert grid position to screen coordinates */
+static void grid_to_screen(int floor, int cell, int *sx, int *sy)
+{
+    int world_x = cell * CELL_W;
+    int world_y = -floor * CELL_H;
+    
+    *sx = world_x - (int)game.cam_fx + game.screen_w / 2;
+    *sy = world_y - (int)game.cam_fy + game.screen_h / 2;
+}
+
+/* ---------- Rendering ---------- */
+
+static void render_sky(void)
+{
+    int lobby_sx, lobby_sy;
+    grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
+    
+    /* Try to use sky tile sprites (32×360 each, tile horizontally) */
+    /* Use sprite 0x8352 which has the blue sky appearance */
+    Sprite *sky = sprites_find(&game.sprites, 0x8352);
+    
+    if (sky) {
+        /* Tile sky strips across the top of the screen */
+        for (int x = 0; x < game.screen_w; x += sky->w) {
+            /* Position sky so bottom aligns with top of lobby */
+            int sy = lobby_sy - sky->h;
+            SDL_Rect dst = { x, sy, sky->w, sky->h };
+            SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst);
+            /* If sky doesn't reach top, tile upward */
+            for (int y2 = sy - sky->h; y2 > -sky->h; y2 -= sky->h) {
+                SDL_Rect dst2 = { x, y2, sky->w, sky->h };
+                SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst2);
             }
+        }
+    } else {
+        /* Fallback: blue gradient */
+        for (int y = 0; y < lobby_sy; y++) {
+            int t = (y * 255) / (lobby_sy > 0 ? lobby_sy : 1);
+            SDL_SetRenderDrawColor(game.renderer, 
+                80 + t/3,    /* R: darker at top */
+                150 + t/3,   /* G */
+                220 + t/8,   /* B */
+                255);
+            SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
     }
     
-    NEResourceList *raw = ne_find_type(exe, NE_RT_RAWBITMAP);
-    if (raw) {
-        for (int i = 0; i < raw->count && saved < max; i++) {
-            SDL_Surface *surf = raw_bitmap_to_surface(&raw->items[i]);
-            if (surf) {
-                snprintf(path, sizeof(path), "%s/raw_%04x.bmp", outdir, raw->items[i].id);
-                SDL_SaveBMP(surf, path);
-                printf("  Saved %s (%dx%d)\n", path, surf->w, surf->h);
-                SDL_FreeSurface(surf);
-                saved++;
+    /* Underground: brown gradient below lobby */
+    Sprite *underground = sprites_find(&game.sprites, SPR_UNDERGROUND);
+    if (underground) {
+        for (int x = 0; x < game.screen_w; x += underground->w) {
+            for (int y = lobby_sy + CELL_H; y < game.screen_h; y += underground->h) {
+                SDL_Rect dst = { x, y, underground->w, underground->h };
+                SDL_RenderCopy(game.renderer, underground->texture, NULL, &dst);
             }
         }
+    } else {
+        /* Fallback brown underground */
+        for (int y = lobby_sy + CELL_H; y < game.screen_h; y++) {
+            int depth = y - lobby_sy;
+            int shade = 139 - depth / 8;
+            if (shade < 40) shade = 40;
+            SDL_SetRenderDrawColor(game.renderer, shade, shade - 20, shade - 38, 255);
+            SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
+        }
     }
+}
+
+static void render_tower(void)
+{
+    /* Determine visible floor range */
+    int top_floor, bot_floor, dummy;
+    screen_to_grid(0, 0, &top_floor, &dummy);
+    screen_to_grid(0, game.screen_h, &bot_floor, &dummy);
+    top_floor += 2;  /* Some margin */
+    bot_floor -= 2;
     
-    return saved;
+    if (top_floor > TOWER_MAX_FLOOR) top_floor = TOWER_MAX_FLOOR;
+    if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
+    
+    /* Render each visible floor */
+    for (int floor = bot_floor; floor <= top_floor; floor++) {
+        int fidx = floor_to_index(floor);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+        
+        int sx_base, sy_base;
+        grid_to_screen(floor, 0, &sx_base, &sy_base);
+        
+        for (int x = 0; x < TOWER_WIDTH; ) {
+            TowerCell *cell = &game.tower.grid[fidx][x];
+            
+            if (cell->type == ITEM_NONE) {
+                x++;
+                continue;
+            }
+            
+            /* Only render from the leftmost cell of each tenant */
+            if (cell->cell_index != 0) {
+                x++;
+                continue;
+            }
+            
+            Tenant *tenant = tower_tenant(&game.tower, cell->tenant_id);
+            if (!tenant) { x++; continue; }
+            
+            int frame_w_hint = 0;
+            uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint);
+            Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+            
+            int tx, ty;
+            grid_to_screen(floor, tenant->x, &tx, &ty);
+            int tw = tenant->width * CELL_W;
+            int th = CELL_H;
+            
+            if (spr) {
+                if (tenant->type == ITEM_LOBBY) {
+                    /* Lobby: tile the full sprite across the lobby width */
+                    int lobby_pw = TOWER_WIDTH * CELL_W;
+                    for (int lx = 0; lx < lobby_pw; lx += spr->w) {
+                        int lsx = sx_base + lx;
+                        if (lsx + spr->w < 0 || lsx > game.screen_w) continue;
+                        /* Use full sprite height (which may differ from CELL_H) */
+                        SDL_Rect dst = { lsx, sy_base, spr->w, spr->h };
+                        SDL_RenderCopy(game.renderer, spr->texture, NULL, &dst);
+                    }
+                } else {
+                    /* For other items: extract one frame from the sprite sheet.
+                     * Sprite sheets have multiple frames packed horizontally.
+                     * We take just the first tw pixels as one frame. */
+                    SDL_Rect src = { 0, 0, tw, spr->h };
+                    if (src.w > spr->w) src.w = spr->w;
+                    SDL_Rect dst = { tx, ty, tw, spr->h };
+                    SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                }
+            } else {
+                /* Fallback: colored rectangle */
+                uint8_t r = 100, g = 100, b = 100;
+                switch (tenant->type) {
+                case ITEM_OFFICE:       r=200; g=200; b=150; break;
+                case ITEM_CONDO:        r=180; g=220; b=180; break;
+                case ITEM_HOTEL_SINGLE: r=150; g=150; b=220; break;
+                case ITEM_RESTAURANT:   r=220; g=180; b=150; break;
+                case ITEM_FAST_FOOD:    r=220; g=220; b=100; break;
+                case ITEM_FLOOR:        r=200; g=200; b=200; break;
+                default: break;
+                }
+                SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+                SDL_Rect rect = { tx, ty, tw, th };
+                SDL_RenderFillRect(game.renderer, &rect);
+                /* Border */
+                SDL_SetRenderDrawColor(game.renderer, 80, 80, 80, 255);
+                SDL_RenderDrawRect(game.renderer, &rect);
+            }
+            
+            x += tenant->width;
+        }
+    }
+}
+
+static void render_build_ghost(void)
+{
+    if (game.build_type == ITEM_NONE) return;
+    
+    int width = ITEM_WIDTH[game.build_type];
+    int gx, gy;
+    grid_to_screen(game.mouse_floor, game.mouse_cell, &gx, &gy);
+    
+    int can = tower_can_place(&game.tower, game.build_type, 
+                               game.mouse_floor, game.mouse_cell);
+    
+    /* Ghost rectangle */
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    if (can) {
+        SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
+    } else {
+        SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
+    }
+    SDL_Rect ghost = { gx, gy, width * CELL_W, CELL_H };
+    SDL_RenderFillRect(game.renderer, &ghost);
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
+    SDL_RenderDrawRect(game.renderer, &ghost);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+}
+
+static void render_ui(void)
+{
+    /* Simple HUD at top of screen */
+    SDL_SetRenderDrawColor(game.renderer, 40, 40, 60, 220);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_Rect bar = { 0, 0, game.screen_w, 28 };
+    SDL_RenderFillRect(game.renderer, &bar);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    
+    /* We'll render text when SDL_ttf is added. For now, use the window title. */
+    char title[256];
+    const char *type_names[] = {
+        "None", "Lobby", "Floor", "Office", "Condo", "Hotel(S)", "Hotel(T)", 
+        "Hotel(Suite)", "Restaurant", "Fast Food", "Shop", "Cinema", "Party Hall",
+        "Metro", "Parking", "Cathedral", "Medical", "Security", "Recycling",
+        "Stairs", "Escalator", "Elevator"
+    };
+    snprintf(title, sizeof(title), 
+             "SimTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s [1-6 to select, click to place]",
+             game.tower.money, game.tower.star_rating, game.tower.population,
+             game.tower.day, type_names[game.build_type]);
+    SDL_SetWindowTitle(game.window, title);
+}
+
+static void render(void)
+{
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderClear(game.renderer);
+    
+    render_sky();
+    render_tower();
+    render_build_ghost();
+    render_ui();
+    
+    SDL_RenderPresent(game.renderer);
+}
+
+/* ---------- Input handling ---------- */
+static void handle_event(SDL_Event *ev)
+{
+    switch (ev->type) {
+    case SDL_QUIT:
+        game.running = 0;
+        break;
+        
+    case SDL_KEYDOWN:
+        switch (ev->key.keysym.sym) {
+        case SDLK_ESCAPE:
+        case SDLK_q:
+            game.running = 0;
+            break;
+        
+        /* Screenshot */
+        case SDLK_F12: {
+            SDL_Surface *sshot = SDL_CreateRGBSurface(0, game.screen_w, game.screen_h, 32,
+                0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+            SDL_RenderReadPixels(game.renderer, NULL, SDL_PIXELFORMAT_ARGB8888,
+                                 sshot->pixels, sshot->pitch);
+            SDL_SaveBMP(sshot, "/tmp/simtower_screenshot.bmp");
+            SDL_FreeSurface(sshot);
+            printf("Screenshot saved to /tmp/simtower_screenshot.bmp\n");
+            break;
+        }
+        
+        /* Camera movement */
+        case SDLK_LEFT:  case SDLK_a: game.cam_fx -= 40; break;
+        case SDLK_RIGHT: case SDLK_d: game.cam_fx += 40; break;
+        case SDLK_UP:    case SDLK_w: game.cam_fy -= 40; break;
+        case SDLK_DOWN:  case SDLK_s: game.cam_fy += 40; break;
+        
+        /* Build type selection */
+        case SDLK_1: game.build_type = ITEM_OFFICE; break;
+        case SDLK_2: game.build_type = ITEM_CONDO; break;
+        case SDLK_3: game.build_type = ITEM_RESTAURANT; break;
+        case SDLK_4: game.build_type = ITEM_FAST_FOOD; break;
+        case SDLK_5: game.build_type = ITEM_HOTEL_SINGLE; break;
+        case SDLK_6: game.build_type = ITEM_STAIRS; break;
+        case SDLK_0: game.build_type = ITEM_NONE; break;
+        
+        default: break;
+        }
+        break;
+        
+    case SDL_MOUSEMOTION:
+        game.mouse_x = ev->motion.x;
+        game.mouse_y = ev->motion.y;
+        screen_to_grid(game.mouse_x, game.mouse_y, 
+                       &game.mouse_floor, &game.mouse_cell);
+        break;
+        
+    case SDL_MOUSEBUTTONDOWN:
+        if (ev->button.button == SDL_BUTTON_LEFT && game.build_type != ITEM_NONE) {
+            tower_place(&game.tower, game.build_type, 
+                        game.mouse_floor, game.mouse_cell);
+        }
+        break;
+        
+    case SDL_MOUSEWHEEL:
+        /* Scroll to move camera vertically */
+        game.cam_fy -= ev->wheel.y * 60;
+        break;
+        
+    case SDL_WINDOWEVENT:
+        if (ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            game.screen_w = ev->window.data1;
+            game.screen_h = ev->window.data2;
+        }
+        break;
+    }
 }
 
 /* ---------- Main ---------- */
@@ -251,20 +429,15 @@ int main(int argc, char *argv[])
         "SIMTOWER.EXE",
         "data/SIMTOWER.EXE",
         "../OpenSkyscraper/data/SIMTOWER.EXE",
-        "../simtower-decomp/../OpenSkyscraper/data/SIMTOWER.EXE",
         NULL
     };
     
-    if (argc > 1) {
+    if (argc > 1 && argv[1][0] != '-') {
         exe_path = argv[1];
     } else {
         for (int i = 0; search_paths[i]; i++) {
             FILE *test = fopen(search_paths[i], "rb");
-            if (test) {
-                fclose(test);
-                exe_path = search_paths[i];
-                break;
-            }
+            if (test) { fclose(test); exe_path = search_paths[i]; break; }
         }
     }
     
@@ -282,183 +455,94 @@ int main(int argc, char *argv[])
         return 1;
     }
     
-    /* Print resource summary */
-    printf("\nResources loaded:\n");
-    for (int i = 0; i < game.exe.type_count; i++) {
-        printf("  Type 0x%04x: %d resources\n", 
-               game.exe.type_ids[i], game.exe.types[i].count);
-    }
-    
-    /* Load palette */
-    load_palette(&game.exe);
-    
-    /* Count resources */
-    NEResourceList *bitmaps = ne_find_type(&game.exe, NE_RT_BITMAP);
-    NEResourceList *sounds = ne_find_type(&game.exe, NE_RT_SOUND);
-    NEResourceList *raw_bitmaps = ne_find_type(&game.exe, NE_RT_RAWBITMAP);
-    
-    printf("\nAsset summary:\n");
-    printf("  Bitmaps (DIB):  %d\n", bitmaps ? bitmaps->count : 0);
-    printf("  Bitmaps (raw):  %d\n", raw_bitmaps ? raw_bitmaps->count : 0);
-    printf("  Sounds:         %d\n", sounds ? sounds->count : 0);
-    printf("  Palette:        %s\n", palette_loaded ? "yes" : "no");
-    
-    /* Dump mode: --dump <dir> saves bitmaps and exits */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
-            if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-                fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-                return 1;
-            }
-            printf("\nDumping bitmaps to %s...\n", argv[i+1]);
-            int n = dump_bitmaps(&game.exe, argv[i+1], 999);
-            printf("Saved %d bitmaps.\n", n);
-            ne_free(&game.exe);
-            SDL_Quit();
-            return 0;
-        }
-    }
-    
     /* Initialize SDL */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-        ne_free(&game.exe);
         return 1;
     }
     
+    game.screen_w = WINDOW_W;
+    game.screen_h = WINDOW_H;
     game.window = SDL_CreateWindow("SimTower for Linux",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         WINDOW_W, WINDOW_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    if (!game.window) {
-        fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
-        SDL_Quit();
-        return 1;
-    }
     
     game.renderer = SDL_CreateRenderer(game.window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!game.renderer) {
-        /* Fallback to software */
+    if (!game.renderer)
         game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
-    }
-    if (!game.renderer) {
-        fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        SDL_DestroyWindow(game.window);
-        SDL_Quit();
-        return 1;
-    }
     
-    /* Try to render a bitmap as proof of life */
-    SDL_Texture *test_tex = NULL;
-    if (bitmaps && bitmaps->count > 0) {
-        /* Find the lobby bitmap or just use the first available */
-        NEResource *lobby = ne_find(&game.exe, NE_RT_BITMAP, 0x8568);
-        NEResource *test_res = lobby ? lobby : &bitmaps->items[0];
-        
-        printf("\nRendering test bitmap: type=0x%x id=0x%x (%d bytes)\n",
-               test_res->type, test_res->id, test_res->length);
-        
-        SDL_Surface *surf = dib_to_surface(test_res);
-        if (surf) {
-            printf("  → %dx%d surface created\n", surf->w, surf->h);
-            test_tex = SDL_CreateTextureFromSurface(game.renderer, surf);
-            SDL_FreeSurface(surf);
+    /* Load sprites */
+    sprites_init(&game.sprites, &game.exe, game.renderer);
+    
+    /* Initialize tower */
+    tower_init(&game.tower);
+    
+    /* Pre-build a sample tower for visual testing */
+    /* Add some floors of offices above the lobby */
+    for (int f = 1; f <= 5; f++) {
+        for (int x = 8; x <= 48; x += ITEM_WIDTH[ITEM_OFFICE]) {
+            tower_place(&game.tower, ITEM_OFFICE, f, x);
         }
     }
+    /* Add some condos */
+    for (int x = 8; x <= 48; x += ITEM_WIDTH[ITEM_CONDO]) {
+        tower_place(&game.tower, ITEM_CONDO, 6, x);
+        tower_place(&game.tower, ITEM_CONDO, 7, x);
+    }
+    /* A restaurant on floor 3 */
+    tower_place(&game.tower, ITEM_RESTAURANT, 1, 0);
+    /* Fast food */
+    tower_place(&game.tower, ITEM_FAST_FOOD, 1, 52);
     
-    /* Also try a raw bitmap */
-    SDL_Texture *raw_tex = NULL;
-    if (raw_bitmaps && raw_bitmaps->count > 0) {
-        NEResource *test_raw = &raw_bitmaps->items[0];
-        printf("Rendering test raw bitmap: id=0x%x (%d bytes)\n",
-               test_raw->id, test_raw->length);
-        
-        SDL_Surface *surf = raw_bitmap_to_surface(test_raw);
-        if (surf) {
-            printf("  → %dx%d surface created\n", surf->w, surf->h);
-            raw_tex = SDL_CreateTextureFromSurface(game.renderer, surf);
-            SDL_FreeSurface(surf);
-        }
+    printf("\n=== SimTower for Linux running ===\n");
+    printf("Controls:\n");
+    printf("  Arrow keys / WASD: scroll camera\n");
+    printf("  Mouse wheel: scroll vertically\n");
+    printf("  1-6: select building type\n");
+    printf("  Left click: place building\n");
+    printf("  0: deselect (no build)\n");
+    printf("  Q/Escape: quit\n\n");
+    
+    /* Auto-screenshot mode for headless testing */
+    int auto_screenshot = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--screenshot") == 0) auto_screenshot = 1;
     }
     
     /* Main loop */
-    printf("\n=== SimTower for Linux running ===\n");
-    printf("Controls: Arrow keys to scroll, Q/Escape to quit\n\n");
-    
     game.running = 1;
-    game.scroll_x = WINDOW_W / 2;
-    game.scroll_y = WINDOW_H / 2;
+    game.build_type = ITEM_OFFICE;
     
+    int frame = 0;
     while (game.running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
-            switch (ev.type) {
-            case SDL_QUIT:
-                game.running = 0;
-                break;
-            case SDL_KEYDOWN:
-                switch (ev.key.keysym.sym) {
-                case SDLK_q:
-                case SDLK_ESCAPE:
-                    game.running = 0;
-                    break;
-                case SDLK_LEFT:  game.scroll_x -= 20; break;
-                case SDLK_RIGHT: game.scroll_x += 20; break;
-                case SDLK_UP:    game.scroll_y -= 20; break;
-                case SDLK_DOWN:  game.scroll_y += 20; break;
-                default: break;
-                }
-                break;
-            }
+            handle_event(&ev);
         }
+        render();
+        frame++;
         
-        /* Clear to sky blue */
-        SDL_SetRenderDrawColor(game.renderer, 135, 206, 235, 255);
-        SDL_RenderClear(game.renderer);
-        
-        /* Draw ground (brown below lobby level) */
-        SDL_Rect ground = { 0, WINDOW_H / 2, WINDOW_W, WINDOW_H / 2 };
-        SDL_SetRenderDrawColor(game.renderer, 139, 119, 101, 255);
-        SDL_RenderFillRect(game.renderer, &ground);
-        
-        /* Draw lobby line */
-        SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 255);
-        SDL_RenderDrawLine(game.renderer, 0, WINDOW_H / 2, WINDOW_W, WINDOW_H / 2);
-        
-        /* Draw test bitmap if we have one */
-        if (test_tex) {
-            int w, h;
-            SDL_QueryTexture(test_tex, NULL, NULL, &w, &h);
-            SDL_Rect dst = { 
-                WINDOW_W / 2 - w / 2 - game.scroll_x + WINDOW_W / 2,
-                WINDOW_H / 2 - h,
-                w, h 
-            };
-            SDL_RenderCopy(game.renderer, test_tex, NULL, &dst);
+        /* Auto-screenshot after a few frames (let rendering stabilize) */
+        if (auto_screenshot && frame == 3) {
+            SDL_Surface *sshot = SDL_CreateRGBSurface(0, game.screen_w, game.screen_h, 32,
+                0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+            SDL_RenderReadPixels(game.renderer, NULL, SDL_PIXELFORMAT_ARGB8888,
+                                 sshot->pixels, sshot->pitch);
+            SDL_SaveBMP(sshot, "/tmp/simtower_screenshot.bmp");
+            SDL_FreeSurface(sshot);
+            printf("Auto-screenshot saved.\n");
+            game.running = 0;
         }
-        
-        /* Draw raw bitmap below */
-        if (raw_tex) {
-            int w, h;
-            SDL_QueryTexture(raw_tex, NULL, NULL, &w, &h);
-            SDL_Rect dst = { 10, 10, w * 2, h * 2 };  /* 2x scale */
-            SDL_RenderCopy(game.renderer, raw_tex, NULL, &dst);
-        }
-        
-        /* Draw info text overlay */
-        /* (We'll add SDL_ttf later, for now just render colored rects as placeholders) */
-        
-        SDL_RenderPresent(game.renderer);
     }
     
     /* Cleanup */
-    if (test_tex) SDL_DestroyTexture(test_tex);
-    if (raw_tex) SDL_DestroyTexture(raw_tex);
+    sprites_free(&game.sprites);
     SDL_DestroyRenderer(game.renderer);
     SDL_DestroyWindow(game.window);
     SDL_Quit();
     ne_free(&game.exe);
     
-    printf("SimTower for Linux exited cleanly.\n");
+    printf("Exited cleanly.\n");
     return 0;
 }

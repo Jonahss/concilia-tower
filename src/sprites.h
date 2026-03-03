@@ -1,0 +1,49 @@
+/* sprites.h - Sprite atlas for SimTower assets
+ *
+ * Loads all game sprites from SIMTOWER.EXE resources and provides
+ * lookup by resource ID. Handles both DIB and raw bitmap formats.
+ */
+#ifndef SPRITES_H
+#define SPRITES_H
+
+#include <SDL.h>
+#include "ne_resource.h"
+
+/* Maximum sprites we'll ever need */
+#define MAX_SPRITES 512
+
+typedef struct {
+    uint16_t     id;        /* Resource ID (e.g., 0x8568 = lobby) */
+    uint16_t     type;      /* Resource type (0x8002 = DIB, 0xFF02 = raw) */
+    SDL_Texture *texture;   /* GPU texture for rendering */
+    int          w, h;      /* Dimensions in pixels */
+} Sprite;
+
+typedef struct {
+    Sprite   sprites[MAX_SPRITES];
+    int      count;
+    
+    /* Palette for raw bitmap decoding */
+    uint8_t  palette[256][3];  /* [index][R,G,B] */
+    int      palette_loaded;
+} SpriteAtlas;
+
+/* Initialize atlas and load all sprites from the NE resource table.
+ * renderer is needed to create GPU textures. */
+int sprites_init(SpriteAtlas *atlas, NEResourceTable *exe, SDL_Renderer *renderer);
+
+/* Find a sprite by resource ID. Returns NULL if not found. */
+Sprite *sprites_find(SpriteAtlas *atlas, uint16_t id);
+
+/* Render a sprite at screen position (x,y).
+ * If src_rect is NULL, draws the entire sprite. */
+void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect *src_rect);
+
+/* Render a sprite scaled */
+void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite, 
+                         int x, int y, int w, int h, SDL_Rect *src_rect);
+
+/* Free all textures */
+void sprites_free(SpriteAtlas *atlas);
+
+#endif /* SPRITES_H */
