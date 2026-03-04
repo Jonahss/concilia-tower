@@ -74,11 +74,23 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     /* Check funds */
     if (tower->money < cost) return 0;
     
+    /* Lobby special rules: can only be placed on every 15th floor */
+    if (type == ITEM_LOBBY) {
+        if (floor % 15 != 0) return 0;
+        if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
+        /* Check if lobby already exists on this floor */
+        int fidx = floor_to_index(floor);
+        if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
+            if (tower->grid[fidx][0].type == ITEM_LOBBY) return 0; /* already has lobby */
+        }
+        return 1; /* Lobbies auto-extend full width, no further checks needed */
+    }
+    
     /* Underground-only items must be below floor 0 */
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
     
     /* Above-ground items (non-transport, non-underground) shouldn't be below floor 0
-     * except lobby which is always floor 0, and stairs/escalators which can go anywhere */
+     * except stairs/escalators which can go anywhere */
     int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
     if (!is_transport && !ITEM_UNDERGROUND_ONLY[type] && 
         type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0) return 0;
@@ -94,12 +106,18 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         }
     }
     
-    /* Support check: must have something below OR be on floor 0 (lobby) OR
-     * adjacent to existing structure. For underground, need support above. */
-    if (floor != 0) {
+    /* Support check:
+     * - Floor 0 (lobby level): always supported
+     * - Above ground (floor > 0): must have support directly BELOW (floor - 1)
+     * - Underground (floor < 0): must have support directly ABOVE (floor + height)
+     * - Stairs/escalators can bridge floors (exempt from strict support) 
+     *   but still need SOME connection to existing structure */
+    if (floor == 0) {
+        /* Ground floor is always supported */
+    } else if (is_transport) {
+        /* Transport (stairs/escalators) need support below OR above */
         int has_support = 0;
         
-        /* Check floor below for support */
         int below_idx = floor_to_index(floor - 1);
         if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
             for (int cx = x; cx < x + width && !has_support; cx++) {
@@ -108,7 +126,6 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
         
-        /* Also check above for underground expansion */
         int above_idx = floor_to_index(floor + height);
         if (!has_support && above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
             for (int cx = x; cx < x + width && !has_support; cx++) {
@@ -117,18 +134,40 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
         
-        /* Check same floor adjacency (left/right neighbors) */
+        /* Also check the floors they span for existing content */
         if (!has_support) {
             for (int f = floor; f < floor + height && !has_support; f++) {
                 int fidx = floor_to_index(f);
                 if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-                if (x > 0 && tower->grid[fidx][x - 1].type != ITEM_NONE)
-                    has_support = 1;
-                if (x + width < TOWER_WIDTH && tower->grid[fidx][x + width].type != ITEM_NONE)
-                    has_support = 1;
+                for (int cx = x; cx < x + width && !has_support; cx++) {
+                    if (tower->grid[fidx][cx].type != ITEM_NONE)
+                        has_support = 1;
+                }
             }
         }
         
+        if (!has_support) return 0;
+    } else if (floor > 0) {
+        /* Above ground: MUST have support directly below */
+        int has_support = 0;
+        int below_idx = floor_to_index(floor - 1);
+        if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
+            for (int cx = x; cx < x + width && !has_support; cx++) {
+                if (tower->grid[below_idx][cx].type != ITEM_NONE)
+                    has_support = 1;
+            }
+        }
+        if (!has_support) return 0;
+    } else {
+        /* Underground (floor < 0): must have support above */
+        int has_support = 0;
+        int above_idx = floor_to_index(floor + height);
+        if (above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
+            for (int cx = x; cx < x + width && !has_support; cx++) {
+                if (tower->grid[above_idx][cx].type != ITEM_NONE)
+                    has_support = 1;
+            }
+        }
         if (!has_support) return 0;
     }
     
@@ -143,6 +182,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
+    
+    /* Lobby special case: auto-extends full width */
+    if (type == ITEM_LOBBY) {
+        width = TOWER_WIDTH;
+        x = 0;
+    }
     
     /* Deduct cost */
     tower->money -= cost;

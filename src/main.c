@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <SDL.h>
+#include <SDL_ttf.h>
 #include "ne_resource.h"
 #include "sprites.h"
 #include "tower.h"
@@ -15,6 +16,7 @@
 /* ---------- Window / display ---------- */
 #define WINDOW_W    960
 #define WINDOW_H    720
+#define HUD_HEIGHT  32
 
 /* ---------- Sprite IDs for rendering ---------- */
 /* Verified against OpenSkyscraper's SimTowerLoader.cpp */
@@ -185,6 +187,8 @@ typedef struct {
     Tower           tower;
     SDL_Window     *window;
     SDL_Renderer   *renderer;
+    TTF_Font       *font;
+    TTF_Font       *font_small;
     int             running;
     int             screen_w, screen_h;
     
@@ -193,14 +197,40 @@ typedef struct {
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
     
+    /* Drag placement */
+    int             dragging;       /* 1 if currently dragging to place */
+    int             drag_start_cell;
+    int             drag_start_floor;
+    
     /* Camera smoothing */
     float           cam_fx, cam_fy;
     
     /* Zoom */
     float           zoom;
+    
+    /* Cloud sprite */
+    Sprite         *cloud_sprite;
 } Game;
 
 static Game game;
+
+/* ---------- Cloud positions (fixed, scattered in sky) ---------- */
+typedef struct { int x, y; } CloudPos;
+static const CloudPos CLOUD_POSITIONS[] = {
+    { 50,  -80 },
+    { 220, -150 },
+    { 400, -60 },
+    { 150, -220 },
+    { 520, -180 },
+    { 320, -280 },
+    { 680, -100 },
+    { 80,  -320 },
+    { 450, -350 },
+    { 750, -250 },
+    { 900, -120 },
+    { 600, -380 },
+};
+#define CLOUD_COUNT (int)(sizeof(CLOUD_POSITIONS)/sizeof(CLOUD_POSITIONS[0]))
 
 /* ---------- Coordinate conversion ---------- */
 
@@ -223,6 +253,58 @@ static void grid_to_screen(int floor, int cell, int *sx, int *sy)
     
     *sx = world_x - (int)game.cam_fx + game.screen_w / 2;
     *sy = world_y - (int)game.cam_fy + game.screen_h / 2;
+}
+
+/* ---------- HUD text rendering helpers ---------- */
+
+/* Format money with commas: 5000000 -> "$5,000,000" */
+static void format_money(long amount, char *buf, int bufsize)
+{
+    char raw[32];
+    int neg = amount < 0;
+    long abs_amount = neg ? -amount : amount;
+    snprintf(raw, sizeof(raw), "%ld", abs_amount);
+    int len = (int)strlen(raw);
+    int commas = (len - 1) / 3;
+    int total = len + commas + 1 + (neg ? 1 : 0); /* +1 for $ */
+    if (total >= bufsize) { snprintf(buf, bufsize, "$%ld", amount); return; }
+    
+    int pos = 0;
+    if (neg) buf[pos++] = '-';
+    buf[pos++] = '$';
+    int digits_before_comma = len % 3;
+    if (digits_before_comma == 0) digits_before_comma = 3;
+    
+    for (int i = 0; i < len; i++) {
+        if (i > 0 && ((len - i) % 3 == 0)) buf[pos++] = ',';
+        buf[pos++] = raw[i];
+    }
+    buf[pos] = '\0';
+}
+
+/* Render text to a texture, returns texture and sets w/h */
+static SDL_Texture *render_text(const char *text, SDL_Color color, int *w, int *h)
+{
+    if (!game.font || !text || !text[0]) return NULL;
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(game.font, text, color);
+    if (!surf) return NULL;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(game.renderer, surf);
+    *w = surf->w;
+    *h = surf->h;
+    SDL_FreeSurface(surf);
+    return tex;
+}
+
+/* Draw text at position, returns width drawn */
+static int draw_text(const char *text, int x, int y, SDL_Color color)
+{
+    int w, h;
+    SDL_Texture *tex = render_text(text, color, &w, &h);
+    if (!tex) return 0;
+    SDL_Rect dst = { x, y, w, h };
+    SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+    SDL_DestroyTexture(tex);
+    return w;
 }
 
 /* ---------- Rendering ---------- */
@@ -253,6 +335,27 @@ static void render_sky(void)
                 80 + t/3, 150 + t/3, 220 + t/8, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
+    }
+    
+    /* Render clouds in the sky */
+    if (game.cloud_sprite) {
+        SDL_SetTextureAlphaMod(game.cloud_sprite->texture, 200);
+        for (int i = 0; i < CLOUD_COUNT; i++) {
+            /* Cloud positions are relative to the lobby top */
+            int cx = lobby_sx + CLOUD_POSITIONS[i].x;
+            int cy = lobby_sy + CLOUD_POSITIONS[i].y;
+            
+            /* Also tile clouds horizontally for wide views */
+            for (int tx = cx - 1200; tx < game.screen_w + 200; tx += 1200) {
+                if (tx + game.cloud_sprite->w < 0) continue;
+                if (tx > game.screen_w) break;
+                if (cy + game.cloud_sprite->h < 0 || cy > game.screen_h) continue;
+                
+                SDL_Rect dst = { tx, cy, game.cloud_sprite->w, game.cloud_sprite->h };
+                SDL_RenderCopy(game.renderer, game.cloud_sprite->texture, NULL, &dst);
+            }
+        }
+        SDL_SetTextureAlphaMod(game.cloud_sprite->texture, 255);
     }
     
     /* Underground: brown earth gradient below lobby level, gets darker with depth */
@@ -482,40 +585,183 @@ static void render_build_ghost(void)
     
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
-    int gx, gy;
-    grid_to_screen(game.mouse_floor, game.mouse_cell, &gx, &gy);
     
-    int can = tower_can_place(&game.tower, game.build_type, 
-                               game.mouse_floor, game.mouse_cell);
-    
-    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-    if (can) {
-        SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
+    if (game.dragging) {
+        /* Drag placement: show ghost row of units from start to current cell */
+        int start = game.drag_start_cell;
+        int end = game.mouse_cell;
+        int floor = game.drag_start_floor;
+        
+        /* Determine direction and iterate */
+        if (end < start) { int tmp = start; start = end; end = tmp; }
+        
+        /* Snap to unit boundaries: place units starting from drag_start_cell
+         * towards the mouse, filling in unit-width increments */
+        int unit_start = game.drag_start_cell;
+        int mouse_end = game.mouse_cell;
+        
+        int step_dir = (mouse_end >= unit_start) ? 1 : -1;
+        int cur;
+        
+        if (step_dir > 0) {
+            for (cur = unit_start; cur + width - 1 < TOWER_WIDTH && cur <= mouse_end; cur += width) {
+                int gx, gy;
+                grid_to_screen(floor, cur, &gx, &gy);
+                int can = tower_can_place(&game.tower, game.build_type, floor, cur);
+                
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+                if (can)
+                    SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
+                else
+                    SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
+                
+                int ghost_h = floors * CELL_H;
+                int ghost_y = gy - (floors - 1) * CELL_H;
+                SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
+                SDL_RenderFillRect(game.renderer, &ghost);
+                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 160);
+                SDL_RenderDrawRect(game.renderer, &ghost);
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+            }
+        } else {
+            for (cur = unit_start; cur >= 0 && cur >= mouse_end; cur -= width) {
+                int place_x = cur;
+                /* Align to left edge of unit */
+                if (place_x + width > TOWER_WIDTH) continue;
+                
+                int gx, gy;
+                grid_to_screen(floor, place_x, &gx, &gy);
+                int can = tower_can_place(&game.tower, game.build_type, floor, place_x);
+                
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+                if (can)
+                    SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
+                else
+                    SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
+                
+                int ghost_h = floors * CELL_H;
+                int ghost_y = gy - (floors - 1) * CELL_H;
+                SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
+                SDL_RenderFillRect(game.renderer, &ghost);
+                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 160);
+                SDL_RenderDrawRect(game.renderer, &ghost);
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+            }
+        }
     } else {
-        SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
+        /* Single-unit ghost at mouse position */
+        int gx, gy;
+        grid_to_screen(game.mouse_floor, game.mouse_cell, &gx, &gy);
+        
+        int can = tower_can_place(&game.tower, game.build_type, 
+                                   game.mouse_floor, game.mouse_cell);
+        
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        if (can) {
+            SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
+        } else {
+            SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
+        }
+        int ghost_h = floors * CELL_H;
+        int ghost_y = gy - (floors - 1) * CELL_H;
+        SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
+        SDL_RenderFillRect(game.renderer, &ghost);
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
+        SDL_RenderDrawRect(game.renderer, &ghost);
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     }
-    int ghost_h = floors * CELL_H;
-    int ghost_y = gy - (floors - 1) * CELL_H;
-    SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
-    SDL_RenderFillRect(game.renderer, &ghost);
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
-    SDL_RenderDrawRect(game.renderer, &ghost);
-    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
 }
 
 static void render_ui(void)
 {
-    /* Simple HUD at top of screen */
-    SDL_SetRenderDrawColor(game.renderer, 40, 40, 60, 220);
+    /* Semi-transparent dark HUD background */
+    SDL_SetRenderDrawColor(game.renderer, 20, 20, 35, 210);
     SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect bar = { 0, 0, game.screen_w, 28 };
+    SDL_Rect bar = { 0, 0, game.screen_w, HUD_HEIGHT };
     SDL_RenderFillRect(game.renderer, &bar);
+    /* Subtle bottom border */
+    SDL_SetRenderDrawColor(game.renderer, 80, 80, 120, 180);
+    SDL_RenderDrawLine(game.renderer, 0, HUD_HEIGHT - 1, game.screen_w, HUD_HEIGHT - 1);
     SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     
-    /* Update window title with current state */
+    if (game.font) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Color gold  = {255, 215, 80, 255};
+        SDL_Color green = {100, 255, 100, 255};
+        SDL_Color cyan  = {100, 200, 255, 255};
+        SDL_Color pink  = {255, 150, 200, 255};
+        
+        int x = 10;
+        int y = (HUD_HEIGHT - 16) / 2; /* Center vertically, assuming ~16px font */
+        
+        /* Money */
+        char money_buf[64];
+        format_money(game.tower.money, money_buf, sizeof(money_buf));
+        x += draw_text(money_buf, x, y, green) + 20;
+        
+        /* Star rating: ★★★☆☆ */
+        {
+            char stars[32];
+            int pos = 0;
+            for (int i = 0; i < 5; i++) {
+                if (i < game.tower.star_rating) {
+                    /* UTF-8 for ★ (U+2605): E2 98 85 */
+                    stars[pos++] = (char)0xE2;
+                    stars[pos++] = (char)0x98;
+                    stars[pos++] = (char)0x85;
+                } else {
+                    /* UTF-8 for ☆ (U+2606): E2 98 86 */
+                    stars[pos++] = (char)0xE2;
+                    stars[pos++] = (char)0x98;
+                    stars[pos++] = (char)0x86;
+                }
+            }
+            stars[pos] = '\0';
+            x += draw_text(stars, x, y, gold) + 20;
+        }
+        
+        /* Population */
+        {
+            char pop_buf[64];
+            snprintf(pop_buf, sizeof(pop_buf), "Pop: %d", game.tower.population);
+            x += draw_text(pop_buf, x, y, cyan) + 20;
+        }
+        
+        /* Day counter */
+        {
+            char day_buf[64];
+            snprintf(day_buf, sizeof(day_buf), "Day %d", game.tower.day);
+            x += draw_text(day_buf, x, y, white) + 30;
+        }
+        
+        /* Build tool + cost (right-aligned) */
+        if (game.build_type != ITEM_NONE) {
+            char tool_buf[128];
+            int cost = ITEM_COST[game.build_type];
+            if (cost > 0) {
+                char cost_str[32];
+                format_money(cost, cost_str, sizeof(cost_str));
+                snprintf(tool_buf, sizeof(tool_buf), "[%s %s]",
+                         tower_item_name(game.build_type), cost_str);
+            } else {
+                snprintf(tool_buf, sizeof(tool_buf), "[%s]",
+                         tower_item_name(game.build_type));
+            }
+            /* Measure text width for right-alignment */
+            int tw, th;
+            SDL_Texture *tex = render_text(tool_buf, pink, &tw, &th);
+            if (tex) {
+                SDL_Rect dst = { game.screen_w - tw - 10, y, tw, th };
+                SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+            }
+        }
+    }
+    
+    /* Update window title with current state (for VNC title bar) */
     char title[256];
     snprintf(title, sizeof(title), 
-             "ConcilliaTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s [keys: see console]",
+             "ConcilliaTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s",
              game.tower.money, game.tower.star_rating, game.tower.population,
              game.tower.day, tower_item_name(game.build_type));
     SDL_SetWindowTitle(game.window, title);
@@ -537,6 +783,7 @@ static void render(void)
 /* ---------- Build type cycling ---------- */
 /* All placeable types for keyboard cycling */
 static const ItemType CYCLE_TYPES[] = {
+    ITEM_LOBBY,
     ITEM_OFFICE, ITEM_CONDO, ITEM_RESTAURANT, ITEM_FAST_FOOD,
     ITEM_HOTEL_SINGLE, ITEM_HOTEL_TWIN, ITEM_HOTEL_SUITE,
     ITEM_SHOP, ITEM_CINEMA, ITEM_PARTY_HALL,
@@ -557,6 +804,39 @@ static void cycle_build_type(int direction)
            ITEM_WIDTH[game.build_type],
            ITEM_HEIGHT[game.build_type],
            ITEM_COST[game.build_type]);
+}
+
+/* ---------- Drag placement ---------- */
+
+static void drag_place_units(void)
+{
+    if (game.build_type == ITEM_NONE) return;
+    
+    int width = ITEM_WIDTH[game.build_type];
+    int floor = game.drag_start_floor;
+    int start = game.drag_start_cell;
+    int end = game.mouse_cell;
+    int step_dir = (end >= start) ? 1 : -1;
+    int placed = 0;
+    
+    if (step_dir > 0) {
+        for (int cur = start; cur + width - 1 < TOWER_WIDTH && cur <= end; cur += width) {
+            if (tower_place(&game.tower, game.build_type, floor, cur))
+                placed++;
+        }
+    } else {
+        for (int cur = start; cur >= 0 && cur >= end; cur -= width) {
+            if (cur + width <= TOWER_WIDTH) {
+                if (tower_place(&game.tower, game.build_type, floor, cur))
+                    placed++;
+            }
+        }
+    }
+    
+    if (placed > 0) {
+        printf("Drag-placed %d %s(s) on floor %d\n",
+               placed, tower_item_name(game.build_type), floor);
+    }
 }
 
 /* ---------- Input handling ---------- */
@@ -614,6 +894,7 @@ static void handle_event(SDL_Event *ev)
         case SDLK_g: game.build_type = ITEM_SECURITY;     break;  /* G for Guard */
         case SDLK_r: game.build_type = ITEM_RECYCLING;    break;
         case SDLK_o: game.build_type = ITEM_SHOP;         break;  /* O for shOp */
+        case SDLK_l: game.build_type = ITEM_LOBBY;        break;  /* L for Lobby */
         
         /* Cycle through types with Tab / Shift+Tab */
         case SDLK_TAB:
@@ -644,8 +925,26 @@ static void handle_event(SDL_Event *ev)
         
     case SDL_MOUSEBUTTONDOWN:
         if (ev->button.button == SDL_BUTTON_LEFT && game.build_type != ITEM_NONE) {
-            tower_place(&game.tower, game.build_type, 
-                        game.mouse_floor, game.mouse_cell);
+            /* Start drag placement */
+            game.dragging = 1;
+            game.drag_start_cell = game.mouse_cell;
+            game.drag_start_floor = game.mouse_floor;
+        }
+        break;
+    
+    case SDL_MOUSEBUTTONUP:
+        if (ev->button.button == SDL_BUTTON_LEFT && game.dragging) {
+            /* End drag — check if it was a single click or a drag */
+            if (game.drag_start_cell == game.mouse_cell && 
+                game.drag_start_floor == game.mouse_floor) {
+                /* Single click: place one unit */
+                tower_place(&game.tower, game.build_type,
+                           game.drag_start_floor, game.drag_start_cell);
+            } else {
+                /* Drag: place row of units */
+                drag_place_units();
+            }
+            game.dragging = 0;
         }
         break;
         
@@ -660,6 +959,35 @@ static void handle_event(SDL_Event *ev)
         }
         break;
     }
+}
+
+/* ---------- Font initialization ---------- */
+static void init_fonts(void)
+{
+    if (TTF_Init() != 0) {
+        fprintf(stderr, "TTF_Init failed: %s\n", TTF_GetError());
+        return;
+    }
+    
+    /* Try fonts in order of preference */
+    const char *font_paths[] = {
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        NULL
+    };
+    
+    for (int i = 0; font_paths[i]; i++) {
+        game.font = TTF_OpenFont(font_paths[i], 14);
+        if (game.font) {
+            printf("Font loaded: %s\n", font_paths[i]);
+            game.font_small = TTF_OpenFont(font_paths[i], 11);
+            return;
+        }
+    }
+    
+    fprintf(stderr, "Warning: no suitable TTF font found, HUD text disabled\n");
 }
 
 /* ---------- Main ---------- */
@@ -723,6 +1051,9 @@ int main(int argc, char *argv[])
     
     /* Software renderer for VNC visibility */
     game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
+    
+    /* Initialize SDL_ttf fonts */
+    init_fonts();
     
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
@@ -796,6 +1127,16 @@ int main(int argc, char *argv[])
         printf("Composites: %d built, %d failed\n", ok, fail);
     }
     
+    /* Try to load cloud sprite */
+    game.cloud_sprite = sprites_find(&game.sprites, SPR_CLOUD_BASE);
+    if (game.cloud_sprite) {
+        printf("Cloud sprite loaded: %dx%d\n", game.cloud_sprite->w, game.cloud_sprite->h);
+        /* Enable alpha blending on cloud texture */
+        SDL_SetTextureBlendMode(game.cloud_sprite->texture, SDL_BLENDMODE_BLEND);
+    } else {
+        printf("Cloud sprite 0x%04x not found (clouds disabled)\n", SPR_CLOUD_BASE);
+    }
+    
     /* Print key sprite info for debugging */
     {
         struct { uint16_t id; const char *name; } checks[] = {
@@ -817,6 +1158,7 @@ int main(int argc, char *argv[])
             {SPR_CINEMA_COMP, "cinema_comp"},
             {SPR_METRO_COMP, "metro_comp"},
             {SPR_UNDERGROUND, "underground"},
+            {SPR_CLOUD_BASE, "cloud"},
             {0x8352, "sky"},
             {0, NULL}
         };
@@ -853,13 +1195,14 @@ int main(int argc, char *argv[])
     printf("Controls:\n");
     printf("  Arrow keys: scroll camera\n");
     printf("  Mouse wheel: scroll vertically\n");
+    printf("  Click+drag: place a ROW of buildings\n");
     printf("  Number keys: 1=Office 2=Condo 3=Restaurant 4=FastFood\n");
     printf("               5=Hotel(S) 6=Hotel(T) 7=Hotel(Suite)\n");
     printf("               8=Stairs 9=Escalator 0=Deselect\n");
-    printf("  Letter keys: C=Cinema P=PartyHall M=Metro K=Parking\n");
+    printf("  Letter keys: L=Lobby C=Cinema P=PartyHall M=Metro K=Parking\n");
     printf("               H=Cathedral X=Medical G=Security R=Recycling O=Shop\n");
     printf("  Tab/Shift+Tab: cycle through all types\n");
-    printf("  Left click: place, F12: screenshot, Q/Esc: quit\n\n");
+    printf("  Left click/drag: place, F12: screenshot, Q/Esc: quit\n\n");
     
     /* Main loop */
     game.running = 1;
@@ -891,6 +1234,9 @@ int main(int argc, char *argv[])
     
     /* Cleanup */
     sprites_free(&game.sprites);
+    if (game.font) TTF_CloseFont(game.font);
+    if (game.font_small) TTF_CloseFont(game.font_small);
+    TTF_Quit();
     SDL_DestroyRenderer(game.renderer);
     SDL_DestroyWindow(game.window);
     SDL_Quit();
