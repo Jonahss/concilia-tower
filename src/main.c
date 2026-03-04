@@ -70,16 +70,17 @@
 #define SPR_TOOLBAR      0x8140
 
 /* ---------- Sprite mapping for item types ---------- */
-/* Returns sprite ID for a tenant type. frame_w = pixel width of ONE frame. */
+/* Returns sprite ID for a tenant type. frame_w = pixel width of ONE frame.
+ * Frame widths verified from OpenSkyscraper setTextureRect() calls. */
 static uint16_t item_sprite_id(ItemType type, int *frame_w)
 {
     switch (type) {
     case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0; /* special render */
-    case ITEM_OFFICE:        *frame_w = 32;  return SPR_OFFICE_BASE;
-    case ITEM_CONDO:         *frame_w = 32;  return SPR_CONDO_BASE;
-    case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_BASE;
-    case ITEM_RESTAURANT:    *frame_w = 64;  return SPR_RESTAURANT_BASE;
-    case ITEM_FAST_FOOD:     *frame_w = 48;  return SPR_FASTFOOD_BASE;
+    case ITEM_OFFICE:        *frame_w = 72;  return SPR_OFFICE_BASE;  /* 9 cells × 8px */
+    case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;   /* 16 cells × 8px */
+    case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_BASE; /* 4 cells × 8px */
+    case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_BASE; /* 24 cells × 8px */
+    case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_BASE;   /* 16 cells × 8px */
     case ITEM_STAIRS:        *frame_w = 200; return SPR_STAIRS_BASE;
     case ITEM_ESCALATOR:     *frame_w = 200; return SPR_ESCALATOR_BASE;
     case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;

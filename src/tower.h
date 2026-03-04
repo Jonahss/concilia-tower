@@ -52,30 +52,32 @@ typedef enum {
     ITEM_TYPE_COUNT
 } ItemType;
 
-/* Item widths in cells */
+/* Item widths in cells (verified from OpenSkyscraper source)
+ * Each cell = 8px. Sizes match p->size.x from Item/*.h files.
+ * Sprite frame widths are cells × 8px. */
 static const int ITEM_WIDTH[] = {
     [ITEM_NONE] = 0,
-    [ITEM_LOBBY] = 63,       /* Full width */
+    [ITEM_LOBBY] = 63,       /* Full width (auto-extends) */
     [ITEM_FLOOR] = 63,
-    [ITEM_OFFICE] = 4,
-    [ITEM_CONDO] = 4,
-    [ITEM_HOTEL_SINGLE] = 2,
-    [ITEM_HOTEL_TWIN] = 3,
-    [ITEM_HOTEL_SUITE] = 4,
-    [ITEM_RESTAURANT] = 8,
-    [ITEM_FAST_FOOD] = 6,
-    [ITEM_SHOP] = 4,
-    [ITEM_CINEMA] = 10,
-    [ITEM_PARTY_HALL] = 8,
-    [ITEM_METRO] = 16,
-    [ITEM_PARKING] = 8,
+    [ITEM_OFFICE] = 9,       /* 72px — sprite frame 72×24 */
+    [ITEM_CONDO] = 16,       /* 128px — sprite frame 128×24 */
+    [ITEM_HOTEL_SINGLE] = 4, /* 32px — sprite 0x84a8 = 32×24 */
+    [ITEM_HOTEL_TWIN] = 6,   /* 48px — sprite 0x84e8 = 48×24 */
+    [ITEM_HOTEL_SUITE] = 8,  /* 64px — estimated from suite sprites */
+    [ITEM_RESTAURANT] = 24,  /* 192px — sprite frame 192×24 */
+    [ITEM_FAST_FOOD] = 16,   /* 128px — sprite frame 128×24 */
+    [ITEM_SHOP] = 8,         /* 64px — estimated */
+    [ITEM_CINEMA] = 31,      /* 248px — 2 floors high */
+    [ITEM_PARTY_HALL] = 24,  /* 192px — 2 floors high */
+    [ITEM_METRO] = 30,       /* 240px — 3 floors deep */
+    [ITEM_PARKING] = 8,      /* 64px — estimated */
     [ITEM_CATHEDRAL] = 8,
     [ITEM_MEDICAL] = 8,
     [ITEM_SECURITY] = 4,
     [ITEM_RECYCLING] = 8,
-    [ITEM_STAIRS] = 4,
-    [ITEM_ESCALATOR] = 4,
-    [ITEM_ELEVATOR_SHAFT] = 4,
+    [ITEM_STAIRS] = 8,       /* 64px — 2 floors high */
+    [ITEM_ESCALATOR] = 8,    /* 64px — 2 floors high */
+    [ITEM_ELEVATOR_SHAFT] = 4, /* 32px (standard) */
 };
 
 /* Item costs (from original game, approximated from decompilation) */
