@@ -16,71 +16,74 @@
 #define WINDOW_H    720
 
 /* ---------- Sprite IDs for rendering ---------- */
-/* Sky background tiles (32×360 each, palette-swapped for time of day)
- * 0x8351-0x835b are 11 sky column strips, tiled horizontally.
- * 0x8352 is the second strip (with clouds/rain marks). */
+/* Verified against OpenSkyscraper's SimTowerLoader.cpp */
+
+/* Sky background tiles (32×360 each, palette-swapped for time of day) */
 #define SPR_SKY_BASE    0x8351
 #define SPR_SKY_COUNT   11
 
-/* Lobby: 0x8468/0x8469 — 640×36 (80 cells, multiple states) */
-#define SPR_LOBBY_DAY   0x8468
-#define SPR_LOBBY_NIGHT 0x8469
+/* Lobby: assembled from raw bitmaps (992×36 each, 3 variants) */
+#define SPR_LOBBY_BOT0  0x89e8   /* Lobby ground level, variant 0 (raw) */
+#define SPR_LOBBY_BOT1  0x89e9
+#define SPR_LOBBY_BOT2  0x89ea
+#define SPR_LOBBY_MID0  0x8a28   /* Lobby above-ground segment (raw) */
 
-/* Office: 0x85A8-0x85AB — 288×24 (36 cells) */
+/* Floor/ceiling color source — 96×36, extract column at x=16 for floor color */
+#define SPR_FLOOR_SRC   0x83e8
+
+/* Entrance decoration — red awning at ground level */
+#define SPR_ENTRANCE    0x83e9
+
+/* Office: 0x85A8-0x85AB — 288×24 (9 frames of 32px) */
 #define SPR_OFFICE_BASE 0x85a8
 
-/* Condo: 0x8628 + i*5 — series of 128×24 sprites */
+/* Condo: 0x8628+ — 128×24 (4 frames of 32px) */
 #define SPR_CONDO_BASE  0x8628
 
-/* Floor/ceiling */
-#define SPR_FLOOR_CEIL  0x8428
-#define SPR_FLOOR_WALK  0x842b
-
-/* Restaurant: 0x8568 + i*2 — 384×24 (48 cells) */
+/* Restaurant: 0x8568+ — 384×24 (6 frames of 64px) */
 #define SPR_RESTAURANT_BASE 0x8568
 
-/* Fast food: 0x85e8 */
+/* Fast food: 0x85e8 — 480×24 */
 #define SPR_FASTFOOD_BASE 0x85e8
 
-/* Hotel single: 0x84A8 + i*2 */
+/* Hotel single: 0x84A8 — 32×24 */
 #define SPR_HOTEL_S_BASE 0x84a8
 
-/* Hotel double: 0x84E8 + i*2 */
+/* Hotel double: 0x84E8 — 48×24 */
 #define SPR_HOTEL_D_BASE 0x84e8
 
-/* Underground dirt */
-#define SPR_UNDERGROUND  0x8f28
+/* Elevator: 0x8428 = standard car, 0x842a = service, 0x87E8 = shaft */
+#define SPR_ELEV_CAR     0x8428
+#define SPR_ELEV_SERVICE 0x842a
+#define SPR_ELEV_SHAFT   0x87e8
+
+/* Stairs: 0x88e8 — 200×60 */
+#define SPR_STAIRS_BASE   0x88e8
+
+/* Escalator: 0x8928 — 200×36 */
+#define SPR_ESCALATOR_BASE 0x8928
 
 /* Clouds */
 #define SPR_CLOUD_BASE   0x8258
-
-/* Elevator shaft */
-#define SPR_ELEVATOR_BASE 0x8351
-
-/* Stairs */
-#define SPR_STAIRS_BASE   0x88e8
-
-/* Escalator */
-#define SPR_ESCALATOR_BASE 0x8928
 
 /* UI */
 #define SPR_TOOLBAR      0x8140
 
 /* ---------- Sprite mapping for item types ---------- */
-/* Sprite mapping: returns sprite ID and the pixel width of one frame */
+/* Returns sprite ID for a tenant type. frame_w = pixel width of ONE frame. */
 static uint16_t item_sprite_id(ItemType type, int *frame_w)
 {
     switch (type) {
-    case ITEM_LOBBY:         *frame_w = 640; return SPR_LOBBY_DAY;
-    case ITEM_OFFICE:        *frame_w = 288; return SPR_OFFICE_BASE;
-    case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;
-    case ITEM_HOTEL_SINGLE:  *frame_w = 128; return SPR_HOTEL_S_BASE;
-    case ITEM_RESTAURANT:    *frame_w = 384; return SPR_RESTAURANT_BASE;
-    case ITEM_FAST_FOOD:     *frame_w = 288; return SPR_FASTFOOD_BASE;
+    case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0; /* special render */
+    case ITEM_OFFICE:        *frame_w = 32;  return SPR_OFFICE_BASE;
+    case ITEM_CONDO:         *frame_w = 32;  return SPR_CONDO_BASE;
+    case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_BASE;
+    case ITEM_RESTAURANT:    *frame_w = 64;  return SPR_RESTAURANT_BASE;
+    case ITEM_FAST_FOOD:     *frame_w = 48;  return SPR_FASTFOOD_BASE;
     case ITEM_STAIRS:        *frame_w = 200; return SPR_STAIRS_BASE;
     case ITEM_ESCALATOR:     *frame_w = 200; return SPR_ESCALATOR_BASE;
-    case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEVATOR_BASE;
-    case ITEM_FLOOR:         *frame_w = 336; return SPR_FLOOR_WALK;
+    case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;
+    case ITEM_FLOOR:         *frame_w = 0;   return 0; /* drawn as colored bar */
     default:                 *frame_w = 0;   return 0;
     }
 }
@@ -102,6 +105,9 @@ typedef struct {
     
     /* Camera smoothing */
     float           cam_fx, cam_fy;
+    
+    /* Zoom */
+    float           zoom;
 } Game;
 
 static Game game;
@@ -141,18 +147,14 @@ static void render_sky(void)
     int lobby_sx, lobby_sy;
     grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
     
-    /* Try to use sky tile sprites (32×360 each, tile horizontally) */
-    /* Use sprite 0x8352 which has the blue sky appearance */
+    /* Sky: tile 32×360 strips across the width, bottom-aligned to lobby top */
     Sprite *sky = sprites_find(&game.sprites, 0x8352);
     
     if (sky) {
-        /* Tile sky strips across the top of the screen */
         for (int x = 0; x < game.screen_w; x += sky->w) {
-            /* Position sky so bottom aligns with top of lobby */
             int sy = lobby_sy - sky->h;
             SDL_Rect dst = { x, sy, sky->w, sky->h };
             SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst);
-            /* If sky doesn't reach top, tile upward */
             for (int y2 = sy - sky->h; y2 > -sky->h; y2 -= sky->h) {
                 SDL_Rect dst2 = { x, y2, sky->w, sky->h };
                 SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst2);
@@ -160,35 +162,22 @@ static void render_sky(void)
         }
     } else {
         /* Fallback: blue gradient */
-        for (int y = 0; y < lobby_sy; y++) {
+        for (int y = 0; y < lobby_sy && y < game.screen_h; y++) {
             int t = (y * 255) / (lobby_sy > 0 ? lobby_sy : 1);
             SDL_SetRenderDrawColor(game.renderer, 
-                80 + t/3,    /* R: darker at top */
-                150 + t/3,   /* G */
-                220 + t/8,   /* B */
-                255);
+                80 + t/3, 150 + t/3, 220 + t/8, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
     }
     
-    /* Underground: brown gradient below lobby */
-    Sprite *underground = sprites_find(&game.sprites, SPR_UNDERGROUND);
-    if (underground) {
-        for (int x = 0; x < game.screen_w; x += underground->w) {
-            for (int y = lobby_sy + CELL_H; y < game.screen_h; y += underground->h) {
-                SDL_Rect dst = { x, y, underground->w, underground->h };
-                SDL_RenderCopy(game.renderer, underground->texture, NULL, &dst);
-            }
-        }
-    } else {
-        /* Fallback brown underground */
-        for (int y = lobby_sy + CELL_H; y < game.screen_h; y++) {
-            int depth = y - lobby_sy;
-            int shade = 139 - depth / 8;
-            if (shade < 40) shade = 40;
-            SDL_SetRenderDrawColor(game.renderer, shade, shade - 20, shade - 38, 255);
-            SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
-        }
+    /* Underground: brown earth below lobby level */
+    for (int y = lobby_sy + CELL_H; y < game.screen_h; y++) {
+        int depth = y - (lobby_sy + CELL_H);
+        int r = 139 - depth / 6; if (r < 50) r = 50;
+        int g = 110 - depth / 6; if (g < 35) g = 35;
+        int b =  70 - depth / 6; if (b < 20) b = 20;
+        SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+        SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
     }
 }
 
@@ -203,8 +192,8 @@ static void render_tower(void)
     if (top_floor > TOWER_MAX_FLOOR) top_floor = TOWER_MAX_FLOOR;
     if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
     
-    Sprite *ceil_spr = sprites_find(&game.sprites, SPR_FLOOR_CEIL);
-    Sprite *under_spr = sprites_find(&game.sprites, SPR_UNDERGROUND);
+    /* Lobby sprite (raw bitmap, 992×36) */
+    Sprite *lobby_spr = sprites_find(&game.sprites, SPR_LOBBY_BOT0);
     
     for (int floor = bot_floor; floor <= top_floor; floor++) {
         int fidx = floor_to_index(floor);
@@ -215,46 +204,41 @@ static void render_tower(void)
         
         /* Check if this floor has ANY content */
         int floor_has_content = 0;
+        int left = TOWER_WIDTH, right = 0;
         for (int x = 0; x < TOWER_WIDTH; x++) {
             if (game.tower.grid[fidx][x].type != ITEM_NONE) {
                 floor_has_content = 1;
-                break;
+                if (x < left) left = x;
+                if (x > right) right = x;
             }
         }
         
         if (!floor_has_content) continue;
         
-        /* Render ceiling strip across the occupied floor.
-         * Ceiling is the top 12px of the 36px floor. */
-        if (ceil_spr && floor > 0) {
-            /* Find the leftmost and rightmost occupied cells */
-            int left = TOWER_WIDTH, right = 0;
-            for (int x = 0; x < TOWER_WIDTH; x++) {
-                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                    if (x < left) left = x;
-                    if (x > right) right = x;
-                }
-            }
-            /* Tile ceiling sprite across occupied width */
-            for (int cx = left; cx <= right; cx += (ceil_spr->w / CELL_W)) {
-                int csx = sx_base + cx * CELL_W;
-                if (csx > game.screen_w || csx + ceil_spr->w < 0) continue;
-                SDL_Rect dst = { csx, sy_base, ceil_spr->w, CEIL_H };
-                SDL_Rect src = { 0, 0, ceil_spr->w, CEIL_H };
-                if (src.h > ceil_spr->h) src.h = ceil_spr->h;
-                SDL_RenderCopy(game.renderer, ceil_spr->texture, &src, &dst);
-            }
+        /* Render ceiling/floor strip across the occupied floor.
+         * In SimTower, the ceiling is a simple colored bar (12px tall, gray-beige).
+         * We draw it as a solid color matching the original game. */
+        if (floor > 0) {
+            int ceil_x = sx_base + left * CELL_W;
+            int ceil_w = (right - left + 1) * CELL_W;
+            SDL_SetRenderDrawColor(game.renderer, 188, 182, 170, 255); /* beige-gray */
+            SDL_Rect ceil_rect = { ceil_x, sy_base, ceil_w, CEIL_H };
+            SDL_RenderFillRect(game.renderer, &ceil_rect);
+            /* Thin dark line at bottom of ceiling for definition */
+            SDL_SetRenderDrawColor(game.renderer, 140, 135, 125, 255);
+            SDL_RenderDrawLine(game.renderer, ceil_x, sy_base + CEIL_H - 1,
+                              ceil_x + ceil_w, sy_base + CEIL_H - 1);
         }
         
-        /* Underground floors: tile dirt behind any empty cells */
-        if (floor < 0 && under_spr) {
-            for (int x = 0; x < TOWER_WIDTH; x += (under_spr->w / CELL_W)) {
-                int ux = sx_base + x * CELL_W;
-                if (ux > game.screen_w || ux + under_spr->w < 0) continue;
-                SDL_Rect dst = { ux, sy_base, under_spr->w, under_spr->h };
-                SDL_RenderCopy(game.renderer, under_spr->texture, NULL, &dst);
-            }
+        /* Underground floors: darker brown fill for basement areas */
+        if (floor < 0) {
+            int ug_x = sx_base + left * CELL_W;
+            int ug_w = (right - left + 1) * CELL_W;
+            SDL_SetRenderDrawColor(game.renderer, 120, 95, 65, 255);
+            SDL_Rect ug_rect = { ug_x, sy_base, ug_w, CELL_H };
+            SDL_RenderFillRect(game.renderer, &ug_rect);
         }
+        /* (old underground tile code removed — using brown fill above) */
         
         /* Render tenants on this floor */
         for (int x = 0; x < TOWER_WIDTH; ) {
@@ -277,26 +261,35 @@ static void render_tower(void)
             /* Tenant sprite goes below the ceiling strip */
             int tenant_y = ty + CEIL_H;
             
-            if (spr) {
-                if (tenant->type == ITEM_LOBBY) {
-                    /* Lobby uses full-height sprite (36px), no ceiling strip */
-                    int lobby_pw = TOWER_WIDTH * CELL_W;
-                    for (int lx = 0; lx < lobby_pw; lx += spr->w) {
-                        int lsx = sx_base + lx;
-                        if (lsx + spr->w < 0 || lsx > game.screen_w) continue;
-                        SDL_Rect dst = { lsx, ty, spr->w, spr->h };
-                        SDL_RenderCopy(game.renderer, spr->texture, NULL, &dst);
-                    }
-                } else {
-                    /* Extract one frame from the sprite sheet.
-                     * Sprite sheets have frames packed horizontally,
-                     * each frame is tw pixels wide.
-                     * Tenant sprites are 24px tall, drawn below the 12px ceiling. */
-                    SDL_Rect src = { 0, 0, tw, spr->h };
-                    if (src.w > spr->w) src.w = spr->w;
-                    SDL_Rect dst = { tx, tenant_y, tw, TENANT_H };
-                    SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+            if (tenant->type == ITEM_LOBBY && lobby_spr) {
+                /* Lobby: tile the real lobby sprite (992×36) across full width.
+                 * Lobby occupies the full 36px height (no ceiling strip). */
+                int lobby_pw = TOWER_WIDTH * CELL_W;
+                for (int lx = 0; lx < lobby_pw; lx += lobby_spr->w) {
+                    int lsx = sx_base + lx;
+                    int draw_w = lobby_spr->w;
+                    if (lx + draw_w > lobby_pw) draw_w = lobby_pw - lx;
+                    if (lsx + draw_w < 0 || lsx > game.screen_w) continue;
+                    SDL_Rect src = { 0, 0, draw_w, lobby_spr->h };
+                    SDL_Rect dst = { lsx, ty, draw_w, CELL_H };
+                    SDL_RenderCopy(game.renderer, lobby_spr->texture, &src, &dst);
                 }
+                /* Skip to end of lobby */
+                x = tenant->x + tenant->width;
+                continue;
+            } else if (spr && frame_w_hint > 0) {
+                /* Extract one frame from the sprite sheet.
+                 * Sprite sheets have frames packed horizontally.
+                 * frame_w_hint = pixel width of one frame.
+                 * tenant state selects which frame to show. */
+                int frame_idx = tenant->state % (spr->w / frame_w_hint);
+                SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
+                SDL_Rect dst = { tx, tenant_y, tw, TENANT_H };
+                SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+            } else if (spr) {
+                /* Full sprite, no frame extraction */
+                SDL_Rect dst = { tx, tenant_y, tw, TENANT_H };
+                SDL_RenderCopy(game.renderer, spr->texture, NULL, &dst);
             } else {
                 /* Fallback: colored rectangle */
                 uint8_t r = 100, g = 100, b = 100;
@@ -513,25 +506,48 @@ int main(int argc, char *argv[])
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
     
+    /* Print key sprite info for debugging */
+    {
+        struct { uint16_t id; const char *name; } checks[] = {
+            {0x8468, "lobby_day"}, {0x8469, "lobby_night"},
+            {0x85a8, "office0"}, {0x85a9, "office1"}, {0x85aa, "office2"},
+            {0x8628, "condo0"}, {0x8568, "restaurant0"},
+            {0x85e8, "fastfood0"}, {0x84a8, "hotel_s0"},
+            {0x8428, "ceil"}, {0x842b, "floor_walk"},
+            {0x8f28, "underground"}, {0x8352, "sky"},
+            {0x8258, "cloud"}, {0x8140, "toolbar"},
+            {0x8100, "title"},
+            {0, NULL}
+        };
+        printf("\n=== Sprite diagnostics ===\n");
+        for (int i = 0; checks[i].name; i++) {
+            Sprite *s = sprites_find(&game.sprites, checks[i].id);
+            if (s) printf("  0x%04x %-14s %dx%d (type 0x%04x)\n", 
+                          checks[i].id, checks[i].name, s->w, s->h, s->type);
+            else printf("  0x%04x %-14s NOT FOUND\n", checks[i].id, checks[i].name);
+        }
+        printf("===========================\n\n");
+    }
+    
     /* Initialize tower */
     tower_init(&game.tower);
     
-    /* Pre-build a sample tower for visual testing */
-    /* Add some floors of offices above the lobby */
-    for (int f = 1; f <= 5; f++) {
-        for (int x = 8; x <= 48; x += ITEM_WIDTH[ITEM_OFFICE]) {
-            tower_place(&game.tower, ITEM_OFFICE, f, x);
-        }
+    /* Center camera on the tower */
+    game.cam_fx = (TOWER_WIDTH * CELL_W) / 2.0f;  /* Center horizontally on tower */
+    game.cam_fy = -game.screen_h * 0.25f;          /* Lobby in lower third */
+    game.zoom = 1.0f;
+    
+    /* Pre-build a small sample tower for visual testing */
+    /* A few offices on floor 1 */
+    for (int x = 20; x <= 40; x += ITEM_WIDTH[ITEM_OFFICE]) {
+        tower_place(&game.tower, ITEM_OFFICE, 1, x);
     }
-    /* Add some condos */
-    for (int x = 8; x <= 48; x += ITEM_WIDTH[ITEM_CONDO]) {
-        tower_place(&game.tower, ITEM_CONDO, 6, x);
-        tower_place(&game.tower, ITEM_CONDO, 7, x);
+    /* Condos on floor 2 */
+    for (int x = 20; x <= 40; x += ITEM_WIDTH[ITEM_CONDO]) {
+        tower_place(&game.tower, ITEM_CONDO, 2, x);
     }
-    /* A restaurant on floor 3 */
-    tower_place(&game.tower, ITEM_RESTAURANT, 1, 0);
-    /* Fast food */
-    tower_place(&game.tower, ITEM_FAST_FOOD, 1, 52);
+    /* A restaurant */
+    tower_place(&game.tower, ITEM_RESTAURANT, 1, 8);
     
     printf("\n=== SimTower for Linux running ===\n");
     printf("Controls:\n");
