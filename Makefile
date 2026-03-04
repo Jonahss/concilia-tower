@@ -16,7 +16,10 @@ all: $(BIN)
 $(BIN): $(OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-%.o: %.c
+# Header dependencies — all .c files depend on all .h files in src/
+HEADERS = $(wildcard src/*.h)
+
+%.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 run: $(BIN)
