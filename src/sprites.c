@@ -287,6 +287,9 @@ int sprites_compose_v(SpriteAtlas *atlas, SDL_Renderer *renderer,
     SDL_FreeSurface(tsurf);
     SDL_FreeSurface(bsurf);
     
+    /* Apply white transparency mask (stairs, escalators use white as transparent) */
+    SDL_SetColorKey(combined, SDL_TRUE, SDL_MapRGB(combined->format, 0xFF, 0xFF, 0xFF));
+    
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, combined);
     SDL_FreeSurface(combined);
     if (!tex) return -1;

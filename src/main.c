@@ -346,6 +346,41 @@ static void render_tower(void)
             x += tenant->width;
         }
     }
+    
+    /* Second pass: render transport overlays (stairs, escalators)
+     * These are stored as tenants but not in grid cells */
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
+        
+        int frame_w_hint = 0, item_floors = 1;
+        uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
+        Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+        
+        int tx, ty;
+        grid_to_screen(t->floor, t->x, &tx, &ty);
+        int tw = t->width * CELL_W;
+        
+        if (spr && frame_w_hint > 0) {
+            int nframes = spr->w / frame_w_hint;
+            if (nframes < 1) nframes = 1;
+            int frame_idx = t->state % nframes;
+            SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
+            int draw_h = item_floors * CELL_H;
+            int draw_y = ty - (item_floors - 1) * CELL_H;
+            SDL_Rect dst = { tx, draw_y, tw, draw_h };
+            SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+        } else {
+            /* Fallback: semi-transparent overlay */
+            SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(game.renderer, 180, 180, 220, 150);
+            int draw_h = item_floors * CELL_H;
+            int draw_y = ty - (item_floors - 1) * CELL_H;
+            SDL_Rect rect = { tx, draw_y, tw, draw_h };
+            SDL_RenderFillRect(game.renderer, &rect);
+            SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+        }
+    }
 }
 
 /* Item height in floors */

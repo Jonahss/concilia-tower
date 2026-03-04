@@ -71,10 +71,13 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     /* Check funds */
     if (tower->money < cost) return 0;
     
-    /* Check for overlap */
+    /* Check for overlap — stairs/escalators can overlay existing items */
+    int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
     int idx = floor_to_index(floor);
-    for (int cx = x; cx < x + width; cx++) {
-        if (tower->grid[idx][cx].type != ITEM_NONE) return 0;
+    if (!is_transport) {
+        for (int cx = x; cx < x + width; cx++) {
+            if (tower->grid[idx][cx].type != ITEM_NONE) return 0;
+        }
     }
     
     /* Must be adjacent to existing structure (above, below, or beside) */
@@ -126,14 +129,24 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->population = 0;
     t->stress = 0;
     
-    /* Fill grid cells */
-    int idx = floor_to_index(floor);
-    for (int cx = x; cx < x + width; cx++) {
-        TowerCell *cell = &tower->grid[idx][cx];
-        cell->type = type;
-        cell->tenant_id = id;
-        cell->cell_index = cx - x;
-        cell->flags = 1;
+    /* Fill grid cells — transport items (stairs/escalators) don't overwrite
+     * existing cells, they're stored as overlays in the tenant list only */
+    int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
+    int fidx = floor_to_index(floor);
+    if (!is_transport) {
+        for (int cx = x; cx < x + width; cx++) {
+            TowerCell *cell = &tower->grid[fidx][cx];
+            cell->type = type;
+            cell->tenant_id = id;
+            cell->cell_index = cx - x;
+            cell->flags = 1;
+        }
+    } else {
+        /* Mark transport presence with a flag but keep existing cell data */
+        for (int cx = x; cx < x + width; cx++) {
+            TowerCell *cell = &tower->grid[fidx][cx];
+            cell->flags |= 2; /* bit 1 = has transport overlay */
+        }
     }
     
     printf("Placed %d at floor %d, x=%d (cost $%d, balance $%ld)\n",
