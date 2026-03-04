@@ -216,13 +216,22 @@ static void render_tower(void)
         
         if (!floor_has_content) continue;
         
-        /* Render ceiling/floor strip across the occupied floor.
-         * In SimTower, the ceiling is a simple colored bar (12px tall, gray-beige).
-         * We draw it as a solid color matching the original game. */
+        /* Floor background wall — fills behind rooms so sky doesn't show through.
+         * In the original game, Floor items provide this solid backdrop. */
+        {
+            int wall_x = sx_base + left * CELL_W;
+            int wall_w = (right - left + 1) * CELL_W;
+            /* Wall color: warm beige matching original SimTower interiors */
+            SDL_SetRenderDrawColor(game.renderer, 198, 195, 182, 255);
+            SDL_Rect wall_rect = { wall_x, sy_base, wall_w, CELL_H };
+            SDL_RenderFillRect(game.renderer, &wall_rect);
+        }
+        
+        /* Ceiling strip (top 12px of floor) — darker gray-beige bar */
         if (floor > 0) {
             int ceil_x = sx_base + left * CELL_W;
             int ceil_w = (right - left + 1) * CELL_W;
-            SDL_SetRenderDrawColor(game.renderer, 188, 182, 170, 255); /* beige-gray */
+            SDL_SetRenderDrawColor(game.renderer, 178, 172, 160, 255);
             SDL_Rect ceil_rect = { ceil_x, sy_base, ceil_w, CEIL_H };
             SDL_RenderFillRect(game.renderer, &ceil_rect);
             /* Thin dark line at bottom of ceiling for definition */
