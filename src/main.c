@@ -57,11 +57,18 @@
 #define SPR_ELEV_SERVICE 0x842a
 #define SPR_ELEV_SHAFT   0x87e8
 
-/* Stairs: 0x88e8 — 200×60 */
-#define SPR_STAIRS_BASE   0x88e8
+/* Stairs: composite from 0x8968 + 0x89A8 (two halves, merged vertically)
+ * Each half: 448×24 + 448×36 = 448×60. Two variants → 896×60.
+ * 8 cells wide, 2 floors tall. */
+#define SPR_STAIRS_TOP    0x8968
+#define SPR_STAIRS_BOT    0x89a8
 
-/* Escalator: 0x8928 — 200×36 */
-#define SPR_ESCALATOR_BASE 0x8928
+/* Escalator: composite from 0x8AA8 + 0x8AE8 */
+#define SPR_ESCALATOR_TOP 0x8aa8
+#define SPR_ESCALATOR_BOT 0x8ae8
+
+/* Recycling (NOT stairs): 0x88e8 */
+#define SPR_RECYCLING     0x88e8
 
 /* Clouds */
 #define SPR_CLOUD_BASE   0x8258
@@ -78,11 +85,11 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w)
     case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0; /* special render */
     case ITEM_OFFICE:        *frame_w = 72;  return SPR_OFFICE_BASE;  /* 9 cells × 8px */
     case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;   /* 16 cells × 8px */
-    case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_BASE; /* 4 cells × 8px */
+    case ITEM_HOTEL_SINGLE:  *frame_w = 0;   return 0; /* TODO: composite sprite (door + room) */
     case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_BASE; /* 24 cells × 8px */
     case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_BASE;   /* 16 cells × 8px */
-    case ITEM_STAIRS:        *frame_w = 200; return SPR_STAIRS_BASE;
-    case ITEM_ESCALATOR:     *frame_w = 200; return SPR_ESCALATOR_BASE;
+    case ITEM_STAIRS:        *frame_w = 0;   return 0; /* TODO: composite sprite (top + bottom) */
+    case ITEM_ESCALATOR:     *frame_w = 0;   return 0; /* TODO: composite sprite */
     case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;
     case ITEM_FLOOR:         *frame_w = 0;   return 0; /* drawn as colored bar */
     default:                 *frame_w = 0;   return 0;
@@ -367,7 +374,7 @@ static void render_ui(void)
         "Stairs", "Escalator", "Elevator"
     };
     snprintf(title, sizeof(title), 
-             "SimTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s [1-6 to select, click to place]",
+             "ConcilliaTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s [1-8 select, 0 deselect]",
              game.tower.money, game.tower.star_rating, game.tower.population,
              game.tower.day, type_names[game.build_type]);
     SDL_SetWindowTitle(game.window, title);
@@ -419,13 +426,15 @@ static void handle_event(SDL_Event *ev)
         case SDLK_UP:    case SDLK_w: game.cam_fy -= 40; break;
         case SDLK_DOWN:  case SDLK_s: game.cam_fy += 40; break;
         
-        /* Build type selection */
-        case SDLK_1: game.build_type = ITEM_OFFICE; break;
-        case SDLK_2: game.build_type = ITEM_CONDO; break;
-        case SDLK_3: game.build_type = ITEM_RESTAURANT; break;
-        case SDLK_4: game.build_type = ITEM_FAST_FOOD; break;
-        case SDLK_5: game.build_type = ITEM_HOTEL_SINGLE; break;
-        case SDLK_6: game.build_type = ITEM_STAIRS; break;
+        /* Build type selection — only types with confirmed working sprites */
+        case SDLK_1: game.build_type = ITEM_OFFICE; break;      /* 9 cells, $40k */
+        case SDLK_2: game.build_type = ITEM_CONDO; break;       /* 16 cells, $80k */
+        case SDLK_3: game.build_type = ITEM_RESTAURANT; break;  /* 24 cells, $200k */
+        case SDLK_4: game.build_type = ITEM_FAST_FOOD; break;   /* 16 cells, $100k */
+        case SDLK_5: game.build_type = ITEM_HOTEL_SINGLE; break;/* 4 cells, $50k (fallback color) */
+        case SDLK_6: game.build_type = ITEM_HOTEL_TWIN; break;  /* 6 cells, $80k (fallback color) */
+        case SDLK_7: game.build_type = ITEM_STAIRS; break;      /* 8 cells, $5k (fallback color) */
+        case SDLK_8: game.build_type = ITEM_ESCALATOR; break;   /* 8 cells, $40k (fallback color) */
         case SDLK_0: game.build_type = ITEM_NONE; break;
         
         default: break;
@@ -559,14 +568,14 @@ int main(int argc, char *argv[])
     /* A restaurant */
     tower_place(&game.tower, ITEM_RESTAURANT, 1, 8);
     
-    printf("\n=== SimTower for Linux running ===\n");
+    printf("\n=== ConcilliaTower running ===\n");
     printf("Controls:\n");
     printf("  Arrow keys / WASD: scroll camera\n");
     printf("  Mouse wheel: scroll vertically\n");
-    printf("  1-6: select building type\n");
-    printf("  Left click: place building\n");
-    printf("  0: deselect (no build)\n");
-    printf("  Q/Escape: quit\n\n");
+    printf("  1=Office 2=Condo 3=Restaurant 4=FastFood\n");
+    printf("  5=Hotel(S) 6=Hotel(T) 7=Stairs 8=Escalator\n");
+    printf("  0: deselect, Left click: place, Q/Esc: quit\n");
+    printf("  F12: screenshot\n\n");
     
     /* Auto-screenshot mode for headless testing */
     int auto_screenshot = 0;
