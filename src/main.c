@@ -517,10 +517,10 @@ int main(int argc, char *argv[])
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         WINDOW_W, WINDOW_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     
-    game.renderer = SDL_CreateRenderer(game.window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!game.renderer)
-        game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
+    /* Use software renderer — accelerated renderers write to GPU buffers
+     * that x11vnc can't see (black screen over VNC). Software renderer
+     * writes directly to the X11 framebuffer. */
+    game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
     
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
