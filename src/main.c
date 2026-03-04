@@ -86,18 +86,21 @@
 
 /* ---------- Sprite mapping for item types ---------- */
 /* Returns sprite ID for a tenant type. frame_w = pixel width of ONE frame.
+ * floors = how many floors tall (1 for most, 2 for stairs/escalator/cinema).
  * Frame widths verified from OpenSkyscraper setTextureRect() calls. */
-static uint16_t item_sprite_id(ItemType type, int *frame_w)
+static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
 {
+    *floors = 1;
     switch (type) {
     case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0; /* special render */
     case ITEM_OFFICE:        *frame_w = 72;  return SPR_OFFICE_BASE;  /* 9 cells × 8px */
     case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;   /* 16 cells × 8px */
     case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_COMP;    /* 4 cells, door+room */
+    case ITEM_HOTEL_TWIN:    *frame_w = 48;  return SPR_HOTEL_T_COMP;    /* 6 cells, door+room */
     case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_COMP; /* 24 cells, full set */
     case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_COMP;   /* 16 cells, real sprites */
-    case ITEM_STAIRS:        *frame_w = 64;  return SPR_STAIRS_COMP;     /* 8 cells, 2 floors */
-    case ITEM_ESCALATOR:     *frame_w = 64;  return SPR_ESCALATOR_COMP;  /* 8 cells, 2 floors */
+    case ITEM_STAIRS:        *frame_w = 64;  *floors = 2; return SPR_STAIRS_COMP;
+    case ITEM_ESCALATOR:     *frame_w = 64;  *floors = 2; return SPR_ESCALATOR_COMP;
     case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;
     case ITEM_FLOOR:         *frame_w = 0;   return 0; /* drawn as colored bar */
     default:                 *frame_w = 0;   return 0;
@@ -275,8 +278,8 @@ static void render_tower(void)
             Tenant *tenant = tower_tenant(&game.tower, cell->tenant_id);
             if (!tenant) { x++; continue; }
             
-            int frame_w_hint = 0;
-            uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint);
+            int frame_w_hint = 0, item_floors = 1;
+            uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
             Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
             
             int tx, ty;
@@ -307,9 +310,15 @@ static void render_tower(void)
                  * Sprite sheets have frames packed horizontally.
                  * frame_w_hint = pixel width of one frame.
                  * tenant state selects which frame to show. */
-                int frame_idx = tenant->state % (spr->w / frame_w_hint);
+                int nframes = spr->w / frame_w_hint;
+                if (nframes < 1) nframes = 1;
+                int frame_idx = tenant->state % nframes;
                 SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
-                SDL_Rect dst = { tx, tenant_y, tw, TENANT_H };
+                
+                /* Multi-floor items span multiple floor heights */
+                int draw_h = (item_floors > 1) ? item_floors * CELL_H : TENANT_H;
+                int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
+                SDL_Rect dst = { tx, draw_y, tw, draw_h };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
             } else if (spr) {
                 /* Full sprite, no frame extraction */
@@ -339,25 +348,41 @@ static void render_tower(void)
     }
 }
 
+/* Item height in floors */
+static int item_height(ItemType type)
+{
+    switch (type) {
+    case ITEM_STAIRS:     return 2;
+    case ITEM_ESCALATOR:  return 2;
+    case ITEM_CINEMA:     return 2;
+    case ITEM_PARTY_HALL: return 2;
+    case ITEM_METRO:      return 3;
+    default:              return 1;
+    }
+}
+
 static void render_build_ghost(void)
 {
     if (game.build_type == ITEM_NONE) return;
     
     int width = ITEM_WIDTH[game.build_type];
+    int floors = item_height(game.build_type);
     int gx, gy;
     grid_to_screen(game.mouse_floor, game.mouse_cell, &gx, &gy);
     
     int can = tower_can_place(&game.tower, game.build_type, 
                                game.mouse_floor, game.mouse_cell);
     
-    /* Ghost rectangle */
+    /* Ghost rectangle — multi-floor items extend upward */
     SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
     if (can) {
         SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
     } else {
         SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
     }
-    SDL_Rect ghost = { gx, gy, width * CELL_W, CELL_H };
+    int ghost_h = floors * CELL_H;
+    int ghost_y = gy - (floors - 1) * CELL_H;
+    SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
     SDL_RenderFillRect(game.renderer, &ghost);
     SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
     SDL_RenderDrawRect(game.renderer, &ghost);
