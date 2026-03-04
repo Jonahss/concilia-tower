@@ -198,6 +198,109 @@ void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite,
     SDL_RenderCopy(renderer, sprite->texture, src_rect, &dst);
 }
 
+/* ---------- Sprite composition ---------- */
+
+/* Helper: read a texture back into a surface */
+static SDL_Surface *texture_to_surface(SDL_Renderer *renderer, SDL_Texture *tex, int w, int h)
+{
+    SDL_Surface *surf = SDL_CreateRGBSurface(0, w, h, 32,
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+    if (!surf) return NULL;
+    
+    SDL_Texture *target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!target) { SDL_FreeSurface(surf); return NULL; }
+    
+    SDL_SetRenderTarget(renderer, target);
+    SDL_RenderCopy(renderer, tex, NULL, NULL);
+    SDL_RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_DestroyTexture(target);
+    return surf;
+}
+
+int sprites_compose_h(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                      uint16_t id_left, uint16_t id_right, uint16_t new_id)
+{
+    Sprite *left = sprites_find(atlas, id_left);
+    Sprite *right = sprites_find(atlas, id_right);
+    if (!left || !right || atlas->count >= MAX_SPRITES) return -1;
+    
+    int w = left->w + right->w;
+    int h = left->h > right->h ? left->h : right->h;
+    
+    SDL_Surface *lsurf = texture_to_surface(renderer, left->texture, left->w, left->h);
+    SDL_Surface *rsurf = texture_to_surface(renderer, right->texture, right->w, right->h);
+    if (!lsurf || !rsurf) {
+        if (lsurf) SDL_FreeSurface(lsurf);
+        if (rsurf) SDL_FreeSurface(rsurf);
+        return -1;
+    }
+    
+    SDL_Surface *combined = SDL_CreateRGBSurface(0, w, h, 32,
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+    SDL_Rect ldst = { 0, 0, left->w, left->h };
+    SDL_Rect rdst = { left->w, 0, right->w, right->h };
+    SDL_BlitSurface(lsurf, NULL, combined, &ldst);
+    SDL_BlitSurface(rsurf, NULL, combined, &rdst);
+    SDL_FreeSurface(lsurf);
+    SDL_FreeSurface(rsurf);
+    
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, combined);
+    SDL_FreeSurface(combined);
+    if (!tex) return -1;
+    
+    Sprite *s = &atlas->sprites[atlas->count++];
+    s->id = new_id;
+    s->type = 0x0001; /* composite */
+    s->texture = tex;
+    s->w = w;
+    s->h = h;
+    
+    return 0;
+}
+
+int sprites_compose_v(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                      uint16_t id_top, uint16_t id_bottom, uint16_t new_id)
+{
+    Sprite *top = sprites_find(atlas, id_top);
+    Sprite *bot = sprites_find(atlas, id_bottom);
+    if (!top || !bot || atlas->count >= MAX_SPRITES) return -1;
+    
+    int w = top->w > bot->w ? top->w : bot->w;
+    int h = top->h + bot->h;
+    
+    SDL_Surface *tsurf = texture_to_surface(renderer, top->texture, top->w, top->h);
+    SDL_Surface *bsurf = texture_to_surface(renderer, bot->texture, bot->w, bot->h);
+    if (!tsurf || !bsurf) {
+        if (tsurf) SDL_FreeSurface(tsurf);
+        if (bsurf) SDL_FreeSurface(bsurf);
+        return -1;
+    }
+    
+    SDL_Surface *combined = SDL_CreateRGBSurface(0, w, h, 32,
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+    SDL_Rect tdst = { 0, 0, top->w, top->h };
+    SDL_Rect bdst = { 0, top->h, bot->w, bot->h };
+    SDL_BlitSurface(tsurf, NULL, combined, &tdst);
+    SDL_BlitSurface(bsurf, NULL, combined, &bdst);
+    SDL_FreeSurface(tsurf);
+    SDL_FreeSurface(bsurf);
+    
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, combined);
+    SDL_FreeSurface(combined);
+    if (!tex) return -1;
+    
+    Sprite *s = &atlas->sprites[atlas->count++];
+    s->id = new_id;
+    s->type = 0x0001; /* composite */
+    s->texture = tex;
+    s->w = w;
+    s->h = h;
+    
+    return 0;
+}
+
 void sprites_free(SpriteAtlas *atlas)
 {
     for (int i = 0; i < atlas->count; i++) {

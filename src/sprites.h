@@ -43,6 +43,16 @@ void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect
 void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite, 
                          int x, int y, int w, int h, SDL_Rect *src_rect);
 
+/* Compose a new sprite by joining two existing sprites horizontally.
+ * The new sprite is stored with new_id. Returns 0 on success. */
+int sprites_compose_h(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                      uint16_t id_left, uint16_t id_right, uint16_t new_id);
+
+/* Compose a new sprite by joining two existing sprites vertically.
+ * The new sprite is stored with new_id. Returns 0 on success. */
+int sprites_compose_v(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                      uint16_t id_top, uint16_t id_bottom, uint16_t new_id);
+
 /* Free all textures */
 void sprites_free(SpriteAtlas *atlas);
 

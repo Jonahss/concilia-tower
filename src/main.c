@@ -70,6 +70,14 @@
 /* Recycling (NOT stairs): 0x88e8 */
 #define SPR_RECYCLING     0x88e8
 
+/* Composite sprite IDs (assembled at init from raw parts) */
+#define SPR_FASTFOOD_COMP   0x0010  /* 0x86E8 + 0x86E9 joined horizontally */
+#define SPR_HOTEL_S_COMP    0x0011  /* 0x84A8 + 0x84A9 joined horizontally */
+#define SPR_HOTEL_T_COMP    0x0012  /* 0x84E8 + 0x84E9 joined horizontally */
+#define SPR_STAIRS_COMP     0x0013  /* 0x8968 + 0x89A8 joined vertically */
+#define SPR_ESCALATOR_COMP  0x0014  /* 0x8AA8 + 0x8AE8 joined vertically */
+#define SPR_RESTAURANT_COMP 0x0015  /* 0x8568 + 0x8569 joined horizontally */
+
 /* Clouds */
 #define SPR_CLOUD_BASE   0x8258
 
@@ -85,11 +93,11 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w)
     case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0; /* special render */
     case ITEM_OFFICE:        *frame_w = 72;  return SPR_OFFICE_BASE;  /* 9 cells × 8px */
     case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;   /* 16 cells × 8px */
-    case ITEM_HOTEL_SINGLE:  *frame_w = 0;   return 0; /* TODO: composite sprite (door + room) */
-    case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_BASE; /* 24 cells × 8px */
-    case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_BASE;   /* 16 cells × 8px */
-    case ITEM_STAIRS:        *frame_w = 0;   return 0; /* TODO: composite sprite (top + bottom) */
-    case ITEM_ESCALATOR:     *frame_w = 0;   return 0; /* TODO: composite sprite */
+    case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_COMP;    /* 4 cells, door+room */
+    case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_COMP; /* 24 cells, full set */
+    case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_COMP;   /* 16 cells, real sprites */
+    case ITEM_STAIRS:        *frame_w = 64;  return SPR_STAIRS_COMP;     /* 8 cells, 2 floors */
+    case ITEM_ESCALATOR:     *frame_w = 64;  return SPR_ESCALATOR_COMP;  /* 8 cells, 2 floors */
     case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;
     case ITEM_FLOOR:         *frame_w = 0;   return 0; /* drawn as colored bar */
     default:                 *frame_w = 0;   return 0;
@@ -524,6 +532,30 @@ int main(int argc, char *argv[])
     
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
+    
+    /* Build composite sprites from raw parts */
+    {
+        int ok = 0, fail = 0;
+        /* Fast food: 0x86E8 + 0x86E9 → 512×24 */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x86E8, 0x86E9, SPR_FASTFOOD_COMP) == 0)
+            ok++; else fail++;
+        /* Restaurant: 0x8568 + 0x8569 → 768×24 */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x8568, 0x8569, SPR_RESTAURANT_COMP) == 0)
+            ok++; else fail++;
+        /* Hotel single: 0x84A8 (door 32×24) + 0x84A9 (room 256×24) → 288×24 */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84A8, 0x84A9, SPR_HOTEL_S_COMP) == 0)
+            ok++; else fail++;
+        /* Hotel twin: 0x84E8 (door 48×24) + 0x84E9 (room 384×24) → 432×24 */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84E8, 0x84E9, SPR_HOTEL_T_COMP) == 0)
+            ok++; else fail++;
+        /* Stairs: 0x8968 (448×24 top) + 0x89A8 (448×36 bottom) → 448×60 */
+        if (sprites_compose_v(&game.sprites, game.renderer, 0x8968, 0x89A8, SPR_STAIRS_COMP) == 0)
+            ok++; else fail++;
+        /* Escalator: 0x8AA8 (512×36 top) + 0x8AE8 (512×36 bottom) → 512×72 */
+        if (sprites_compose_v(&game.sprites, game.renderer, 0x8AA8, 0x8AE8, SPR_ESCALATOR_COMP) == 0)
+            ok++; else fail++;
+        printf("Composites: %d built, %d failed\n", ok, fail);
+    }
     
     /* Print key sprite info for debugging */
     {
