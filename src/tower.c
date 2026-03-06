@@ -321,60 +321,76 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
 
 void tower_build_demo(Tower *tower)
 {
-    printf("\n=== Building demo tower ===\n");
+    printf("\n=== Building diagnostic demo tower ===\n");
+    printf("One unit type per floor, starting at floor 1\n");
+    printf("Each unit placed at x=2 with label info\n\n");
     
-    /* Floor 1: Offices + Restaurant */
-    tower_force_place(tower, ITEM_OFFICE, 1, 5);
-    tower_force_place(tower, ITEM_OFFICE, 1, 14);
-    tower_force_place(tower, ITEM_OFFICE, 1, 23);
-    tower_force_place(tower, ITEM_RESTAURANT, 1, 32);
+    /* Diagnostic layout: one unit per floor at x=2
+     * Single-floor items get one floor each
+     * Multi-floor items get their required floors
+     * Underground items placed below ground
+     * 
+     * Floor plan:
+     *   0: Lobby (auto-built)
+     *   1: Office (9w × 1h)
+     *   2: Condo (16w × 1h)
+     *   3: Fast Food (16w × 1h)
+     *   4: Restaurant (24w × 1h)
+     *   5: Hotel Single (4w × 1h)
+     *   6: Hotel Twin (6w × 1h)
+     *   7: Hotel Suite (8w × 1h)
+     *   8: Security (6w × 1h)
+     *   9: Medical (6w × 1h)
+     *  10: Shop (8w × 1h)
+     *  11-12: Stairs (8w × 2h)
+     *  13-14: Escalator (8w × 2h)
+     *  15-16: Cinema (31w × 2h)
+     *  17-18: Party Hall (24w × 2h)
+     *  19-20: Cathedral (16w × 2h)
+     *  B1: Parking (8w × 1h)
+     *  B2-B3: Recycling (6w × 2h)
+     *  B4-B6: Metro (30w × 3h)
+     */
     
-    /* Floor 2: Condos */
-    tower_force_place(tower, ITEM_CONDO, 2, 5);
-    tower_force_place(tower, ITEM_CONDO, 2, 21);
-    tower_force_place(tower, ITEM_FAST_FOOD, 2, 37);
+    /* Above ground: single-floor items */
+    struct { ItemType type; int floor; } demo_items[] = {
+        { ITEM_OFFICE,       1 },
+        { ITEM_CONDO,        2 },
+        { ITEM_FAST_FOOD,    3 },
+        { ITEM_RESTAURANT,   4 },
+        { ITEM_HOTEL_SINGLE, 5 },
+        { ITEM_HOTEL_TWIN,   6 },
+        { ITEM_HOTEL_SUITE,  7 },
+        { ITEM_SECURITY,     8 },
+        { ITEM_MEDICAL,      9 },
+        { ITEM_SHOP,        10 },
+        /* Multi-floor above ground */
+        { ITEM_STAIRS,      11 },   /* 2 floors: 11-12 */
+        { ITEM_ESCALATOR,   13 },   /* 2 floors: 13-14 */
+        { ITEM_CINEMA,      15 },   /* 2 floors: 15-16 */
+        { ITEM_PARTY_HALL,  17 },   /* 2 floors: 17-18 */
+        { ITEM_CATHEDRAL,   19 },   /* 2 floors: 19-20 */
+        /* Underground items */
+        { ITEM_PARKING,     -1 },   /* 1 floor */
+        { ITEM_RECYCLING,   -3 },   /* 2 floors: B3-B2 */
+        { ITEM_METRO,       -6 },   /* 3 floors: B6-B4 */
+    };
+    int n_items = (int)(sizeof(demo_items) / sizeof(demo_items[0]));
     
-    /* Floor 3: Hotels */
-    tower_force_place(tower, ITEM_HOTEL_SINGLE, 3, 5);
-    tower_force_place(tower, ITEM_HOTEL_SINGLE, 3, 9);
-    tower_force_place(tower, ITEM_HOTEL_TWIN, 3, 13);
-    tower_force_place(tower, ITEM_HOTEL_TWIN, 3, 19);
-    tower_force_place(tower, ITEM_HOTEL_SUITE, 3, 25);
-    tower_force_place(tower, ITEM_HOTEL_SUITE, 3, 33);
+    for (int i = 0; i < n_items; i++) {
+        ItemType type = demo_items[i].type;
+        int floor = demo_items[i].floor;
+        int x = 2; /* All placed at x=2 for consistent left margin */
+        
+        uint16_t id = tower_force_place(tower, type, floor, x);
+        if (id) {
+            printf("  F%+3d: %-14s  %2dw × %dh  at x=%d  tenant_id=%d\n",
+                   floor, tower_item_name(type), 
+                   ITEM_WIDTH[type], ITEM_HEIGHT[type], x, id);
+        } else {
+            printf("  F%+3d: %-14s  FAILED to place\n", floor, tower_item_name(type));
+        }
+    }
     
-    /* Floor 4: Security + Medical + Shop */
-    tower_force_place(tower, ITEM_SECURITY, 4, 5);
-    tower_force_place(tower, ITEM_MEDICAL, 4, 11);
-    tower_force_place(tower, ITEM_SHOP, 4, 17);
-    tower_force_place(tower, ITEM_SHOP, 4, 25);
-    
-    /* Floors 5-6: Cinema (2 floors tall, placed at floor 5, extends to 6) */
-    tower_force_place(tower, ITEM_CINEMA, 5, 5);
-    
-    /* Floors 5-6: Party Hall */
-    tower_force_place(tower, ITEM_PARTY_HALL, 5, 36);
-    
-    /* Floors 7-8: Cathedral (2 floors) */
-    tower_force_place(tower, ITEM_CATHEDRAL, 7, 20);
-    
-    /* Stairs connecting floors 1-2, placed at floor 1 */
-    tower_force_place(tower, ITEM_STAIRS, 1, 53);
-    /* Escalator connecting floors 2-3 */
-    tower_force_place(tower, ITEM_ESCALATOR, 2, 53);
-    
-    /* Underground: B1 - Parking */
-    tower_force_place(tower, ITEM_PARKING, -1, 5);
-    tower_force_place(tower, ITEM_PARKING, -1, 13);
-    tower_force_place(tower, ITEM_PARKING, -1, 21);
-    tower_force_place(tower, ITEM_PARKING, -1, 29);
-    tower_force_place(tower, ITEM_PARKING, -1, 37);
-    tower_force_place(tower, ITEM_PARKING, -1, 45);
-    
-    /* Underground: B2-B3 - Recycling (2 floors tall) */
-    tower_force_place(tower, ITEM_RECYCLING, -3, 5);
-    
-    /* Underground: B4 to B6 - Metro station (3 floors tall) */
-    tower_force_place(tower, ITEM_METRO, -6, 10);
-    
-    printf("=== Demo tower complete ===\n\n");
+    printf("\n=== Demo tower complete: %d items placed ===\n\n", tower->tenant_count - 1);
 }

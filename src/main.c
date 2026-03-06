@@ -105,8 +105,13 @@
 /* Underground dirt: 0x8F28 */
 #define SPR_UNDERGROUND  0x8f28
 
-/* Clouds */
-#define SPR_CLOUD_BASE   0x8258
+/* Clouds — 5 different cloud shapes (DIB bitmaps) */
+#define SPR_CLOUD_0      0x8384   /* 96×41 */
+#define SPR_CLOUD_1      0x8385   /* 192×19 */
+#define SPR_CLOUD_2      0x8386   /* 292×38 */
+#define SPR_CLOUD_3      0x8387   /* 216×43 */
+#define SPR_CLOUD_4      0x8388   /* 140×48 */
+#define SPR_CLOUD_COUNT  5
 
 /* UI */
 #define SPR_TOOLBAR      0x8140
@@ -208,27 +213,28 @@ typedef struct {
     /* Zoom */
     float           zoom;
     
-    /* Cloud sprite */
-    Sprite         *cloud_sprite;
+    /* Cloud sprites (up to 5 different shapes) */
+    Sprite         *clouds[SPR_CLOUD_COUNT];
+    int             cloud_count;
 } Game;
 
 static Game game;
 
 /* ---------- Cloud positions (fixed, scattered in sky) ---------- */
-typedef struct { int x, y; } CloudPos;
+typedef struct { int x, y; int cloud_idx; } CloudPos;
 static const CloudPos CLOUD_POSITIONS[] = {
-    { 50,  -80 },
-    { 220, -150 },
-    { 400, -60 },
-    { 150, -220 },
-    { 520, -180 },
-    { 320, -280 },
-    { 680, -100 },
-    { 80,  -320 },
-    { 450, -350 },
-    { 750, -250 },
-    { 900, -120 },
-    { 600, -380 },
+    { 50,  -80,  0 },
+    { 220, -150, 2 },
+    { 400, -60,  1 },
+    { 150, -220, 3 },
+    { 520, -180, 4 },
+    { 320, -280, 0 },
+    { 680, -100, 2 },
+    { 80,  -320, 1 },
+    { 450, -350, 3 },
+    { 750, -250, 4 },
+    { 900, -120, 1 },
+    { 600, -380, 2 },
 };
 #define CLOUD_COUNT (int)(sizeof(CLOUD_POSITIONS)/sizeof(CLOUD_POSITIONS[0]))
 
@@ -338,24 +344,28 @@ static void render_sky(void)
     }
     
     /* Render clouds in the sky */
-    if (game.cloud_sprite) {
-        SDL_SetTextureAlphaMod(game.cloud_sprite->texture, 200);
+    if (game.cloud_count > 0) {
         for (int i = 0; i < CLOUD_COUNT; i++) {
+            int ci = CLOUD_POSITIONS[i].cloud_idx % game.cloud_count;
+            Sprite *cs = game.clouds[ci];
+            if (!cs) continue;
+            SDL_SetTextureAlphaMod(cs->texture, 180);
+            
             /* Cloud positions are relative to the lobby top */
             int cx = lobby_sx + CLOUD_POSITIONS[i].x;
             int cy = lobby_sy + CLOUD_POSITIONS[i].y;
             
             /* Also tile clouds horizontally for wide views */
             for (int tx = cx - 1200; tx < game.screen_w + 200; tx += 1200) {
-                if (tx + game.cloud_sprite->w < 0) continue;
+                if (tx + cs->w < 0) continue;
                 if (tx > game.screen_w) break;
-                if (cy + game.cloud_sprite->h < 0 || cy > game.screen_h) continue;
+                if (cy + cs->h < 0 || cy > game.screen_h) continue;
                 
-                SDL_Rect dst = { tx, cy, game.cloud_sprite->w, game.cloud_sprite->h };
-                SDL_RenderCopy(game.renderer, game.cloud_sprite->texture, NULL, &dst);
+                SDL_Rect dst = { tx, cy, cs->w, cs->h };
+                SDL_RenderCopy(game.renderer, cs->texture, NULL, &dst);
             }
+            SDL_SetTextureAlphaMod(cs->texture, 255);
         }
-        SDL_SetTextureAlphaMod(game.cloud_sprite->texture, 255);
     }
     
     /* Underground: brown earth gradient below lobby level, gets darker with depth */
@@ -567,14 +577,81 @@ static void render_tower(void)
         if (top_f > TOWER_MAX_FLOOR) top_f = TOWER_MAX_FLOOR;
         if (bot_f < TOWER_MIN_FLOOR) bot_f = TOWER_MIN_FLOOR;
         
-        for (int f = bot_f; f <= top_f; f++) {
-            int fsx, fsy;
-            grid_to_screen(f, 0, &fsx, &fsy);
-            /* Draw a small floor indicator tick on the left margin */
-            SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 180);
-            SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-            SDL_RenderDrawLine(game.renderer, 0, fsy + CELL_H - 1, 4, fsy + CELL_H - 1);
-            SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+        if (game.font_small) {
+            SDL_Color white = {255, 255, 255, 255};
+            for (int f = bot_f; f <= top_f; f++) {
+                int fsx, fsy;
+                grid_to_screen(f, 0, &fsx, &fsy);
+                
+                /* Floor number label */
+                char flabel[16];
+                if (f < 0) snprintf(flabel, sizeof(flabel), "B%d", -f);
+                else if (f == 0) snprintf(flabel, sizeof(flabel), "L");
+                else snprintf(flabel, sizeof(flabel), "%d", f);
+                
+                SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, flabel, white);
+                if (ts) {
+                    SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                    SDL_Rect dst = { 2, fsy + CELL_H/2 - ts->h/2, ts->w, ts->h };
+                    SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                    SDL_DestroyTexture(tt);
+                    SDL_FreeSurface(ts);
+                }
+            }
+        } else {
+            for (int f = bot_f; f <= top_f; f++) {
+                int fsx, fsy;
+                grid_to_screen(f, 0, &fsx, &fsy);
+                SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 180);
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+                SDL_RenderDrawLine(game.renderer, 0, fsy + CELL_H - 1, 4, fsy + CELL_H - 1);
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+            }
+        }
+    }
+    
+    /* Diagnostic text labels next to each tenant (dev mode) */
+    if (game.font_small) {
+        SDL_Color yellow = {255, 255, 100, 255};
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->type == ITEM_LOBBY || t->type == ITEM_FLOOR) continue;
+            
+            int tx, ty;
+            grid_to_screen(t->floor, t->x + t->width, &tx, &ty);
+            
+            /* Build diagnostic string */
+            int frame_w_hint = 0, item_floors = 1;
+            uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
+            Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+            
+            char info[256];
+            snprintf(info, sizeof(info), "%s  %dw×%dh  spr:0x%04X %s %s",
+                     tower_item_name(t->type),
+                     t->width, t->height,
+                     spr_id,
+                     spr ? "" : "[NO SPR]",
+                     spr ? (char[64]){0} : "");
+            if (spr) {
+                char dims[48];
+                snprintf(dims, sizeof(dims), "(%dx%d)", spr->w, spr->h);
+                strncat(info, dims, sizeof(info) - strlen(info) - 1);
+            }
+            if (frame_w_hint > 0) {
+                char fw[32];
+                snprintf(fw, sizeof(fw), " fw:%d", frame_w_hint);
+                strncat(info, fw, sizeof(info) - strlen(info) - 1);
+            }
+            
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, info, yellow);
+            if (ts) {
+                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                int label_y = ty + CELL_H / 2 - ts->h / 2;
+                SDL_Rect dst = { tx + 4, label_y, ts->w, ts->h };
+                SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                SDL_DestroyTexture(tt);
+                SDL_FreeSurface(ts);
+            }
         }
     }
 }
@@ -1127,14 +1204,23 @@ int main(int argc, char *argv[])
         printf("Composites: %d built, %d failed\n", ok, fail);
     }
     
-    /* Try to load cloud sprite */
-    game.cloud_sprite = sprites_find(&game.sprites, SPR_CLOUD_BASE);
-    if (game.cloud_sprite) {
-        printf("Cloud sprite loaded: %dx%d\n", game.cloud_sprite->w, game.cloud_sprite->h);
-        /* Enable alpha blending on cloud texture */
-        SDL_SetTextureBlendMode(game.cloud_sprite->texture, SDL_BLENDMODE_BLEND);
+    /* Load cloud sprites (5 different shapes at 0x8384-0x8388) */
+    game.cloud_count = 0;
+    {
+        uint16_t cloud_ids[] = { SPR_CLOUD_0, SPR_CLOUD_1, SPR_CLOUD_2, SPR_CLOUD_3, SPR_CLOUD_4 };
+        for (int i = 0; i < SPR_CLOUD_COUNT; i++) {
+            game.clouds[i] = sprites_find(&game.sprites, cloud_ids[i]);
+            if (game.clouds[i]) {
+                SDL_SetTextureBlendMode(game.clouds[i]->texture, SDL_BLENDMODE_BLEND);
+                game.cloud_count++;
+                printf("Cloud %d (0x%04x): %dx%d\n", i, cloud_ids[i], game.clouds[i]->w, game.clouds[i]->h);
+            }
+        }
+    }
+    if (game.cloud_count > 0) {
+        printf("Loaded %d cloud sprites\n", game.cloud_count);
     } else {
-        printf("Cloud sprite 0x%04x not found (clouds disabled)\n", SPR_CLOUD_BASE);
+        printf("No cloud sprites found (clouds disabled)\n");
     }
     
     /* Print key sprite info for debugging */
@@ -1158,7 +1244,9 @@ int main(int argc, char *argv[])
             {SPR_CINEMA_COMP, "cinema_comp"},
             {SPR_METRO_COMP, "metro_comp"},
             {SPR_UNDERGROUND, "underground"},
-            {SPR_CLOUD_BASE, "cloud"},
+            {SPR_CLOUD_0, "cloud_0"},
+            {SPR_CLOUD_1, "cloud_1"},
+            {SPR_CLOUD_2, "cloud_2"},
             {0x8352, "sky"},
             {0, NULL}
         };
