@@ -1321,7 +1321,7 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define MAP_WIN_H   280       /* Map height (sky + ground) */
 
 #define TOOL_WIN_W  200       /* Toolbox same width as map, stacked below */
-#define TOOL_WIN_H  200
+#define TOOL_WIN_H  220       /* Taller to fit 4 rows of 32×32 icons */
 
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 {
@@ -1634,8 +1634,8 @@ static void render_minimap(void)
 /* The build tool selector with icons for each building type.
  * Stacked below the minimap on the LEFT (like original toolbox.rml). */
 
-#define TOOL_BTN_SIZE 28
-#define TOOL_BTN_PAD  4
+#define TOOL_BTN_SIZE 32    /* Match original 32×32 icon size */
+#define TOOL_BTN_PAD  2
 #define TOOL_COLS   5
 
 /* Tool button layout.
@@ -2727,25 +2727,28 @@ int main(int argc, char *argv[])
     
     {
         /* Item icons: 3 bitmaps (0x812C-0x812E), each 256×128.
-         * Each has 4 rows × 8 cols of 32×32 icons (32 icons per bitmap).
-         * Rearrange into a single strip: 32 icons wide × 32px tall per bitmap,
-         * then stack 3 bitmaps: total = 1024×96 (normal states).
-         * But we also need pressed states. The bitmaps actually have 2 rows:
-         * top 64px = normal (2 rows of 32px), bottom 64px = pressed (2 rows).
-         * Actually: 256×128 = 8 cols × 4 rows. Icons [0..31] = normal, repeated. */
-        
-        /* Simpler approach: create 1024×64 surface:
-         * top 32px = normal icons (32 across), bottom 32px = pressed.
-         * From 256×128 bitmap: each row is 8 icons at 32×32.
-         * Row 0-1 = normal, Row 2-3 = pressed. */
-        SDL_Surface *items_surf = SDL_CreateRGBSurface(0, 32 * 32, 64, 32,
+         * From OpenSkyscraper SimTowerLoader.cpp:
+         *   items[i].create(32*26, 32);  // 26 icons per row
+         *   for (n = 0..3) items[i].copy(tmp, n*256, 0, IntRect(0, n*32, 256, n*32+32));
+         * Each bitmap has 4 rows × 8 cols → flattened to 26 icons (row3 clipped to 2).
+         * 
+         * Bitmap 0 (0x812C) = normal icons
+         * Bitmap 1 (0x812D) = pressed/selected icons
+         * Bitmap 2 (0x812E) = disabled icons
+         * 
+         * Final layout: 26 icons × 32px = 832px wide, stacked as:
+         *   y=0-31:  normal  (from 0x812C)
+         *   y=32-63: pressed (from 0x812D)
+         */
+        int icon_strip_w = 26 * 32;  /* 832px: 26 icons at 32px each */
+        SDL_Surface *items_surf = SDL_CreateRGBSurface(0, icon_strip_w, 64, 32,
             0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
         
         if (items_surf) {
             SDL_FillRect(items_surf, NULL, SDL_MapRGBA(items_surf->format, 192, 192, 192, 255));
-            int icons_placed = 0;
             
-            for (int bi = 0; bi < 3; bi++) {
+            /* Load normal (0x812C) and pressed (0x812D) bitmaps */
+            for (int bi = 0; bi < 2; bi++) {
                 uint16_t bid = 0x812C + bi;
                 NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, bid);
                 if (!res) continue;
@@ -2753,26 +2756,21 @@ int main(int argc, char *argv[])
                 SDL_Surface *bmp = sprites_dib_to_surface(&game.sprites, res);
                 if (!bmp) continue;
                 
-                /* Each bitmap: 256×128. Top 64px = normal (rows 0,1), bottom 64px = pressed (rows 2,3).
-                 * Extract 8 icons per row, 2 rows normal + 2 rows pressed. */
-                for (int row = 0; row < 2; row++) {
-                    for (int col = 0; col < 8; col++) {
-                        int icon_idx = icons_placed + row * 8 + col;
-                        /* Normal state: copy to top row */
-                        SDL_Rect src = { col * 32, row * 32, 32, 32 };
-                        SDL_Rect dst = { icon_idx * 32, 0, 32, 32 };
-                        SDL_BlitSurface(bmp, &src, items_surf, &dst);
-                        /* Pressed state: copy from bottom half */
-                        SDL_Rect src2 = { col * 32, (row + 2) * 32, 32, 32 };
-                        SDL_Rect dst2 = { icon_idx * 32, 32, 32, 32 };
-                        SDL_BlitSurface(bmp, &src2, items_surf, &dst2);
-                    }
+                /* Rearrange: 4 rows of 256px → 1 row of 26 icons (4×8=32, clip to 26) */
+                int dest_y = bi * 32;  /* 0 for normal, 32 for pressed */
+                for (int row = 0; row < 4; row++) {
+                    int icons_this_row = 8;
+                    /* Row 3 clips: 26 - 3*8 = 2 icons */
+                    if (row == 3) icons_this_row = 2;
+                    
+                    SDL_Rect src = { 0, row * 32, icons_this_row * 32, 32 };
+                    SDL_Rect dst = { row * 8 * 32, dest_y, icons_this_row * 32, 32 };
+                    SDL_BlitSurface(bmp, &src, items_surf, &dst);
                 }
-                icons_placed += 16;  /* 2 rows × 8 cols */
                 SDL_FreeSurface(bmp);
             }
             
-            /* Make gray background transparent */
+            /* Make gray background transparent (0x999999) */
             SDL_SetColorKey(items_surf, SDL_TRUE, SDL_MapRGB(items_surf->format, 0x99, 0x99, 0x99));
             
             game.ui_items = SDL_CreateTextureFromSurface(game.renderer, items_surf);
@@ -2780,8 +2778,8 @@ int main(int argc, char *argv[])
             game.ui_items_h = items_surf->h;
             SDL_SetTextureBlendMode(game.ui_items, SDL_BLENDMODE_BLEND);
             SDL_FreeSurface(items_surf);
-            printf("🎨 Toolbox item icons loaded: %dx%d (%d icons)\n", 
-                   game.ui_items_w, game.ui_items_h, icons_placed);
+            printf("🎨 Toolbox item icons loaded: %dx%d (26 icons)\n", 
+                   game.ui_items_w, game.ui_items_h);
         }
         
         /* Time bar background: 0x8140 (431×41) */
