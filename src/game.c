@@ -212,6 +212,61 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
 
 /* --- Tenant state update --- */
 
+/* --- Capacity animation update ---
+ * From TenantMake annotation: capacity byte drives sprite frame selection.
+ * 3-phase daily cycle (DayStartUpdate/DayMiddleUpdate/DayEndUpdate):
+ *   Morning: offices start filling (capacity ascending)
+ *   Midday:  offices peak, restaurants active
+ *   Evening: offices emptying, hotels filling (capacity descending/ascending)
+ * Step size = 0x08, range = 0x00 (empty) to 0x40 (full) */
+static void update_capacity(Tenant *t, TimeOfDay tod)
+{
+    int is_day_type = (t->type == ITEM_OFFICE || t->type == ITEM_SHOP ||
+                       t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
+                       t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL);
+    int is_night_type = (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
+                         t->type == ITEM_HOTEL_SUITE);
+    
+    if (is_day_type) {
+        /* Day tenants: fill during morning, peak at afternoon, empty at evening */
+        switch (tod) {
+        case TOD_DAWN:
+        case TOD_MORNING:
+            if (t->capacity < CAP_MAX) t->capacity += CAP_STEP;
+            break;
+        case TOD_AFTERNOON:
+            /* Peak — hold at current level */
+            break;
+        case TOD_EVENING:
+            if (t->capacity > CAP_MIN) t->capacity -= CAP_STEP;
+            break;
+        case TOD_NIGHT:
+            t->capacity = CAP_EMPTY;
+            break;
+        default: break;
+        }
+    } else if (is_night_type) {
+        /* Hotels: fill at evening, peak at night, empty at morning */
+        switch (tod) {
+        case TOD_EVENING:
+            if (t->capacity < CAP_MAX) t->capacity += CAP_STEP;
+            break;
+        case TOD_NIGHT:
+            /* Peak — hold */
+            break;
+        case TOD_DAWN:
+            if (t->capacity > CAP_MIN) t->capacity -= CAP_STEP;
+            break;
+        case TOD_MORNING:
+        case TOD_AFTERNOON:
+            t->capacity = CAP_EMPTY;
+            break;
+        default: break;
+        }
+    }
+    /* Condos, services, etc. stay at their current capacity */
+}
+
 static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *out_expenses)
 {
     long income = 0;
@@ -231,9 +286,22 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         /* State machine */
         switch ((TenantState)t->state) {
         case TENANT_EMPTY:
-            /* New tenant — starts moving in after a brief delay */
-            if (sim->tick > 30) {  /* Small delay before first occupancy */
+            /* New tenant — starts construction */
+            if (type_idx < ITEM_TYPE_COUNT && CONSTRUCTION_TIME[type_idx] > 0) {
+                t->construction = CONSTRUCTION_TIME[type_idx];
+                t->state = TENANT_CONSTRUCTION;
+            } else {
+                t->state = TENANT_OCCUPIED;
+                t->capacity = CAP_MIN;
+            }
+            break;
+            
+        case TENANT_CONSTRUCTION:
+            /* Under construction — decrement timer */
+            t->construction--;
+            if (t->construction <= 0) {
                 t->state = TENANT_MOVING_IN;
+                t->capacity = CAP_MIN;
             }
             break;
             
@@ -244,22 +312,24 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             
         case TENANT_OCCUPIED:
             if (is_active) {
+                /* Advance capacity animation (3-phase daily cycle) */
+                update_capacity(t, sim->time_of_day);
+                
                 /* Generate income (per tick, scaled) */
                 int base_income = (type_idx < ITEM_TYPE_COUNT) ? TENANT_INCOME[type_idx] : 0;
                 if (base_income > 0 && sim->ticks_per_quarter > 0) {
-                    /* Distribute income across the quarter's ticks */
-                    /* Only add income once per quarter-tick boundary */
                     if (sim->tick % 60 == 0) {
                         int pay = base_income / (sim->ticks_per_quarter / 60);
                         income += pay;
                     }
                 }
                 
-                /* Stress management */
+                /* Stress management — from MainteT */
                 if (t->stress > 0) t->stress--;
             } else if (t->type != ITEM_CONDO) {
                 /* Close for the inactive period */
                 t->state = TENANT_VACANT;
+                /* Don't zero capacity here — let update_capacity handle the fade */
             }
             break;
             
@@ -268,16 +338,25 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
             
         case TENANT_VACANT:
+            /* Even when vacant, capacity can animate (hotels emptying, etc.) */
+            update_capacity(t, sim->time_of_day);
             if (is_active) {
                 t->state = TENANT_OCCUPIED;
             }
             break;
             
         case TENANT_STRESSED:
+            /* From MainteT: 3-strike system */
             if (t->stress > 100) {
-                t->state = TENANT_ABANDONED;
-                printf("⚠ %s on F%d abandoned! (stress=%d)\n",
-                       tower_item_name(t->type), t->floor, t->stress);
+                t->complaints++;
+                if (t->complaints >= 3) {
+                    t->state = TENANT_ABANDONED;
+                    t->capacity = CAP_EMPTY;
+                    printf("⚠ %s on F%d abandoned! (stress=%d, %d complaints)\n",
+                           tower_item_name(t->type), t->floor, t->stress, t->complaints);
+                } else {
+                    t->stress = 60;  /* Reset after complaint */
+                }
             } else if (t->stress < 50) {
                 t->state = TENANT_OCCUPIED;
             }
@@ -286,6 +365,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         case TENANT_ABANDONED:
             /* Dead tenant — stays until demolished */
             t->population = 0;
+            t->capacity = CAP_EMPTY;
             break;
         }
     }

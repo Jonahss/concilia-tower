@@ -162,9 +162,20 @@ typedef struct {
     int      x;            /* Left cell position */
     int      width;        /* Width in cells */
     int      height;       /* Height in floors */
-    uint8_t  state;        /* Item-specific state */
+    uint8_t  state;        /* Lifecycle state (TenantState enum) */
+    uint8_t  capacity;     /* Animation state byte — drives sprite frame selection.
+                            * From TenantMake: NOT a people count!
+                            * Steps: 0x10→0x18→0x20→0x28→0x30→0x38→0x40
+                            * Offices fill during day (ascending), empty at night.
+                            * Hotels fill at night (reverse), empty during day. */
+    int      construction; /* Construction ticks remaining (0 = built).
+                            * From TenantMake: office=2, condo=3, restaurant=48,
+                            * hotel=56, cathedral=240, etc. */
     int      population;   /* Number of people currently here */
-    int      stress;       /* Satisfaction level (lower = happier) */
+    int      stress;       /* Satisfaction level (lower = happier, 0-100) */
+    int      complaints;   /* Strike count (3 = forced action). From MainteT. */
+    int      zone;         /* Commercial zone (0-6, floors/15). From JudgeT. */
+    int      upgrade_day;  /* Last upgrade day (3-day cadence). From MainteT. */
 } Tenant;
 
 #define MAX_TENANTS 4096

@@ -44,6 +44,7 @@ typedef enum {
 /* Tenant occupancy state — lifecycle of a placed unit */
 typedef enum {
     TENANT_EMPTY = 0,       /* Just placed, no occupants yet */
+    TENANT_CONSTRUCTION,    /* Under construction (construction ticks remaining) */
     TENANT_MOVING_IN,       /* People moving in (brief) */
     TENANT_OCCUPIED,        /* Active and generating income/population */
     TENANT_CLOSING,         /* End of day, closing up */
@@ -51,6 +52,48 @@ typedef enum {
     TENANT_STRESSED,        /* High stress — may leave! */
     TENANT_ABANDONED,       /* Left the tower (stress too high) */
 } TenantState;
+
+/* Capacity byte values (from TenantMake decompilation).
+ * These are sprite frame selectors, NOT people counts.
+ * Offices: 0x00 (empty) → 0x10 → 0x18 → 0x20 → 0x28 → 0x30 → 0x38 → 0x40 (full)
+ * Hotels:  reverse cycle (fill at night, empty by day)
+ * Step size = 8 (0x08), range = 0x00 to 0x40 */
+#define CAP_EMPTY   0x00
+#define CAP_MIN     0x10   /* First occupied frame */
+#define CAP_STEP    0x08   /* Step between frames */
+#define CAP_MAX     0x40   /* Fully occupied */
+
+/* Convert capacity byte to sprite frame index (0-based) */
+static inline int capacity_to_frame(uint8_t cap) {
+    if (cap < CAP_MIN) return 0;
+    return (cap - CAP_MIN) / CAP_STEP;  /* 0x10→0, 0x18→1, 0x20→2, 0x28→3, 0x30→4, 0x38→5, 0x40→6 */
+}
+
+/* Construction times from TenantMake (GetConstructionTime) */
+static const int CONSTRUCTION_TIME[] = {
+    [ITEM_NONE] = 0,
+    [ITEM_LOBBY] = 0,          /* Instant */
+    [ITEM_FLOOR] = 0,          /* Instant */
+    [ITEM_OFFICE] = 2,
+    [ITEM_CONDO] = 3,
+    [ITEM_HOTEL_SINGLE] = 56,
+    [ITEM_HOTEL_TWIN] = 56,
+    [ITEM_HOTEL_SUITE] = 56,
+    [ITEM_RESTAURANT] = 48,
+    [ITEM_FAST_FOOD] = 48,
+    [ITEM_SHOP] = 48,
+    [ITEM_CINEMA] = 56,
+    [ITEM_PARTY_HALL] = 48,
+    [ITEM_METRO] = 56,
+    [ITEM_PARKING] = 8,
+    [ITEM_CATHEDRAL] = 240,    /* Takes FOREVER */
+    [ITEM_MEDICAL] = 56,
+    [ITEM_SECURITY] = 40,
+    [ITEM_RECYCLING] = 56,
+    [ITEM_STAIRS] = 40,
+    [ITEM_ESCALATOR] = 56,
+    [ITEM_ELEVATOR_SHAFT] = 8,
+};
 
 /* Promotion flags — from decompiled seg_1148 (offsets 0xB922-0xB92D) */
 typedef struct {

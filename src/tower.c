@@ -1,5 +1,6 @@
 /* tower.c - Tower grid implementation */
 #include "tower.h"
+#include "game.h"  /* For CONSTRUCTION_TIME[], CAP_* defines */
 #include <stdio.h>
 #include <string.h>
 
@@ -202,8 +203,21 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->width = width;
     t->height = height;
     t->state = 0;
+    t->capacity = CAP_EMPTY;
+    t->construction = (type < ITEM_TYPE_COUNT) ? CONSTRUCTION_TIME[type] : 0;
     t->population = 0;
     t->stress = 0;
+    t->complaints = 0;
+    t->zone = (floor >= 0) ? floor / 15 : 0;  /* JudgeT: 7 zones of 15 floors */
+    t->upgrade_day = 0;
+    
+    /* Skip construction for instant-build items */
+    if (t->construction <= 0) {
+        t->state = TENANT_OCCUPIED;
+        t->capacity = CAP_MIN;
+    } else {
+        t->state = TENANT_CONSTRUCTION;
+    }
     
     /* Fill grid cells — transport items (stairs/escalators) don't overwrite
      * existing cells, they're stored as overlays in the tenant list only */
@@ -291,9 +305,14 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
     t->x = x;
     t->width = width;
     t->height = height;
-    t->state = 0;
+    t->state = TENANT_OCCUPIED;  /* Demo tenants start occupied */
+    t->capacity = CAP_MIN;       /* Start at first animation frame */
+    t->construction = 0;         /* Already built */
     t->population = 0;
     t->stress = 0;
+    t->complaints = 0;
+    t->zone = (floor >= 0) ? floor / 15 : 0;
+    t->upgrade_day = 0;
     
     int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
     

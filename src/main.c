@@ -544,13 +544,33 @@ static void render_tower(void)
                 continue;
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
-                 * Frame 0 = primary occupied appearance.
-                 * Don't use tenant->state for frame selection — that's the
-                 * lifecycle state (empty/occupied/vacant), not animation. */
+                 * Frame selection driven by capacity byte (from TenantMake).
+                 * capacity 0x10→frame 0, 0x18→1, 0x20→2, etc.
+                 * This makes offices fill with people during the day and
+                 * empty at night, hotels the reverse. */
                 int nframes = spr->w / frame_w_hint;
                 if (nframes < 1) nframes = 1;
-                int frame_idx = 0;  /* Default: first (occupied) frame */
-                /* TODO: use proper animation state per tenant type */
+                /* Map capacity (0x00-0x40) to available frame range.
+                 * capacity_to_frame gives 0-6, but sprites have varying
+                 * frame counts (office=4, hotel=9, restaurant=4, etc).
+                 * Scale proportionally so cap 0x40 always maps to last frame. */
+                int frame_idx;
+                if (tenant->capacity <= CAP_EMPTY) {
+                    frame_idx = 0;
+                } else {
+                    /* Proportional mapping: cap range [0x10..0x40] → [0..nframes-1] */
+                    int cap_range = CAP_MAX - CAP_MIN;  /* 0x30 = 48 */
+                    int cap_pos = tenant->capacity - CAP_MIN;
+                    if (cap_pos < 0) cap_pos = 0;
+                    if (cap_pos > cap_range) cap_pos = cap_range;
+                    frame_idx = (cap_pos * (nframes - 1)) / cap_range;
+                }
+                if (frame_idx >= nframes) frame_idx = nframes - 1;
+                if (frame_idx < 0) frame_idx = 0;
+                
+                /* Construction: show first frame with overlay */
+                if (tenant->state == TENANT_CONSTRUCTION) frame_idx = 0;
+                
                 SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
                 SDL_Rect dst = { tx, draw_y, tw, draw_h };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
@@ -578,7 +598,12 @@ static void render_tower(void)
             {
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
-                if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
+                if (tenant->state == TENANT_CONSTRUCTION) {
+                    /* Under construction: yellow/amber overlay */
+                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 80);
+                    SDL_Rect overlay = { tx, draw_y, tw, draw_h };
+                    SDL_RenderFillRect(game.renderer, &overlay);
+                } else if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
                     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 60);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
@@ -683,7 +708,7 @@ static void render_tower(void)
     if (game.font_small && game.show_debug) {
         SDL_Color yellow = {255, 255, 100, 255};
         static const char *state_names[] = {
-            "empty", "movin", "OCCUP", "close", "vacnt", "STRES", "ABND"
+            "empty", "BUILD", "movin", "OCCUP", "close", "vacnt", "STRES", "ABND"
         };
         for (int i = 0; i < game.tower.tenant_count; i++) {
             Tenant *t = &game.tower.tenants[i];
@@ -693,10 +718,15 @@ static void render_tower(void)
             grid_to_screen(t->floor, t->x + t->width, &tx, &ty);
             
             /* Build diagnostic string with state info */
-            const char *sn = (t->state < 7) ? state_names[t->state] : "???";
+            const char *sn = (t->state < 8) ? state_names[t->state] : "???";
             char info[256];
-            snprintf(info, sizeof(info), "%s [%s] pop:%d str:%d",
-                     tower_item_name(t->type), sn, t->population, t->stress);
+            if (t->state == TENANT_CONSTRUCTION) {
+                snprintf(info, sizeof(info), "%s [%s %dt] cap:0x%02X",
+                         tower_item_name(t->type), sn, t->construction, t->capacity);
+            } else {
+                snprintf(info, sizeof(info), "%s [%s] cap:0x%02X pop:%d str:%d",
+                         tower_item_name(t->type), sn, t->capacity, t->population, t->stress);
+            }
             
             SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, info, yellow);
             if (ts) {
