@@ -1532,11 +1532,15 @@ static void render_minimap(void)
     int map_w = MAP_WIN_W - 8;
     int map_h = MAP_WIN_H - 24;
     
-    /* Sky background in map */
-    {
+    /* Map background — use original bitmap 0x8160 (200×288) if available.
+     * Top 264px = sky, bottom 24px = ground strip (from OpenSkyscraper). */
+    if (game.ui_map) {
+        SDL_Rect dst = { map_x, map_y, map_w, map_h };
+        SDL_RenderCopy(game.renderer, game.ui_map, NULL, &dst);
+    } else {
+        /* Fallback: sky gradient + earth */
         uint8_t tr, tg, tb, ta;
         game_sky_tint(&game.sim, &tr, &tg, &tb, &ta);
-        /* Base sky blue, modified by time of day */
         int sr = 120 - (int)ta * (120 - (int)tr) / 255;
         int sg = 180 - (int)ta * (180 - (int)tg) / 255;
         int sb = 220 - (int)ta * (220 - (int)tb) / 255;
@@ -1545,17 +1549,17 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &sky);
     }
     
-    /* Ground level in minimap */
-    /* Total visible range: floor -9 to 100; map that to map_h pixels.
-     * Ground (floor 0) at proportional position. */
+    /* Floor positioning for minimap overlay */
     int total_floors = TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1;  /* 110 */
     int ground_offset = -TOWER_MIN_FLOOR;  /* 9 (floors below ground) */
     
-    /* Earth below ground */
+    /* Earth below ground (on top of map bg) */
     int ground_map_y = map_y + map_h - (ground_offset * map_h / total_floors);
-    SDL_SetRenderDrawColor(game.renderer, 140, 120, 90, 255);
-    SDL_Rect earth = { map_x, ground_map_y, map_w, map_y + map_h - ground_map_y };
-    SDL_RenderFillRect(game.renderer, &earth);
+    if (!game.ui_map) {
+        SDL_SetRenderDrawColor(game.renderer, 140, 120, 90, 255);
+        SDL_Rect earth = { map_x, ground_map_y, map_w, map_y + map_h - ground_map_y };
+        SDL_RenderFillRect(game.renderer, &earth);
+    }
     
     /* Draw each tenant as a colored pixel/line */
     for (int i = 0; i < game.tower.tenant_count; i++) {
