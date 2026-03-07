@@ -106,13 +106,14 @@
 /* Underground dirt: 0x8F28 */
 #define SPR_UNDERGROUND  0x8f28
 
-/* Clouds — 5 different cloud shapes (DIB bitmaps) */
+/* Clouds — 4 different cloud shapes (DIB bitmaps) */
 #define SPR_CLOUD_0      0x8384   /* 96×41 */
 #define SPR_CLOUD_1      0x8385   /* 192×19 */
 #define SPR_CLOUD_2      0x8386   /* 292×38 */
 #define SPR_CLOUD_3      0x8387   /* 216×43 */
-#define SPR_CLOUD_4      0x8388   /* 140×48 */
-#define SPR_CLOUD_COUNT  5
+#define SPR_CLOUD_COUNT  4
+/* 0x8388 is Santa Claus! (confirmed via OpenSkyscraper: "deco/santa") */
+#define SPR_SANTA        0x8388   /* 140×48 — Easter egg, not a cloud! */
 
 /* UI */
 #define SPR_TOOLBAR      0x8140
@@ -144,12 +145,12 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_HOTEL_SUITE:   *frame_w = 80;  return SPR_HOTEL_SUITE_COMP;  /* 720/9=80 */
     case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_COMP;
     case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_COMP;
-    case ITEM_SHOP:          *frame_w = 96;  return 0; /* fallback color — TODO: load shop sprites */
-    case ITEM_CINEMA:        *frame_w = 0;   return SPR_CINEMA_COMP;
-    case ITEM_PARTY_HALL:    *frame_w = 0;   return SPR_PARTYHALL_COMP;
-    case ITEM_METRO:         *frame_w = 0;   return SPR_METRO_COMP;
+    case ITEM_SHOP:          *frame_w = 96;  return 0x8668; /* 288×24, 3 frames of 96px */
+    case ITEM_CINEMA:        *frame_w = 192; return SPR_CINEMA_COMP;   /* 768/4=192 per frame */
+    case ITEM_PARTY_HALL:    *frame_w = 192; return SPR_PARTYHALL_COMP; /* 576/3=192 per frame */
+    case ITEM_METRO:         *frame_w = 240; return SPR_METRO_COMP;  /* 720/3=240 per frame */
     case ITEM_PARKING:       *frame_w = 32;  return SPR_PARKING_COMP;
-    case ITEM_CATHEDRAL:     *frame_w = 0;   return 0; /* fallback color */
+    case ITEM_CATHEDRAL:     *frame_w = 0;   return 0x8828; /* 128×36, single sprite */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
     case ITEM_SECURITY:      *frame_w = 128; return SPR_SECURITY;     /* 128px, palette animated */
     case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
@@ -216,8 +217,9 @@ typedef struct {
     /* Zoom */
     float           zoom;
     
-    /* Cloud sprites (up to 5 different shapes) */
+    /* Cloud sprites (up to 4 different shapes + Santa Easter egg) */
     Sprite         *clouds[SPR_CLOUD_COUNT];
+    Sprite         *santa;   /* 0x8388 — shows up at Christmas? */
     int             cloud_count;
 } Game;
 
@@ -230,14 +232,14 @@ static const CloudPos CLOUD_POSITIONS[] = {
     { 220, -150, 2 },
     { 400, -60,  1 },
     { 150, -220, 3 },
-    { 520, -180, 4 },
-    { 320, -280, 0 },
-    { 680, -100, 2 },
-    { 80,  -320, 1 },
-    { 450, -350, 3 },
-    { 750, -250, 4 },
+    { 520, -180, 0 },
+    { 320, -280, 2 },
+    { 680, -100, 1 },
+    { 80,  -320, 3 },
+    { 450, -350, 0 },
+    { 750, -250, 2 },
     { 900, -120, 1 },
-    { 600, -380, 2 },
+    { 600, -380, 3 },
 };
 #define CLOUD_COUNT (int)(sizeof(CLOUD_POSITIONS)/sizeof(CLOUD_POSITIONS[0]))
 
@@ -1286,8 +1288,9 @@ int main(int argc, char *argv[])
      * White pixels (0xFF,0xFF,0xFF) must be transparent — same as original game.
      * Re-decode from NE resources with SDL_SetColorKey before texture creation. */
     game.cloud_count = 0;
+    game.santa = NULL;
     {
-        uint16_t cloud_ids[] = { SPR_CLOUD_0, SPR_CLOUD_1, SPR_CLOUD_2, SPR_CLOUD_3, SPR_CLOUD_4 };
+        uint16_t cloud_ids[] = { SPR_CLOUD_0, SPR_CLOUD_1, SPR_CLOUD_2, SPR_CLOUD_3 };
         NEResourceList *dibs = ne_find_type(&game.exe, 0x8002);
         for (int i = 0; i < SPR_CLOUD_COUNT; i++) {
             game.clouds[i] = NULL;
@@ -1351,6 +1354,8 @@ int main(int argc, char *argv[])
             {SPR_CINEMA_COMP, "cinema_comp"},
             {SPR_METRO_COMP, "metro_comp"},
             {SPR_UNDERGROUND, "underground"},
+            {0x8668, "shop"},
+            {0x8828, "cathedral"},
             {SPR_CLOUD_0, "cloud_0"},
             {SPR_CLOUD_1, "cloud_1"},
             {SPR_CLOUD_2, "cloud_2"},
