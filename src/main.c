@@ -415,6 +415,9 @@ static void render_tower(void)
     /* Lobby sprite (raw bitmap, 992×36) */
     Sprite *lobby_spr = sprites_find(&game.sprites, SPR_LOBBY_BOT0);
     
+    /* ====== PASS 1: Floor backgrounds ======
+     * Draw ALL floor backgrounds first, so multi-floor sprites
+     * can paint over them without being overwritten. */
     for (int floor = bot_floor; floor <= top_floor; floor++) {
         int fidx = floor_to_index(floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
@@ -423,17 +426,14 @@ static void render_tower(void)
         grid_to_screen(floor, 0, &sx_base, &sy_base);
         
         /* Check if this floor has ANY content */
-        int floor_has_content = 0;
         int left = TOWER_WIDTH, right = 0;
         for (int x = 0; x < TOWER_WIDTH; x++) {
             if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                floor_has_content = 1;
                 if (x < left) left = x;
                 if (x > right) right = x;
             }
         }
-        
-        if (!floor_has_content) continue;
+        if (left > right) continue;  /* Empty floor */
         
         /* Floor background — different for above/below ground */
         if (floor > 0) {
@@ -455,7 +455,6 @@ static void render_tower(void)
             /* Underground: dark brown earth fill where buildings are */
             int ug_x = sx_base + left * CELL_W;
             int ug_w = (right - left + 1) * CELL_W;
-            /* Darker based on depth */
             int depth = -floor;
             int r = 120 - depth * 6; if (r < 60) r = 60;
             int g = 85 - depth * 5;  if (g < 35) g = 35;
@@ -469,8 +468,18 @@ static void render_tower(void)
             SDL_RenderDrawLine(game.renderer, ug_x, sy_base,
                               ug_x + ug_w, sy_base);
         }
+    }
+    
+    /* ====== PASS 2: Tenant sprites ======
+     * Now render all tenants. Multi-floor items paint over the
+     * backgrounds of upper floors without being overwritten. */
+    for (int floor = bot_floor; floor <= top_floor; floor++) {
+        int fidx = floor_to_index(floor);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
         
-        /* Render tenants on this floor */
+        int sx_base, sy_base;
+        grid_to_screen(floor, 0, &sx_base, &sy_base);
+        
         for (int x = 0; x < TOWER_WIDTH; ) {
             TowerCell *cell = &game.tower.grid[fidx][x];
             
@@ -493,6 +502,10 @@ static void render_tower(void)
             
             int tenant_y = ty + CEIL_H;
             
+            /* Calculate draw rect for this tenant */
+            int draw_h = (item_floors > 1) ? item_floors * CELL_H : TENANT_H;
+            int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
+            
             if (tenant->type == ITEM_LOBBY && lobby_spr) {
                 /* Lobby: tile the real lobby sprite across full width */
                 int lobby_pw = TOWER_WIDTH * CELL_W;
@@ -508,35 +521,30 @@ static void render_tower(void)
                 x = tenant->x + tenant->width;
                 continue;
             } else if (spr && frame_w_hint > 0) {
-                /* Frame-based sprite sheet */
+                /* Frame-based sprite sheet.
+                 * Frame 0 = primary occupied appearance.
+                 * Don't use tenant->state for frame selection — that's the
+                 * lifecycle state (empty/occupied/vacant), not animation. */
                 int nframes = spr->w / frame_w_hint;
                 if (nframes < 1) nframes = 1;
-                int frame_idx = tenant->state % nframes;
+                int frame_idx = 0;  /* Default: first (occupied) frame */
+                /* TODO: use proper animation state per tenant type */
                 SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
-                
-                int draw_h = (item_floors > 1) ? item_floors * CELL_H : TENANT_H;
-                int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
                 SDL_Rect dst = { tx, draw_y, tw, draw_h };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
             } else if (spr) {
                 /* Full sprite, no frame extraction — scale to fit */
-                int draw_h = (item_floors > 1) ? item_floors * CELL_H : TENANT_H;
-                int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
                 SDL_Rect dst = { tx, draw_y, tw, draw_h };
                 SDL_RenderCopy(game.renderer, spr->texture, NULL, &dst);
             } else {
                 /* Fallback: colored rectangle with label */
                 uint8_t r, g, b;
                 item_fallback_color(tenant->type, &r, &g, &b);
-                int draw_h = (item_floors > 1) ? item_floors * CELL_H : TENANT_H;
-                int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
                 SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
                 SDL_Rect rect = { tx, draw_y, tw, draw_h };
                 SDL_RenderFillRect(game.renderer, &rect);
-                /* Border */
                 SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
                 SDL_RenderDrawRect(game.renderer, &rect);
-                /* Inner detail for multi-floor */
                 if (item_floors > 1) {
                     SDL_SetRenderDrawColor(game.renderer, r - 20, g - 20, b - 20, 255);
                     int mid_y = draw_y + CELL_H;
@@ -546,26 +554,18 @@ static void render_tower(void)
             
             /* Tenant state visual overlay */
             {
-                int draw_h = (ITEM_HEIGHT[tenant->type] > 1) ? 
-                              ITEM_HEIGHT[tenant->type] * CELL_H : TENANT_H;
-                int draw_y = (ITEM_HEIGHT[tenant->type] > 1) ? 
-                              ty - (ITEM_HEIGHT[tenant->type] - 1) * CELL_H : ty + CEIL_H;
-                
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
-                    /* Dark overlay for vacant/empty */
                     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 60);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
                 } else if (tenant->state == TENANT_ABANDONED) {
-                    /* Red tint for abandoned */
                     SDL_SetRenderDrawColor(game.renderer, 180, 0, 0, 50);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
                 } else if (game.sim.time_of_day == TOD_NIGHT && 
                            tenant->state == TENANT_OCCUPIED) {
-                    /* Warm window glow at night for occupied units */
                     SDL_SetRenderDrawColor(game.renderer, 255, 220, 100, 30);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
@@ -578,7 +578,7 @@ static void render_tower(void)
         }
     }
     
-    /* Second pass: render transport overlays (stairs, escalators) */
+    /* ====== PASS 3: Transport overlays (stairs, escalators) ====== */
     for (int i = 0; i < game.tower.tenant_count; i++) {
         Tenant *t = &game.tower.tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
@@ -601,7 +601,7 @@ static void render_tower(void)
             SDL_Rect dst = { tx, draw_y, tw, draw_h };
             SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
         } else {
-            /* Fallback: semi-transparent stair/escalator overlay */
+            /* Fallback: semi-transparent overlay */
             SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
             uint8_t r, g, b;
             item_fallback_color(t->type, &r, &g, &b);
@@ -610,7 +610,6 @@ static void render_tower(void)
             int draw_y = ty - (item_floors - 1) * CELL_H;
             SDL_Rect rect = { tx, draw_y, tw, draw_h };
             SDL_RenderFillRect(game.renderer, &rect);
-            /* Draw diagonal line to suggest stairs */
             SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
             SDL_RenderDrawLine(game.renderer, tx, draw_y + draw_h, tx + tw, draw_y);
             SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
