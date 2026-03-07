@@ -129,8 +129,15 @@
 #define SPR_CLOUD_2      0x8386   /* 292×38 */
 #define SPR_CLOUD_3      0x8387   /* 216×43 */
 #define SPR_CLOUD_COUNT  4
-/* 0x8388 is Santa Claus! (confirmed via OpenSkyscraper: "deco/santa") */
-#define SPR_SANTA        0x8388   /* 140×48 — Easter egg, not a cloud! */
+/* Decorative sprites (from OpenSkyscraper SimTowerLoader.cpp) */
+#define SPR_SANTA        0x8388   /* 140×48 — Santa helicopter Easter egg */
+#define SPR_SKYLINE      0x8389   /* Background city skyline */
+#define SPR_ENTRANCES    0x83E9   /* Entrance awning — the iconic red awning! */
+#define SPR_CRANE        0x83EA   /* Construction crane — appears during building */
+#define SPR_FIRELADDER   0x842D   /* Fire escape stairs — zigzag up the side */
+#define SPR_CONST_GRID   0x8E28   /* Construction grid placeholder */
+#define SPR_CONST_SOLID  0x8E29   /* Construction solid fill */
+#define SPR_CONST_WORKER 0x85EA   /* Construction worker sprite */
 
 /* UI */
 #define SPR_TOOLBAR      0x8140
@@ -239,7 +246,11 @@ typedef struct {
     
     /* Cloud sprites (up to 4 different shapes + Santa Easter egg) */
     Sprite         *clouds[SPR_CLOUD_COUNT];
-    Sprite         *santa;   /* 0x8388 — shows up at Christmas? */
+    Sprite         *santa;       /* 0x8388 — Santa helicopter */
+    Sprite         *entrances;   /* 0x83E9 — entrance awning */
+    Sprite         *crane;       /* 0x83EA — construction crane */
+    Sprite         *fireladder;  /* 0x842D — fire escape stairs */
+    Sprite         *skyline;     /* 0x8389 — city skyline background */
     int             cloud_count;
 } Game;
 
@@ -718,6 +729,89 @@ static void render_tower(void)
             SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
             SDL_RenderDrawLine(game.renderer, tx, draw_y + draw_h, tx + tw, draw_y);
             SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+        }
+    }
+    
+    /* ====== PASS 4: Decorative overlays (awning, crane, fire escape) ====== */
+    
+    /* Entrance awning — drawn over each lobby's edges */
+    if (game.entrances) {
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->type != ITEM_LOBBY) continue;
+            
+            int tx, ty;
+            grid_to_screen(t->floor, t->x, &tx, &ty);
+            int tw = t->width * CELL_W;
+            
+            /* Awning on left entrance */
+            SDL_Rect awning_l = { tx - 8, ty - 4, game.entrances->w / 2, game.entrances->h };
+            SDL_Rect src_l = { 0, 0, game.entrances->w / 2, game.entrances->h };
+            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_l, &awning_l);
+            
+            /* Awning on right entrance (mirrored) */
+            SDL_Rect awning_r = { tx + tw - game.entrances->w / 2 + 8, ty - 4,
+                                  game.entrances->w / 2, game.entrances->h };
+            SDL_Rect src_r = { game.entrances->w / 2, 0, game.entrances->w / 2, game.entrances->h };
+            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
+        }
+    }
+    
+    /* Construction crane — drawn above any building under construction */
+    if (game.crane) {
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->state != TENANT_CONSTRUCTION) continue;
+            if (t->type == ITEM_LOBBY || t->type == ITEM_FLOOR) continue;
+            
+            int tx, ty;
+            grid_to_screen(t->floor, t->x, &tx, &ty);
+            
+            /* Crane sits above the building being constructed */
+            SDL_Rect crane_dst = {
+                tx + (t->width * CELL_W) / 2 - game.crane->w / 2,
+                ty - game.crane->h - 4,
+                game.crane->w, game.crane->h
+            };
+            SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
+        }
+    }
+    
+    /* Fire escape — drawn on the side of the tower at the rightmost occupied cell */
+    if (game.fireladder) {
+        /* Find the rightmost column of buildings per floor and draw fire escape */
+        for (int floor = 1; floor <= 15; floor++) {  /* Fire escape on first 15 floors */
+            int fidx = floor_to_index(floor);
+            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+            
+            /* Find rightmost occupied cell on this floor */
+            int right_x = -1;
+            for (int x = TOWER_WIDTH - 1; x >= 0; x--) {
+                if (game.tower.grid[fidx][x].type != ITEM_NONE &&
+                    game.tower.grid[fidx][x].type != ITEM_LOBBY) {
+                    right_x = x;
+                    break;
+                }
+            }
+            if (right_x < 0) continue;
+            
+            int fsx, fsy;
+            grid_to_screen(floor, right_x + 1, &fsx, &fsy);
+            
+            /* Draw fire escape segment */
+            int seg_h = CELL_H;
+            int seg_w = game.fireladder->w;
+            if (seg_w > 24) seg_w = 24;  /* Cap width */
+            SDL_Rect fe_dst = { fsx, fsy, seg_w, seg_h };
+            /* Use a portion of the fire ladder sprite that fits one floor */
+            int src_h = game.fireladder->h;
+            if (src_h > 0) {
+                int frame_h = (src_h > CELL_H) ? CELL_H : src_h;
+                SDL_Rect fe_src = { 0, (floor % 2) * frame_h, game.fireladder->w, frame_h };
+                if (fe_src.y + fe_src.h > src_h) fe_src.y = 0;
+                SDL_RenderCopy(game.renderer, game.fireladder->texture, &fe_src, &fe_dst);
+            }
+            (void)right_x; /* used for positioning above */
         }
     }
     
@@ -1472,6 +1566,41 @@ int main(int argc, char *argv[])
                     printf("🎅 Santa sprite loaded: %dx%d\n", ss->w, ss->h);
                 }
                 SDL_FreeSurface(surf);
+            }
+        }
+    }
+    
+    /* Load decorative sprites with white transparency */
+    {
+        struct { uint16_t id; Sprite **target; const char *name; } decos[] = {
+            { SPR_ENTRANCES,   &game.entrances,  "Entrance awning" },
+            { SPR_CRANE,       &game.crane,       "Construction crane" },
+            { SPR_FIRELADDER,  &game.fireladder,  "Fire escape" },
+            { SPR_SKYLINE,     &game.skyline,     "City skyline" },
+        };
+        NEResourceList *dibs = ne_find_type(&game.exe, 0x8002);
+        for (int d = 0; d < 4; d++) {
+            *decos[d].target = NULL;
+            NEResource *res = NULL;
+            if (dibs) {
+                for (int j = 0; j < dibs->count; j++) {
+                    if (dibs->items[j].id == decos[d].id) { res = &dibs->items[j]; break; }
+                }
+            }
+            if (res) {
+                SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+                if (surf) {
+                    SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGB(surf->format, 0xFF, 0xFF, 0xFF));
+                    Sprite *sp = sprites_find(&game.sprites, decos[d].id);
+                    if (sp) {
+                        SDL_DestroyTexture(sp->texture);
+                        sp->texture = SDL_CreateTextureFromSurface(game.renderer, surf);
+                        SDL_SetTextureBlendMode(sp->texture, SDL_BLENDMODE_BLEND);
+                        *decos[d].target = sp;
+                        printf("🎨 %s loaded: %dx%d (0x%04X)\n", decos[d].name, sp->w, sp->h, decos[d].id);
+                    }
+                    SDL_FreeSurface(surf);
+                }
             }
         }
     }

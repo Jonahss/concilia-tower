@@ -56,7 +56,7 @@ typedef enum {
  * Each cell = 8px. Frame widths verified against sprite bitmap dimensions. */
 static const int ITEM_WIDTH[] = {
     [ITEM_NONE] = 0,
-    [ITEM_LOBBY] = 63,       /* Full width (auto-extends) */
+    [ITEM_LOBBY] = 4,        /* 4-cell segments (extends existing lobby) */
     [ITEM_FLOOR] = 63,
     [ITEM_OFFICE] = 9,       /* 72px — sprite 288/4 frames = 72px ✓ */
     [ITEM_CONDO] = 16,       /* 128px — sprite 128px ✓ */

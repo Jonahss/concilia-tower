@@ -18,24 +18,27 @@ void tower_init(Tower *tower)
     tower->cam_x = (TOWER_WIDTH * CELL_W) / 2;
     tower->cam_y = floor_to_index(0) * CELL_H;
     
-    /* Place the initial lobby (spans the full width) */
+    /* Place initial lobby — centered, 16 cells wide (4 segments).
+     * Player extends it from here. From original: lobby starts small. */
     int lobby_idx = floor_to_index(TOWER_LOBBY_FLOOR);
+    int lobby_x = (TOWER_WIDTH - 16) / 2;  /* Centered */
+    int lobby_w = 16;
     uint16_t lobby_id = tower->next_tenant_id++;
     
     Tenant *lobby = &tower->tenants[tower->tenant_count++];
     lobby->id = lobby_id;
     lobby->type = ITEM_LOBBY;
     lobby->floor = TOWER_LOBBY_FLOOR;
-    lobby->x = 0;
-    lobby->width = TOWER_WIDTH;
+    lobby->x = lobby_x;
+    lobby->width = lobby_w;
     lobby->height = 1;
     lobby->state = 0;
     
-    for (int x = 0; x < TOWER_WIDTH; x++) {
+    for (int x = lobby_x; x < lobby_x + lobby_w; x++) {
         TowerCell *cell = &tower->grid[lobby_idx][x];
         cell->type = ITEM_LOBBY;
         cell->tenant_id = lobby_id;
-        cell->cell_index = x;
+        cell->cell_index = x - lobby_x;
         cell->flags = 1; /* occupied */
     }
     
@@ -75,16 +78,36 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     /* Check funds */
     if (tower->money < cost) return 0;
     
-    /* Lobby special rules: can only be placed on every 15th floor */
+    /* Lobby placement: 4-cell segments on every 15th floor.
+     * Can overlap existing lobby cells (extends the lobby).
+     * From LobbyMake (seg_11e8) + OpenSkyscraper Game.cpp. */
     if (type == ITEM_LOBBY) {
         if (floor % 15 != 0) return 0;
         if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
-        /* Check if lobby already exists on this floor */
+        if (x < 0 || x + width > TOWER_WIDTH) return 0;
+        if (tower->money < cost) return 0;
+        /* Lobby segments CAN overlap existing lobby — that's how extension works.
+         * But they can't overlap non-lobby items. */
         int fidx = floor_to_index(floor);
         if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
-            if (tower->grid[fidx][0].type == ITEM_LOBBY) return 0; /* already has lobby */
+            for (int cx = x; cx < x + width; cx++) {
+                ItemType existing = tower->grid[fidx][cx].type;
+                if (existing != ITEM_NONE && existing != ITEM_LOBBY) return 0;
+            }
         }
-        return 1; /* Lobbies auto-extend full width, no further checks needed */
+        /* Floor 0: always allowed. Upper lobbies: need floor below. */
+        if (floor != 0) {
+            int below_idx = floor_to_index(floor - 1);
+            int has_support = 0;
+            if (below_idx >= 0) {
+                for (int cx = x; cx < x + width && !has_support; cx++) {
+                    if (tower->grid[below_idx][cx].type != ITEM_NONE)
+                        has_support = 1;
+                }
+            }
+            if (!has_support) return 0;
+        }
+        return 1;
     }
     
     /* Underground-only items must be below floor 0 */
@@ -184,10 +207,44 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
     
-    /* Lobby special case: auto-extends full width */
+    /* Lobby segments: check if extending an existing lobby on this floor.
+     * If so, just fill the new cells — don't create a duplicate tenant.
+     * From LobbyMake: TWO records per slot, but we simplify to one tenant
+     * that grows. Cost = $5,000 per segment (not per cell). */
     if (type == ITEM_LOBBY) {
-        width = TOWER_WIDTH;
-        x = 0;
+        int fidx = floor_to_index(floor);
+        /* Check if there's already a lobby on this floor */
+        Tenant *existing_lobby = NULL;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            if (tower->tenants[i].type == ITEM_LOBBY && tower->tenants[i].floor == floor) {
+                existing_lobby = &tower->tenants[i];
+                break;
+            }
+        }
+        if (existing_lobby) {
+            /* Extend existing lobby to cover new segment */
+            int old_left = existing_lobby->x;
+            int old_right = existing_lobby->x + existing_lobby->width;
+            int new_left = x;
+            int new_right = x + width;
+            int final_left = (new_left < old_left) ? new_left : old_left;
+            int final_right = (new_right > old_right) ? new_right : old_right;
+            existing_lobby->x = final_left;
+            existing_lobby->width = final_right - final_left;
+            /* Fill new grid cells */
+            for (int cx = x; cx < x + width; cx++) {
+                TowerCell *cell = &tower->grid[fidx][cx];
+                cell->type = ITEM_LOBBY;
+                cell->tenant_id = existing_lobby->id;
+                cell->cell_index = cx - final_left;
+                cell->flags = 1;
+            }
+            tower->money -= cost;
+            printf("Extended lobby on F%d: now x=%d w=%d (cost $%d, balance $%ld)\n",
+                   floor, final_left, existing_lobby->width, cost, tower->money);
+            return existing_lobby->id;
+        }
+        /* Otherwise fall through to create a new lobby tenant */
     }
     
     /* Deduct cost */
