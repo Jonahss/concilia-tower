@@ -369,7 +369,7 @@ void tower_build_demo(Tower *tower)
         { ITEM_ESCALATOR,   13 },   /* 2 floors: 13-14 */
         { ITEM_CINEMA,      15 },   /* 2 floors: 15-16 */
         { ITEM_PARTY_HALL,  17 },   /* 2 floors: 17-18 */
-        { ITEM_CATHEDRAL,   19 },   /* 2 floors: 19-20 */
+        { ITEM_CATHEDRAL,   19 },   /* 1 floor (was 2, corrected) */
         /* Underground items */
         { ITEM_PARKING,     -1 },   /* 1 floor */
         { ITEM_RECYCLING,   -3 },   /* 2 floors: B3-B2 */

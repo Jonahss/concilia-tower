@@ -60,6 +60,14 @@
 #define SPR_HOTEL_SUITE_A 0x8528
 #define SPR_HOTEL_SUITE_B 0x8529
 
+/* Shop: 0x8668-0x8672 = 11 shop type variants, each 288×24 (3 frames of 96px)
+ *        0x8673-0x8674 = end-cap/signage pieces, 96×24 each
+ * OpenSkyscraper: loadMergedByID(shops[1], 'y', 0x8668..0x8672) */
+#define SPR_SHOP_BASE   0x8668  /* 288×24, 3 frames of 96px */
+#define SPR_SHOP_VARIANTS 11    /* 0x8668 through 0x8672 */
+#define SPR_SHOP_END0   0x8673  /* Left/right end-cap, 96×24 */
+#define SPR_SHOP_END1   0x8674
+
 /* Security: 0x8768 (animated, 3 frames via palette cycling) */
 #define SPR_SECURITY    0x8768
 
@@ -67,6 +75,11 @@
 #define SPR_MEDICAL_A   0x8728
 #define SPR_MEDICAL_B   0x8729
 #define SPR_MEDICAL_C   0x872A
+
+/* Cathedral: 0x8828, 128×36, 1 floor. Placed on floor 100 for TOWER promotion.
+ * ChurchT.c: OpenChurch, CloseChurch, StartMarry, CheckMarry 
+ * Wedding event required for ★★★★★→TOWER transition */
+#define SPR_CATHEDRAL   0x8828
 
 /* Recycling: 0x88E8 (empty state, single DIB) */
 #define SPR_RECYCLING_EMPTY 0x88e8
@@ -145,12 +158,12 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_HOTEL_SUITE:   *frame_w = 80;  return SPR_HOTEL_SUITE_COMP;  /* 720/9=80 */
     case ITEM_RESTAURANT:    *frame_w = 192; return SPR_RESTAURANT_COMP;
     case ITEM_FAST_FOOD:     *frame_w = 128; return SPR_FASTFOOD_COMP;
-    case ITEM_SHOP:          *frame_w = 96;  return 0x8668; /* 288×24, 3 frames of 96px */
+    case ITEM_SHOP:          *frame_w = 96;  return SPR_SHOP_BASE; /* 288×24, 3 frames of 96px */
     case ITEM_CINEMA:        *frame_w = 192; return SPR_CINEMA_COMP;   /* 768/4=192 per frame */
     case ITEM_PARTY_HALL:    *frame_w = 192; return SPR_PARTYHALL_COMP; /* 576/3=192 per frame */
     case ITEM_METRO:         *frame_w = 240; return SPR_METRO_COMP;  /* 720/3=240 per frame */
     case ITEM_PARKING:       *frame_w = 32;  return SPR_PARKING_COMP;
-    case ITEM_CATHEDRAL:     *frame_w = 0;   return 0x8828; /* 128×36, single sprite */
+    case ITEM_CATHEDRAL:     *frame_w = 0;   return SPR_CATHEDRAL; /* 128×36, 1 floor, top of tower */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
     case ITEM_SECURITY:      *frame_w = 128; return SPR_SECURITY;     /* 128px, palette animated */
     case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
