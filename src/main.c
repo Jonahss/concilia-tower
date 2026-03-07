@@ -470,18 +470,52 @@ static void render_sky(void)
         SDL_RenderCopy(game.renderer, game.santa->texture, NULL, &dst);
     }
     
-    /* Underground: brown earth gradient below lobby level, gets darker with depth */
+    /* Underground: concrete gray background (like original), gets darker with depth.
+     * In the real game, basements use the same floor sprite (0x83E8) as above ground,
+     * with brown/gray earth visible through gaps between buildings.
+     * We use a concrete gradient: light gray → dark gray. */
     int ug_start = lobby_sy + CELL_H;
     if (ug_start < game.screen_h) {
         for (int y = ug_start; y < game.screen_h; y++) {
             int depth = y - ug_start;
-            /* Start warm brown (139,90,43) → dark earth (80,50,20) */
-            int r = 139 - depth / 4; if (r < 60) r = 60;
-            int g = 90  - depth / 5; if (g < 35) g = 35;
-            int b = 43  - depth / 6; if (b < 15) b = 15;
+            /* Concrete gray: (160,150,140) → (80,75,70) */
+            int r = 160 - depth / 6; if (r < 70) r = 70;
+            int g = 150 - depth / 6; if (g < 65) g = 65;
+            int b = 140 - depth / 7; if (b < 60) b = 60;
             SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
+        /* Draw horizontal lines at each basement floor boundary for structure */
+        for (int bf = -1; bf >= TOWER_MIN_FLOOR; bf--) {
+            int bsx, bsy;
+            grid_to_screen(bf, 0, &bsx, &bsy);
+            if (bsy > 0 && bsy < game.screen_h) {
+                SDL_SetRenderDrawColor(game.renderer, 100, 95, 90, 255);
+                SDL_RenderDrawLine(game.renderer, 0, bsy + CELL_H - 1, game.screen_w, bsy + CELL_H - 1);
+            }
+        }
+    }
+    
+    /* Rain effect — from AnimeT: palette entries 207/213 alternate.
+     * We simulate with diagonal lines that flicker between two sets.
+     * Rain only during certain weather (every 3rd day for now). */
+    if (game.tower.day % 3 == 0 && game.sim.time_of_day != TOD_NIGHT) {
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        int rain_set = (game.sim.frame / 4) % 2;  /* Alternate every 4 frames */
+        int alpha = 60 + rain_set * 30;
+        SDL_SetRenderDrawColor(game.renderer, 180, 190, 210, alpha);
+        
+        /* Draw diagonal rain lines across the sky area */
+        int offset = (game.sim.frame * 3) % 20;  /* Animate downward */
+        for (int rx = -200 + offset; rx < game.screen_w + 200; rx += 20) {
+            int ry_top = 0;
+            int ry_bot = lobby_sy > 0 ? lobby_sy : game.screen_h;
+            /* Alternate which set of rain lines to show */
+            if ((rx / 20 + rain_set) % 2 == 0) {
+                SDL_RenderDrawLine(game.renderer, rx, ry_top, rx - 40, ry_bot);
+            }
+        }
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     }
 }
 
@@ -777,41 +811,41 @@ static void render_tower(void)
         }
     }
     
-    /* Fire escape — drawn on the side of the tower at the rightmost occupied cell */
+    /* Fire escape — drawn on BOTH sides of the tower (from Decorations.cpp).
+     * The 48px sprite splits: left 24px on min edge, right 24px on max edge.
+     * Fire stairs appear on every above-ground floor that has buildings. */
     if (game.fireladder) {
-        /* Find the rightmost column of buildings per floor and draw fire escape */
-        for (int floor = 1; floor <= 15; floor++) {  /* Fire escape on first 15 floors */
+        int half_w = game.fireladder->w / 2;  /* 24px each side */
+        for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
             int fidx = floor_to_index(floor);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
             
-            /* Find rightmost occupied cell on this floor */
-            int right_x = -1;
-            for (int x = TOWER_WIDTH - 1; x >= 0; x--) {
-                if (game.tower.grid[fidx][x].type != ITEM_NONE &&
-                    game.tower.grid[fidx][x].type != ITEM_LOBBY) {
+            /* Find leftmost and rightmost occupied cells */
+            int left_x = -1, right_x = -1;
+            for (int x = 0; x < TOWER_WIDTH; x++) {
+                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
+                    if (left_x < 0) left_x = x;
                     right_x = x;
-                    break;
                 }
             }
-            if (right_x < 0) continue;
+            if (left_x < 0) continue;
             
-            int fsx, fsy;
-            grid_to_screen(floor, right_x + 1, &fsx, &fsy);
+            int fsy_unused, fsy;
+            grid_to_screen(floor, 0, &fsy_unused, &fsy);
             
-            /* Draw fire escape segment */
-            int seg_h = CELL_H;
-            int seg_w = game.fireladder->w;
-            if (seg_w > 24) seg_w = 24;  /* Cap width */
-            SDL_Rect fe_dst = { fsx, fsy, seg_w, seg_h };
-            /* Use a portion of the fire ladder sprite that fits one floor */
-            int src_h = game.fireladder->h;
-            if (src_h > 0) {
-                int frame_h = (src_h > CELL_H) ? CELL_H : src_h;
-                SDL_Rect fe_src = { 0, (floor % 2) * frame_h, game.fireladder->w, frame_h };
-                if (fe_src.y + fe_src.h > src_h) fe_src.y = 0;
-                SDL_RenderCopy(game.renderer, game.fireladder->texture, &fe_src, &fe_dst);
-            }
-            (void)right_x; /* used for positioning above */
+            /* Left fire escape (first 24px of sprite, drawn mirrored) */
+            int lx, ly;
+            grid_to_screen(floor, left_x, &lx, &ly);
+            SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
+            SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
+            
+            /* Right fire escape (second 24px of sprite) */
+            int rx_pos, ry;
+            grid_to_screen(floor, right_x + 1, &rx_pos, &ry);
+            SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
+            SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
         }
     }
     
