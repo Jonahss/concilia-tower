@@ -76,10 +76,14 @@
 #define SPR_MEDICAL_B   0x8729
 #define SPR_MEDICAL_C   0x872A
 
-/* Cathedral: 0x8828, 128×36, 1 floor. Placed on floor 100 for TOWER promotion.
- * ChurchT.c: OpenChurch, CloseChurch, StartMarry, CheckMarry 
- * Wedding event required for ★★★★★→TOWER transition */
-#define SPR_CATHEDRAL   0x8828
+/* Cathedral: NO exterior building sprite exists!
+ * 0x8828 (128×36) is the WEDDING PROCESSION ANIMATION — brides in white,
+ * grooms in top hats, couples walking. Used during the CheckMarry event.
+ * The building itself is rendered as a plain floor with fallback color.
+ * ChurchT.c: OpenChurch, CloseChurch, StartMarry, CheckMarry
+ * Wedding event required for ★★★★★→TOWER transition.
+ * Cathedral can ONLY be placed on floor 100. */
+#define SPR_WEDDING_ANIM  0x8828  /* NOT a building sprite — event animation */
 
 /* Recycling: 0x88E8 (empty state, single DIB) */
 #define SPR_RECYCLING_EMPTY 0x88e8
@@ -163,7 +167,10 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_PARTY_HALL:    *frame_w = 192; return SPR_PARTYHALL_COMP; /* 576/3=192 per frame */
     case ITEM_METRO:         *frame_w = 240; return SPR_METRO_COMP;  /* 720/3=240 per frame */
     case ITEM_PARKING:       *frame_w = 32;  return SPR_PARKING_COMP;
-    case ITEM_CATHEDRAL:     *frame_w = 0;   return SPR_CATHEDRAL; /* 128×36, 1 floor, top of tower */
+    case ITEM_CATHEDRAL:     *frame_w = 0;   return 0; /* No building exterior sprite exists!
+        * 0x8828 is the wedding procession animation (brides+grooms).
+        * Original game renders cathedral as a plain floor with the wedding
+        * event animation overlaid. Use fallback color for now. */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
     case ITEM_SECURITY:      *frame_w = 128; return SPR_SECURITY;     /* 128px, palette animated */
     case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
@@ -191,7 +198,7 @@ static void item_fallback_color(ItemType type, uint8_t *r, uint8_t *g, uint8_t *
     case ITEM_PARTY_HALL:   *r=200; *g=100; *b=180; break;
     case ITEM_METRO:        *r=100; *g=100; *b=120; break;
     case ITEM_PARKING:      *r=160; *g=160; *b=160; break;
-    case ITEM_CATHEDRAL:    *r=210; *g=190; *b=140; break;
+    case ITEM_CATHEDRAL:    *r=230; *g=220; *b=200; break; /* Warm stone — no exterior sprite exists */
     case ITEM_MEDICAL:      *r=220; *g=240; *b=240; break;
     case ITEM_SECURITY:     *r=180; *g=180; *b=200; break;
     case ITEM_RECYCLING:    *r=100; *g=180; *b=100; break;
@@ -1018,8 +1025,9 @@ static void handle_event(SDL_Event *ev)
             }
             break;
         
-        /* Debug toggle */
+        /* Debug toggle — F1 gets eaten by browsers, use backtick */
         case SDLK_F1:
+        case SDLK_BACKQUOTE:
             game.show_debug = !game.show_debug;
             printf("Debug labels: %s\n", game.show_debug ? "ON" : "OFF");
             break;
@@ -1368,7 +1376,7 @@ int main(int argc, char *argv[])
             {SPR_METRO_COMP, "metro_comp"},
             {SPR_UNDERGROUND, "underground"},
             {0x8668, "shop"},
-            {0x8828, "cathedral"},
+            {SPR_WEDDING_ANIM, "wedding_anim"},
             {SPR_CLOUD_0, "cloud_0"},
             {SPR_CLOUD_1, "cloud_1"},
             {SPR_CLOUD_2, "cloud_2"},
@@ -1418,7 +1426,7 @@ int main(int argc, char *argv[])
     printf("               H=Cathedral X=Medical G=Security R=Recycling O=Shop\n");
     printf("  Tab/Shift+Tab: cycle through all types\n");
     printf("  Space: pause/unpause, +/-: speed up/slow down\n");
-    printf("  F1: toggle debug labels, F12: screenshot, Q/Esc: quit\n\n");
+    printf("  ` (backtick): toggle debug labels, F12: screenshot, Q/Esc: quit\n\n");
     
     /* Main loop */
     game.running = 1;
