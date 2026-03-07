@@ -24,7 +24,7 @@ static int load_palette(SpriteAtlas *atlas, NEResourceTable *exe)
 }
 
 /* ---------- DIB → SDL_Surface ---------- */
-static SDL_Surface *dib_to_surface(NEResource *res, SpriteAtlas *atlas)
+SDL_Surface *dib_to_surface(NEResource *res, SpriteAtlas *atlas)
 {
     if (!res || res->length < 40) return NULL;
     
@@ -178,6 +178,11 @@ Sprite *sprites_find(SpriteAtlas *atlas, uint16_t id)
             return &atlas->sprites[i];
     }
     return NULL;
+}
+
+SDL_Surface *sprites_dib_to_surface(SpriteAtlas *atlas, NEResource *res)
+{
+    return dib_to_surface(res, atlas);
 }
 
 void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect *src_rect)

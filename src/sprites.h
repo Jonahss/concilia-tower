@@ -35,6 +35,10 @@ int sprites_init(SpriteAtlas *atlas, NEResourceTable *exe, SDL_Renderer *rendere
 /* Find a sprite by resource ID. Returns NULL if not found. */
 Sprite *sprites_find(SpriteAtlas *atlas, uint16_t id);
 
+/* Re-decode a DIB resource to an SDL_Surface (caller must free).
+ * Useful for applying color keys before texture creation. */
+SDL_Surface *sprites_dib_to_surface(SpriteAtlas *atlas, NEResource *res);
+
 /* Render a sprite at screen position (x,y).
  * If src_rect is NULL, draws the entire sprite. */
 void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect *src_rect);

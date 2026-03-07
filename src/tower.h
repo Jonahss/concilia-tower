@@ -52,30 +52,30 @@ typedef enum {
     ITEM_TYPE_COUNT
 } ItemType;
 
-/* Item widths in cells (verified from OpenSkyscraper source)
- * Each cell = 8px. Sizes match p->size.x from Item headers. */
+/* Item widths in cells — CANONICAL from SimTower (GameFAQs BStuart guide + sprite analysis)
+ * Each cell = 8px. Frame widths verified against sprite bitmap dimensions. */
 static const int ITEM_WIDTH[] = {
     [ITEM_NONE] = 0,
     [ITEM_LOBBY] = 63,       /* Full width (auto-extends) */
     [ITEM_FLOOR] = 63,
-    [ITEM_OFFICE] = 9,       /* 72px — OpenSkyscraper: int2(9,1) */
-    [ITEM_CONDO] = 16,       /* 128px — OpenSkyscraper: int2(16,1) */
-    [ITEM_HOTEL_SINGLE] = 4, /* 32px — door+room composite */
-    [ITEM_HOTEL_TWIN] = 6,   /* 48px — door+room composite */
-    [ITEM_HOTEL_SUITE] = 8,  /* 64px — 0x8528+0x8529 composite */
-    [ITEM_RESTAURANT] = 24,  /* 192px — OpenSkyscraper: int2(24,1) */
-    [ITEM_FAST_FOOD] = 16,   /* 128px — OpenSkyscraper: int2(16,1) */
-    [ITEM_SHOP] = 8,         /* 64px */
-    [ITEM_CINEMA] = 31,      /* 248px — OpenSkyscraper: int2(31,2) */
-    [ITEM_PARTY_HALL] = 24,  /* 192px — OpenSkyscraper: int2(24,2) */
-    [ITEM_METRO] = 30,       /* 240px — OpenSkyscraper: int2(30,3) */
-    [ITEM_PARKING] = 8,      /* 64px — parking space */
-    [ITEM_CATHEDRAL] = 16,   /* 128px — estimated, 2 floors tall */
-    [ITEM_MEDICAL] = 6,      /* 48px — 3 bitmaps 0x8728-0x872A */
-    [ITEM_SECURITY] = 6,     /* 48px — animated 0x8768 */
-    [ITEM_RECYCLING] = 6,    /* 48px — 0x88E8+ */
-    [ITEM_STAIRS] = 8,       /* 64px — OpenSkyscraper: int2(8,2) */
-    [ITEM_ESCALATOR] = 8,    /* 64px — OpenSkyscraper: int2(8,2) */
+    [ITEM_OFFICE] = 9,       /* 72px — sprite 288/4 frames = 72px ✓ */
+    [ITEM_CONDO] = 16,       /* 128px — sprite 128px ✓ */
+    [ITEM_HOTEL_SINGLE] = 4, /* 32px — create(9*32) = 9 frames × 32px ✓ */
+    [ITEM_HOTEL_TWIN] = 6,   /* 48px — create(9*48) = 9 frames × 48px ✓ */
+    [ITEM_HOTEL_SUITE] = 10, /* 80px — sprite 720/9 = 80px per frame (was 8, FIXED) */
+    [ITEM_RESTAURANT] = 24,  /* 192px — sprite 768/4 = 192px per frame ✓ */
+    [ITEM_FAST_FOOD] = 16,   /* 128px — sprite 512/4 = 128px per frame ✓ */
+    [ITEM_SHOP] = 12,        /* 96px — GameFAQs: "Retail Shop 12" (was 8, FIXED) */
+    [ITEM_CINEMA] = 31,      /* 248px — OpenSkyscraper: int2(31,2) ✓ */
+    [ITEM_PARTY_HALL] = 24,  /* 192px — sprite 576/3 = 192px per frame ✓ */
+    [ITEM_METRO] = 30,       /* 240px — OpenSkyscraper: int2(30,3) ✓ */
+    [ITEM_PARKING] = 4,      /* 32px — GameFAQs: "Parking 4" (was 8, FIXED) */
+    [ITEM_CATHEDRAL] = 16,   /* 128px — only 1 allowed, floor 100 only */
+    [ITEM_MEDICAL] = 26,     /* 208px — sprite 208px each, GameFAQs: "Medical 26" (was 6, FIXED) */
+    [ITEM_SECURITY] = 16,    /* 128px — sprite 128px, GameFAQs: "Security 16" (was 6, FIXED) */
+    [ITEM_RECYCLING] = 25,   /* 200px — sprite 200×60, GameFAQs: "Recycling 25x2" (was 6, FIXED) */
+    [ITEM_STAIRS] = 8,       /* 64px — sprite 448/7 = 64px per frame ✓ */
+    [ITEM_ESCALATOR] = 8,    /* 64px — sprite 512/8 = 64px per frame ✓ */
     [ITEM_ELEVATOR_SHAFT] = 4, /* 32px (standard) */
 };
 
@@ -105,29 +105,29 @@ static const int ITEM_HEIGHT[] = {
     [ITEM_ELEVATOR_SHAFT] = 1,
 };
 
-/* Item costs (from original game / OpenSkyscraper prototypes) */
+/* Item costs — CANONICAL from SimTower (GameFAQs BStuart guide) */
 static const int ITEM_COST[] = {
     [ITEM_NONE] = 0,
-    [ITEM_LOBBY] = 0,         /* Free (auto-built) */
-    [ITEM_FLOOR] = 5000,      /* Per floor section */
-    [ITEM_OFFICE] = 40000,    /* OpenSkyscraper: 40000 */
-    [ITEM_CONDO] = 200000,    /* OpenSkyscraper: 200000 */
-    [ITEM_HOTEL_SINGLE] = 50000,
-    [ITEM_HOTEL_TWIN] = 80000,
-    [ITEM_HOTEL_SUITE] = 100000,
-    [ITEM_RESTAURANT] = 200000, /* OpenSkyscraper: 200000 */
-    [ITEM_FAST_FOOD] = 100000,  /* OpenSkyscraper: 100000 */
+    [ITEM_LOBBY] = 5000,       /* Per lobby segment */
+    [ITEM_FLOOR] = 500,        /* Per floor section */
+    [ITEM_OFFICE] = 40000,
+    [ITEM_CONDO] = 80000,      /* Was 200000, guide says 80k (income 50-200k once) */
+    [ITEM_HOTEL_SINGLE] = 20000,  /* Guide: 20k */
+    [ITEM_HOTEL_TWIN] = 50000,    /* Guide: 50k */
+    [ITEM_HOTEL_SUITE] = 100000,  /* Guide: 100k */
+    [ITEM_RESTAURANT] = 200000,
+    [ITEM_FAST_FOOD] = 100000,
     [ITEM_SHOP] = 100000,
-    [ITEM_CINEMA] = 500000,   /* OpenSkyscraper: 500000 */
-    [ITEM_PARTY_HALL] = 500000, /* OpenSkyscraper: 500000 */
-    [ITEM_METRO] = 1000000,   /* OpenSkyscraper: 1000000 */
-    [ITEM_PARKING] = 30000,
-    [ITEM_CATHEDRAL] = 0,      /* Special unlock, free */
+    [ITEM_CINEMA] = 500000,
+    [ITEM_PARTY_HALL] = 100000,   /* Guide: 100k (was 500k) */
+    [ITEM_METRO] = 1000000,
+    [ITEM_PARKING] = 3000,        /* Guide: 3k (was 30k) */
+    [ITEM_CATHEDRAL] = 0,         /* Special unlock, free */
     [ITEM_MEDICAL] = 500000,
     [ITEM_SECURITY] = 100000,
     [ITEM_RECYCLING] = 500000,
-    [ITEM_STAIRS] = 5000,     /* OpenSkyscraper: 5000 */
-    [ITEM_ESCALATOR] = 20000, /* OpenSkyscraper: 20000 */
+    [ITEM_STAIRS] = 5000,
+    [ITEM_ESCALATOR] = 20000,
     [ITEM_ELEVATOR_SHAFT] = 200000,
 };
 
