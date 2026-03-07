@@ -47,7 +47,8 @@ fi
 
 # Launch ConcilliaTower
 echo "Launching ConcilliaTower..."
-DISPLAY=${DISPLAY_NUM} setsid nohup "${PROJECT_DIR}/simtower" "${EXE_PATH}" \
+# stdbuf -oL forces line-buffered stdout so the log file gets written in real time
+DISPLAY=${DISPLAY_NUM} setsid nohup stdbuf -oL "${PROJECT_DIR}/simtower" "${EXE_PATH}" \
     </dev/null >"${LOG}" 2>&1 &
 disown
 GAME_PID=$!

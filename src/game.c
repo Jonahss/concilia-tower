@@ -212,7 +212,7 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
 
 /* --- Tenant state update --- */
 
-static void update_tenants(GameSim *sim, Tower *tower)
+static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *out_expenses)
 {
     long income = 0;
     long expenses = 0;
@@ -290,10 +290,9 @@ static void update_tenants(GameSim *sim, Tower *tower)
         }
     }
     
-    /* Apply income/expenses */
-    tower->money += income - expenses;
-    sim->income_this_quarter += income;
-    sim->expenses_this_quarter += expenses;
+    /* Return income/expenses to caller */
+    *out_income += income;
+    *out_expenses += expenses;
 }
 
 /* --- Main simulation update --- */
@@ -318,7 +317,11 @@ void game_update(GameSim *sim, Tower *tower)
     
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
-        update_tenants(sim, tower);
+        long tick_income = 0, tick_expenses = 0;
+        update_tenants(sim, tower, &tick_income, &tick_expenses);
+        tower->money += tick_income - tick_expenses;
+        sim->income_this_quarter += tick_income;
+        sim->expenses_this_quarter += tick_expenses;
     }
     
     /* Recalculate population periodically */
