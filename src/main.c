@@ -503,25 +503,22 @@ static void render_sky(void)
     int lobby_sx, lobby_sy;
     grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
     
-    /* Sky: tile 32×360 strips across the width, bottom-aligned to lobby top */
-    Sprite *sky = sprites_find(&game.sprites, 0x8352);
-    
-    if (sky) {
-        for (int x = 0; x < game.screen_w; x += sky->w) {
-            int sy = lobby_sy - sky->h;
-            SDL_Rect dst = { x, sy, sky->w, sky->h };
-            SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst);
-            for (int y2 = sy - sky->h; y2 > -sky->h; y2 -= sky->h) {
-                SDL_Rect dst2 = { x, y2, sky->w, sky->h };
-                SDL_RenderCopy(game.renderer, sky->texture, NULL, &dst2);
-            }
-        }
-    } else {
-        /* Fallback: blue gradient */
-        for (int y = 0; y < lobby_sy && y < game.screen_h; y++) {
-            int t = (y * 255) / (lobby_sy > 0 ? lobby_sy : 1);
-            SDL_SetRenderDrawColor(game.renderer, 
-                80 + t/3, 150 + t/3, 220 + t/8, 255);
+    /* Sky: gradient background.
+     * NOTE: The original sky bitmap (0x8352) contains raindrop patterns
+     * baked into palette entries 207/213. OpenSkyscraper fixes this by
+     * patching those palette entries to match sky color (see loadSky()),
+     * but our sprite loader doesn't do palette patching yet. So we use
+     * a clean gradient that matches the original's daytime sky color. */
+    {
+        int sky_h = lobby_sy;
+        if (sky_h > game.screen_h) sky_h = game.screen_h;
+        for (int y = 0; y < sky_h; y++) {
+            /* SimTower sky blue: gradient from deep blue at top to light at horizon */
+            float t = (float)y / (sky_h > 0 ? (float)sky_h : 1.0f);
+            int r = (int)(74 + t * 106);   /* 74 → 180 */
+            int g = (int)(140 + t * 80);   /* 140 → 220 */
+            int b = (int)(220 + t * 35);   /* 220 → 255 */
+            SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
     }
@@ -541,26 +538,40 @@ static void render_sky(void)
         }
     }
     
-    /* Render clouds in the sky */
+    /* Render clouds in the sky.
+     * IMPORTANT: Each cloud bitmap has 4 rows stacked vertically
+     * (day, twilight, night, overcast — see Sky.cpp: h = size.y / 4).
+     * We only render the appropriate 1/4 based on time of day. */
     if (game.cloud_count > 0) {
+        /* Select cloud row: 0=day, 1=twilight, 2=night, 3=overcast */
+        int cloud_row = 0;
+        if (game.sim.time_of_day == TOD_NIGHT) cloud_row = 2;
+        else if (game.sim.time_of_day == TOD_EVENING || game.sim.time_of_day == TOD_DAWN) cloud_row = 1;
+        else if (game.rainy_day && game.sim.hour >= 8 && game.sim.hour < 16) cloud_row = 3;
+        
         for (int i = 0; i < CLOUD_COUNT; i++) {
             int ci = CLOUD_POSITIONS[i].cloud_idx % game.cloud_count;
             Sprite *cs = game.clouds[ci];
             if (!cs) continue;
+            
+            int row_h = cs->h / 4;  /* Each row = 1/4 of total height */
+            if (row_h < 1) row_h = cs->h;
+            
             SDL_SetTextureAlphaMod(cs->texture, 180);
             
-            /* Cloud positions are relative to the lobby top */
             int cx = lobby_sx + CLOUD_POSITIONS[i].x;
             int cy = lobby_sy + CLOUD_POSITIONS[i].y;
             
-            /* Also tile clouds horizontally for wide views */
+            /* Source rect: only the correct 1/4 row */
+            SDL_Rect src = { 0, cloud_row * row_h, cs->w, row_h };
+            
             for (int tx = cx - 1200; tx < game.screen_w + 200; tx += 1200) {
                 if (tx + cs->w < 0) continue;
                 if (tx > game.screen_w) break;
-                if (cy + cs->h < 0 || cy > game.screen_h) continue;
+                if (cy + row_h < 0 || cy > game.screen_h) continue;
                 
-                SDL_Rect dst = { tx, cy, cs->w, cs->h };
-                SDL_RenderCopy(game.renderer, cs->texture, NULL, &dst);
+                SDL_Rect dst = { tx, cy, cs->w, row_h };
+                SDL_RenderCopy(game.renderer, cs->texture, &src, &dst);
             }
             SDL_SetTextureAlphaMod(cs->texture, 255);
         }
@@ -1013,20 +1024,31 @@ static void render_tower(void)
         }
     }
     
-    /* Construction crane — drawn above any building under construction */
+    /* Construction crane — drawn at the TOP of the tower only (from Decorations.cpp).
+     * The crane sits above the highest occupied floor, not on every construction site. */
     if (game.crane) {
-        for (int i = 0; i < game.tower.tenant_count; i++) {
-            Tenant *t = &game.tower.tenants[i];
-            if (t->state != TENANT_CONSTRUCTION) continue;
-            if (t->type == ITEM_LOBBY || t->type == ITEM_FLOOR) continue;
-            
+        int max_floor = 0;
+        int max_floor_minx = TOWER_WIDTH, max_floor_maxx = 0;
+        for (int f = TOWER_MAX_FLOOR; f >= 1; f--) {
+            int fidx = floor_to_index(f);
+            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+            int found = 0;
+            for (int x = 0; x < TOWER_WIDTH; x++) {
+                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
+                    if (!found) { max_floor = f; found = 1; }
+                    if (x < max_floor_minx) max_floor_minx = x;
+                    if (x > max_floor_maxx) max_floor_maxx = x;
+                }
+            }
+            if (found) break;
+        }
+        if (max_floor > 0) {
+            int cx = (max_floor_minx + max_floor_maxx + 1) / 2;
             int tx, ty;
-            grid_to_screen(t->floor, t->x, &tx, &ty);
-            
-            /* Crane sits above the building being constructed */
+            grid_to_screen(max_floor, cx, &tx, &ty);
             SDL_Rect crane_dst = {
-                tx + (t->width * CELL_W) / 2 - game.crane->w / 2,
-                ty - game.crane->h - 4,
+                tx - game.crane->w / 2,
+                ty - game.crane->h - 2,
                 game.crane->w, game.crane->h
             };
             SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
@@ -1035,39 +1057,56 @@ static void render_tower(void)
     
     /* Fire escape — drawn on BOTH sides of the tower (from Decorations.cpp).
      * The 48px sprite splits: left 24px on min edge, right 24px on max edge.
-     * Fire stairs appear on every above-ground floor that has buildings. */
+     * Fire stairs only appear on floors that have actual floor items (not every
+     * occupied floor). They use the FULL BUILDING width, not per-floor width. */
     if (game.fireladder) {
-        int half_w = game.fireladder->w / 2;  /* 24px each side */
+        int half_w = game.fireladder->w / 2;
+        
+        /* First, find the full building envelope (min/max x across ALL floors) */
+        int bldg_left = TOWER_WIDTH, bldg_right = -1;
+        int bldg_top = 0;
         for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
             int fidx = floor_to_index(floor);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-            
-            /* Find leftmost and rightmost occupied cells */
-            int left_x = -1, right_x = -1;
             for (int x = 0; x < TOWER_WIDTH; x++) {
                 if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                    if (left_x < 0) left_x = x;
-                    right_x = x;
+                    if (x < bldg_left) bldg_left = x;
+                    if (x > bldg_right) bldg_right = x;
+                    if (floor > bldg_top) bldg_top = floor;
                 }
             }
-            if (left_x < 0) continue;
-            
-            int fsy_unused, fsy;
-            grid_to_screen(floor, 0, &fsy_unused, &fsy);
-            
-            /* Left fire escape (first 24px of sprite, drawn mirrored) */
-            int lx, ly;
-            grid_to_screen(floor, left_x, &lx, &ly);
-            SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
-            SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
-            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
-            
-            /* Right fire escape (second 24px of sprite) */
-            int rx_pos, ry;
-            grid_to_screen(floor, right_x + 1, &rx_pos, &ry);
-            SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
-            SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
-            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
+        }
+        
+        if (bldg_right >= 0) {
+            /* Draw fire escape on each occupied floor using building envelope edges */
+            for (int floor = 1; floor <= bldg_top; floor++) {
+                int fidx = floor_to_index(floor);
+                if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+                
+                /* Only draw if this floor has something */
+                int has_content = 0;
+                for (int x = bldg_left; x <= bldg_right; x++) {
+                    if (game.tower.grid[fidx][x].type != ITEM_NONE) { has_content = 1; break; }
+                }
+                if (!has_content) continue;
+                
+                int fsx, fsy;
+                grid_to_screen(floor, 0, &fsx, &fsy);
+                
+                /* Left fire escape at building left edge */
+                int lx, ly;
+                grid_to_screen(floor, bldg_left, &lx, &ly);
+                SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
+                SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
+                SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
+                
+                /* Right fire escape at building right edge */
+                int rx_pos, ry;
+                grid_to_screen(floor, bldg_right + 1, &rx_pos, &ry);
+                SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
+                SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
+                SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
+            }
         }
     }
     
