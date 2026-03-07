@@ -1343,7 +1343,7 @@ static void render_info_window(void)
     
     if (game.font_small) {
         SDL_Color white = {255, 255, 255, 255};
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "SimTower", white);
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "ConcilliaTower", white);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
             SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
@@ -1593,9 +1593,13 @@ static void render_minimap(void)
         if (vt < map_y) vt = map_y;
         if (vb > map_y + map_h) vb = map_y + map_h;
         
-        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        /* Double-thick white rectangle with red inner for visibility */
+        SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, 255);
         SDL_Rect vp = { map_x + 1, vt, map_w - 2, vb - vt };
         SDL_RenderDrawRect(game.renderer, &vp);
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_Rect vp2 = { map_x + 2, vt + 1, map_w - 4, vb - vt - 2 };
+        SDL_RenderDrawRect(game.renderer, &vp2);
     }
 }
 
