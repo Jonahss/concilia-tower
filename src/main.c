@@ -4,9 +4,14 @@
  * decompilation of SIMTOWER.EXE and guided by the YootTower code map.
  * Sprite IDs verified against OpenSkyscraper SimTowerLoader.cpp.
  */
+#define _USE_MATH_DEFINES
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include "ne_resource.h"
@@ -392,21 +397,27 @@ static void get_top_menu_rect(int idx, int *x, int *y, int *w, int *h)
     *x = *y = *w = *h = 0;
 }
 
-/* ---------- Cloud positions (fixed, scattered in sky) ---------- */
+/* ---------- Cloud positions (scattered, higher up like original) ---------- */
+/* OpenSkyscraper: cloudGrid(250, 100), cmin.y starts at 2 (= 200px above ground).
+ * We scatter clouds from 150px to 1500px above lobby (floors 6-60 equivalent). */
 typedef struct { int x, y; int cloud_idx; } CloudPos;
 static const CloudPos CLOUD_POSITIONS[] = {
-    { 50,  -80,  0 },
-    { 220, -150, 2 },
-    { 400, -60,  1 },
-    { 150, -220, 3 },
-    { 520, -180, 0 },
-    { 320, -280, 2 },
-    { 680, -100, 1 },
-    { 80,  -320, 3 },
-    { 450, -350, 0 },
-    { 750, -250, 2 },
-    { 900, -120, 1 },
-    { 600, -380, 3 },
+    { 50,  -180,  0 },
+    { 320, -250, 2 },
+    { 600, -160, 1 },
+    { 150, -420, 3 },
+    { 520, -380, 0 },
+    { 880, -200, 2 },
+    { 280, -550, 1 },
+    { 700, -480, 3 },
+    { 80,  -650, 0 },
+    { 450, -720, 2 },
+    { 950, -340, 1 },
+    { 200, -850, 3 },
+    { 750, -600, 0 },
+    { 100, -950, 2 },
+    { 550, -1100, 1 },
+    { 380, -1300, 3 },
 };
 #define CLOUD_COUNT (int)(sizeof(CLOUD_POSITIONS)/sizeof(CLOUD_POSITIONS[0]))
 
@@ -606,17 +617,34 @@ static void render_sky(void)
         SDL_RenderCopy(game.renderer, game.santa->texture, NULL, &dst);
     }
     
-    /* City skyline — tiled at ground level (from Decorations.cpp).
-     * The skyline is 96px wide and drawn across the entire ground line,
-     * behind the tower but in front of the sky. */
+    /* City skyline — tiled at ground level (from Sky.cpp).
+     * OpenSkyscraper: origin(0, 55), position(x*96, 0) — bottom at ground, extends upward.
+     * In our coordinate system, ground level = lobby_sy + CELL_H (bottom of lobby). */
     if (game.skyline) {
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-        /* Skyline positioned at ground level (floor 0 top edge) */
-        int skyline_y = lobby_sy - game.skyline->h;
+        /* Skyline bottom aligns with lobby bottom (floor 0 bottom edge) */
+        int ground_y = lobby_sy + CELL_H;  /* Bottom of lobby = ground level */
+        int skyline_y = ground_y - game.skyline->h;  /* Extends upward from ground */
+        
+        /* Apply time-of-day tinting to skyline via color mod */
+        uint8_t tr, tg, tb, ta;
+        game_sky_tint(&game.sim, &tr, &tg, &tb, &ta);
+        if (ta > 0) {
+            /* Blend sky tint into the skyline sprite */
+            int mr = 255 - (int)ta * (255 - (int)tr) / 255;
+            int mg = 255 - (int)ta * (255 - (int)tg) / 255;
+            int mb = 255 - (int)ta * (255 - (int)tb) / 255;
+            SDL_SetTextureColorMod(game.skyline->texture, mr, mg, mb);
+        } else {
+            SDL_SetTextureColorMod(game.skyline->texture, 255, 255, 255);
+        }
+        
         for (int sx = -game.skyline->w; sx < game.screen_w + game.skyline->w; sx += game.skyline->w) {
             SDL_Rect dst = { sx, skyline_y, game.skyline->w, game.skyline->h };
             SDL_RenderCopy(game.renderer, game.skyline->texture, NULL, &dst);
         }
+        /* Reset color mod */
+        SDL_SetTextureColorMod(game.skyline->texture, 255, 255, 255);
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     }
     
@@ -1215,6 +1243,567 @@ static void render_build_ghost(void)
     }
 }
 
+/* ========== Win3.1-style Sub-Windows ========== */
+
+/* --- Info Window (clock, stars, money, events) --- */
+/* The original's "Time Window" — has analog clock, star rating,
+ * money display, population, and a scrolling event feed. */
+
+#define INFO_WIN_W  180
+#define INFO_WIN_H  200
+#define INFO_WIN_X  8
+#define CLOCK_R     30    /* Clock face radius */
+
+static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
+{
+    /* Clock face */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 240, 255);
+    /* Fill circle approximation with filled rects */
+    for (int y = -r; y <= r; y++) {
+        int xspan = (int)sqrt((double)(r*r - y*y));
+        SDL_Rect row = { cx - xspan, cy + y, xspan * 2, 1 };
+        SDL_RenderFillRect(game.renderer, &row);
+    }
+    
+    /* Clock border */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    /* Draw circle outline */
+    for (int deg = 0; deg < 360; deg++) {
+        double rad = deg * M_PI / 180.0;
+        int px = cx + (int)(r * cos(rad));
+        int py = cy + (int)(r * sin(rad));
+        SDL_RenderDrawPoint(game.renderer, px, py);
+    }
+    
+    /* Hour tick marks */
+    for (int h = 0; h < 12; h++) {
+        double angle = (h * 30 - 90) * M_PI / 180.0;
+        int x1 = cx + (int)((r - 4) * cos(angle));
+        int y1 = cy + (int)((r - 4) * sin(angle));
+        int x2 = cx + (int)((r - 1) * cos(angle));
+        int y2 = cy + (int)((r - 1) * sin(angle));
+        SDL_RenderDrawLine(game.renderer, x1, y1, x2, y2);
+    }
+    
+    /* Hour hand (shorter, thicker) */
+    {
+        double h_angle = ((hour % 12) * 30 + minute * 0.5 - 90) * M_PI / 180.0;
+        int hx = cx + (int)((r * 0.55) * cos(h_angle));
+        int hy = cy + (int)((r * 0.55) * sin(h_angle));
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        SDL_RenderDrawLine(game.renderer, cx, cy, hx, hy);
+        SDL_RenderDrawLine(game.renderer, cx+1, cy, hx+1, hy);
+        SDL_RenderDrawLine(game.renderer, cx, cy+1, hx, hy+1);
+    }
+    
+    /* Minute hand (longer, thinner) */
+    {
+        double m_angle = (minute * 6 - 90) * M_PI / 180.0;
+        int mx = cx + (int)((r * 0.8) * cos(m_angle));
+        int my = cy + (int)((r * 0.8) * sin(m_angle));
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        SDL_RenderDrawLine(game.renderer, cx, cy, mx, my);
+    }
+    
+    /* Center dot */
+    SDL_Rect center = { cx - 1, cy - 1, 3, 3 };
+    SDL_RenderFillRect(game.renderer, &center);
+}
+
+/* Event message buffer for the feed */
+#define EVENT_MSG_COUNT 8
+#define EVENT_MSG_LEN   48
+static char event_messages[EVENT_MSG_COUNT][EVENT_MSG_LEN];
+static int  event_msg_head = 0;
+static int  event_msg_total = 0;
+
+static void add_event_message(const char *msg)
+{
+    strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
+    event_messages[event_msg_head][EVENT_MSG_LEN - 1] = '\0';
+    event_msg_head = (event_msg_head + 1) % EVENT_MSG_COUNT;
+    if (event_msg_total < EVENT_MSG_COUNT) event_msg_total++;
+}
+
+static void render_info_window(void)
+{
+    int wx = INFO_WIN_X;
+    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    
+    /* Win3.1 window frame */
+    /* Outer raised border */
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_Rect bg = { wx, wy, INFO_WIN_W, INFO_WIN_H };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* Title bar — navy blue */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+    SDL_Rect title = { wx + 2, wy + 2, INFO_WIN_W - 4, 16 };
+    SDL_RenderFillRect(game.renderer, &title);
+    
+    if (game.font_small) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "SimTower", white);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* 3D borders */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx + INFO_WIN_W - 1, wy);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + INFO_WIN_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy + INFO_WIN_H - 1, wx + INFO_WIN_W - 1, wy + INFO_WIN_H - 1);
+    SDL_RenderDrawLine(game.renderer, wx + INFO_WIN_W - 1, wy, wx + INFO_WIN_W - 1, wy + INFO_WIN_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(game.renderer, wx + 1, wy + INFO_WIN_H, wx + INFO_WIN_W, wy + INFO_WIN_H);
+    SDL_RenderDrawLine(game.renderer, wx + INFO_WIN_W, wy + 1, wx + INFO_WIN_W, wy + INFO_WIN_H);
+    
+    int content_y = wy + 20;
+    
+    /* Analog clock */
+    int clock_cx = wx + INFO_WIN_W / 2;
+    int clock_cy = content_y + CLOCK_R + 4;
+    draw_analog_clock(clock_cx, clock_cy, CLOCK_R, game.sim.hour, game.sim.minute);
+    
+    /* Time text below clock */
+    if (game.font_small) {
+        SDL_Color black = {0, 0, 0, 255};
+        char timebuf[32];
+        game_format_time(&game.sim, timebuf, sizeof(timebuf));
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, timebuf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { clock_cx - ts->w/2, clock_cy + CLOCK_R + 4, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* Star rating display */
+    int star_y = content_y + CLOCK_R * 2 + 22;
+    if (game.font_small) {
+        SDL_Color gold = {200, 170, 0, 255};
+        char stars[32];
+        int pos = 0;
+        for (int i = 0; i < 5; i++) {
+            if (i < game.tower.star_rating) {
+                stars[pos++] = (char)0xE2; stars[pos++] = (char)0x98; stars[pos++] = (char)0x85;
+            } else {
+                stars[pos++] = (char)0xE2; stars[pos++] = (char)0x98; stars[pos++] = (char)0x86;
+            }
+        }
+        stars[pos] = '\0';
+        SDL_Surface *ts = TTF_RenderUTF8_Blended(game.font_small, stars, gold);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, star_y, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* Money + population */
+    if (game.font_small) {
+        SDL_Color black = {0, 0, 0, 255};
+        char money_buf[64];
+        format_money(game.tower.money, money_buf, sizeof(money_buf));
+        
+        int text_y = star_y + 16;
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, money_buf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+        
+        char pop_buf[32];
+        snprintf(pop_buf, sizeof(pop_buf), "Pop: %d", game.tower.population);
+        ts = TTF_RenderText_Blended(game.font_small, pop_buf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y + 14, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+        
+        /* Day/Quarter */
+        char day_buf[64];
+        snprintf(day_buf, sizeof(day_buf), "Day %d  %s", 
+                 game.tower.day, game_quarter_name(game.sim.quarter));
+        ts = TTF_RenderText_Blended(game.font_small, day_buf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y + 28, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* Sunken event feed area at bottom */
+    int feed_y = wy + INFO_WIN_H - 40;
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_Rect feed = { wx + 4, feed_y, INFO_WIN_W - 8, 34 };
+    SDL_RenderFillRect(game.renderer, &feed);
+    /* Sunken border */
+    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y, wx + INFO_WIN_W - 5, feed_y);
+    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y, wx + 4, feed_y + 33);
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y + 33, wx + INFO_WIN_W - 5, feed_y + 33);
+    
+    /* Show last 2 event messages */
+    if (game.font_small && event_msg_total > 0) {
+        SDL_Color dk = {0, 0, 100, 255};
+        int show = event_msg_total < 2 ? event_msg_total : 2;
+        for (int i = 0; i < show; i++) {
+            int idx = (event_msg_head - show + i + EVENT_MSG_COUNT) % EVENT_MSG_COUNT;
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, event_messages[idx], dk);
+            if (ts) {
+                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                int max_w = INFO_WIN_W - 16;
+                int dw = ts->w > max_w ? max_w : ts->w;
+                SDL_Rect src2 = { 0, 0, dw, ts->h };
+                SDL_Rect dst = { wx + 8, feed_y + 3 + i * 14, dw, ts->h };
+                SDL_RenderCopy(game.renderer, tt, &src2, &dst);
+                SDL_DestroyTexture(tt);
+                SDL_FreeSurface(ts);
+            }
+        }
+    }
+}
+
+/* --- Minimap Window --- */
+/* Shows the entire tower in a tiny overview with colored dots for tenants. */
+
+#define MAP_WIN_W   160
+#define MAP_WIN_H   200
+
+static void render_minimap(void)
+{
+    int wx = game.screen_w - MAP_WIN_W - 8;
+    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    
+    /* Window frame */
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_Rect bg = { wx, wy, MAP_WIN_W, MAP_WIN_H };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* Title bar */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+    SDL_Rect title = { wx + 2, wy + 2, MAP_WIN_W - 4, 16 };
+    SDL_RenderFillRect(game.renderer, &title);
+    
+    if (game.font_small) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "Map", white);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* 3D borders */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx + MAP_WIN_W - 1, wy);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + MAP_WIN_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy + MAP_WIN_H - 1, wx + MAP_WIN_W - 1, wy + MAP_WIN_H - 1);
+    SDL_RenderDrawLine(game.renderer, wx + MAP_WIN_W - 1, wy, wx + MAP_WIN_W - 1, wy + MAP_WIN_H - 1);
+    
+    /* Map content area */
+    int map_x = wx + 4;
+    int map_y = wy + 20;
+    int map_w = MAP_WIN_W - 8;
+    int map_h = MAP_WIN_H - 24;
+    
+    /* Sky background in map */
+    {
+        uint8_t tr, tg, tb, ta;
+        game_sky_tint(&game.sim, &tr, &tg, &tb, &ta);
+        /* Base sky blue, modified by time of day */
+        int sr = 120 - (int)ta * (120 - (int)tr) / 255;
+        int sg = 180 - (int)ta * (180 - (int)tg) / 255;
+        int sb = 220 - (int)ta * (220 - (int)tb) / 255;
+        SDL_SetRenderDrawColor(game.renderer, sr, sg, sb, 255);
+        SDL_Rect sky = { map_x, map_y, map_w, map_h };
+        SDL_RenderFillRect(game.renderer, &sky);
+    }
+    
+    /* Ground level in minimap */
+    /* Total visible range: floor -9 to 100; map that to map_h pixels.
+     * Ground (floor 0) at proportional position. */
+    int total_floors = TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1;  /* 110 */
+    int ground_offset = -TOWER_MIN_FLOOR;  /* 9 (floors below ground) */
+    
+    /* Earth below ground */
+    int ground_map_y = map_y + map_h - (ground_offset * map_h / total_floors);
+    SDL_SetRenderDrawColor(game.renderer, 140, 120, 90, 255);
+    SDL_Rect earth = { map_x, ground_map_y, map_w, map_y + map_h - ground_map_y };
+    SDL_RenderFillRect(game.renderer, &earth);
+    
+    /* Draw each tenant as a colored pixel/line */
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type == ITEM_NONE || t->type == ITEM_FLOOR) continue;
+        
+        /* Map tenant position to minimap coordinates */
+        int floor_from_bottom = t->floor - TOWER_MIN_FLOOR;
+        int ty = map_y + map_h - (floor_from_bottom * map_h / total_floors) - 1;
+        int tx = map_x + (t->x * map_w / TOWER_WIDTH);
+        int tw = (t->width * map_w / TOWER_WIDTH);
+        if (tw < 1) tw = 1;
+        
+        /* Color by type */
+        uint8_t r, g, b;
+        item_fallback_color(t->type, &r, &g, &b);
+        
+        /* Darken stressed/abandoned */
+        if (t->state == TENANT_STRESSED) { r = 255; g = 50; b = 50; }
+        else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
+        else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
+        
+        SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+        SDL_Rect dot = { tx, ty, tw, 1 };
+        SDL_RenderFillRect(game.renderer, &dot);
+    }
+    
+    /* Camera viewport indicator */
+    {
+        int cam_floor_top, cam_floor_bot, dummy;
+        screen_to_grid(0, HUD_HEIGHT + MENU_BAR_H, &cam_floor_top, &dummy);
+        screen_to_grid(0, game.screen_h, &cam_floor_bot, &dummy);
+        
+        int vt = map_y + map_h - ((cam_floor_top - TOWER_MIN_FLOOR) * map_h / total_floors);
+        int vb = map_y + map_h - ((cam_floor_bot - TOWER_MIN_FLOOR) * map_h / total_floors);
+        if (vt < map_y) vt = map_y;
+        if (vb > map_y + map_h) vb = map_y + map_h;
+        
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_Rect vp = { map_x + 1, vt, map_w - 2, vb - vt };
+        SDL_RenderDrawRect(game.renderer, &vp);
+    }
+}
+
+/* --- Toolbox Window --- */
+/* The build tool selector with icons for each building type. */
+
+#define TOOL_WIN_W  180
+#define TOOL_WIN_H  280
+#define TOOL_BTN_SIZE 28
+#define TOOL_BTN_PAD  4
+#define TOOL_COLS   5
+
+/* Tool button layout */
+typedef struct {
+    const char *label;
+    ItemType    type;
+    uint8_t     r, g, b;  /* Icon color */
+} ToolButton;
+
+static const ToolButton tool_buttons[] = {
+    { "OFF",  ITEM_OFFICE,       200, 200, 150 },
+    { "CND",  ITEM_CONDO,        180, 220, 180 },
+    { "RST",  ITEM_RESTAURANT,   220, 180, 150 },
+    { "FF",   ITEM_FAST_FOOD,    220, 220, 100 },
+    { "SHP",  ITEM_SHOP,         220, 160, 220 },
+    { "H1",   ITEM_HOTEL_SINGLE, 150, 150, 220 },
+    { "H2",   ITEM_HOTEL_TWIN,   140, 140, 230 },
+    { "H3",   ITEM_HOTEL_SUITE,  120, 120, 240 },
+    { "CIN",  ITEM_CINEMA,        80,  60, 120 },
+    { "PTY",  ITEM_PARTY_HALL,   200, 100, 180 },
+    { "LOB",  ITEM_LOBBY,        210, 200, 160 },
+    { "STR",  ITEM_STAIRS,       180, 175, 170 },
+    { "ESC",  ITEM_ESCALATOR,    170, 170, 180 },
+    { "PKG",  ITEM_PARKING,      160, 160, 160 },
+    { "MTR",  ITEM_METRO,        100, 100, 120 },
+    { "SEC",  ITEM_SECURITY,     180, 180, 200 },
+    { "MED",  ITEM_MEDICAL,      220, 240, 240 },
+    { "RCY",  ITEM_RECYCLING,    100, 180, 100 },
+    { "CTH",  ITEM_CATHEDRAL,    230, 220, 200 },
+    { "NON",  ITEM_NONE,         192, 192, 192 },
+};
+#define TOOL_BTN_COUNT 20
+
+static void render_toolbox(void)
+{
+    int wx = game.screen_w - MAP_WIN_W - 8;
+    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H + 16;
+    
+    /* Window frame */
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_Rect bg = { wx, wy, TOOL_WIN_W, TOOL_WIN_H };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* Title bar */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+    SDL_Rect title_rect = { wx + 2, wy + 2, TOOL_WIN_W - 4, 16 };
+    SDL_RenderFillRect(game.renderer, &title_rect);
+    
+    if (game.font_small) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "Toolbox", white);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* 3D borders */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx + TOOL_WIN_W - 1, wy);
+    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + TOOL_WIN_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+    SDL_RenderDrawLine(game.renderer, wx, wy + TOOL_WIN_H - 1, wx + TOOL_WIN_W - 1, wy + TOOL_WIN_H - 1);
+    SDL_RenderDrawLine(game.renderer, wx + TOOL_WIN_W - 1, wy, wx + TOOL_WIN_W - 1, wy + TOOL_WIN_H - 1);
+    
+    /* Speed buttons at top */
+    int speed_y = wy + 22;
+    if (game.font_small) {
+        const char *speed_labels[] = { "\xe2\x8f\xb8", "\xe2\x96\xb6", "\xe2\x96\xb6\xe2\x96\xb6", "\xe2\x96\xb6\xe2\x96\xb6\xe2\x96\xb6" };
+        const char *speed_ascii[] = { "||", ">", ">>", ">>>" };
+        int sx = wx + 8;
+        for (int s = 0; s < 4; s++) {
+            int btn_w = 38;
+            int selected = ((int)game.sim.speed == s);
+            
+            /* Button: raised or sunken */
+            if (selected) {
+                SDL_SetRenderDrawColor(game.renderer, 160, 160, 160, 255);
+            } else {
+                SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+            }
+            SDL_Rect btn = { sx, speed_y, btn_w, 18 };
+            SDL_RenderFillRect(game.renderer, &btn);
+            
+            /* 3D border */
+            if (!selected) {
+                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx + btn_w - 1, speed_y);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx, speed_y + 17);
+                SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y + 17, sx + btn_w - 1, speed_y + 17);
+                SDL_RenderDrawLine(game.renderer, sx + btn_w - 1, speed_y, sx + btn_w - 1, speed_y + 17);
+            } else {
+                SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx + btn_w - 1, speed_y);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx, speed_y + 17);
+                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+                SDL_RenderDrawLine(game.renderer, sx, speed_y + 17, sx + btn_w - 1, speed_y + 17);
+                SDL_RenderDrawLine(game.renderer, sx + btn_w - 1, speed_y, sx + btn_w - 1, speed_y + 17);
+            }
+            
+            SDL_Color c = {0, 0, 0, 255};
+            (void)speed_labels;
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, speed_ascii[s], c);
+            if (ts) {
+                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                SDL_Rect dst = { sx + btn_w/2 - ts->w/2, speed_y + 3, ts->w, ts->h };
+                SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                SDL_DestroyTexture(tt);
+                SDL_FreeSurface(ts);
+            }
+            sx += btn_w + 2;
+        }
+    }
+    
+    /* Tool buttons grid */
+    int grid_y = speed_y + 24;
+    for (int i = 0; i < TOOL_BTN_COUNT; i++) {
+        int col = i % TOOL_COLS;
+        int row = i / TOOL_COLS;
+        int bx = wx + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+        int by = grid_y + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+        
+        int selected = (tool_buttons[i].type == game.build_type);
+        
+        /* Button background — colored square */
+        SDL_SetRenderDrawColor(game.renderer, 
+            tool_buttons[i].r, tool_buttons[i].g, tool_buttons[i].b, 255);
+        SDL_Rect btn = { bx + 2, by + 2, TOOL_BTN_SIZE - 4, TOOL_BTN_SIZE - 4 };
+        SDL_RenderFillRect(game.renderer, &btn);
+        
+        /* 3D border */
+        if (!selected) {
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+            SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
+            SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
+            SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+            SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, 
+                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+            SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
+                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+        } else {
+            /* Sunken + selection border */
+            SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+            SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
+            SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+            SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, 
+                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+            SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
+                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+            /* Blue selection indicator */
+            SDL_SetRenderDrawColor(game.renderer, 0, 0, 200, 255);
+            SDL_Rect sel = { bx + 1, by + 1, TOOL_BTN_SIZE - 2, TOOL_BTN_SIZE - 2 };
+            SDL_RenderDrawRect(game.renderer, &sel);
+        }
+        
+        /* Button label */
+        if (game.font_small) {
+            SDL_Color black = {0, 0, 0, 255};
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, tool_buttons[i].label, black);
+            if (ts) {
+                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                SDL_Rect dst = { bx + TOOL_BTN_SIZE/2 - ts->w/2, 
+                                 by + TOOL_BTN_SIZE/2 - ts->h/2, ts->w, ts->h };
+                SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                SDL_DestroyTexture(tt);
+                SDL_FreeSurface(ts);
+            }
+        }
+    }
+    
+    /* Cost display at bottom */
+    if (game.build_type != ITEM_NONE && game.font_small) {
+        SDL_Color black = {0, 0, 0, 255};
+        char cost_buf[64];
+        format_money(ITEM_COST[game.build_type], cost_buf, sizeof(cost_buf));
+        char full_buf[96];
+        snprintf(full_buf, sizeof(full_buf), "%s  %s",
+                 tower_item_name(game.build_type), cost_buf);
+        
+        int label_y = wy + TOOL_WIN_H - 18;
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            int dw = ts->w > TOOL_WIN_W - 12 ? TOOL_WIN_W - 12 : ts->w;
+            SDL_Rect src2 = { 0, 0, dw, ts->h };
+            SDL_Rect dst = { wx + 6, label_y, dw, ts->h };
+            SDL_RenderCopy(game.renderer, tt, &src2, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+}
+
 /* Draw a Win3.1-style raised/sunken rectangle */
 static void draw_win31_rect(int x, int y, int w, int h, int raised)
 {
@@ -1498,7 +2087,12 @@ static void render_ui(void)
     /* Win3.1 menu bar (below the HUD) */
     render_menu_bar();
     
-    /* Open dropdown menu */
+    /* Sub-windows */
+    render_info_window();
+    render_minimap();
+    render_toolbox();
+    
+    /* Open dropdown menu (on top of everything) */
     render_dropdown();
 }
 
@@ -1572,6 +2166,66 @@ static void drag_place_units(void)
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
     }
+}
+
+/* ---------- Toolbox click helper ---------- */
+static int toolbox_click(int mx, int my)
+{
+    int wx = game.screen_w - MAP_WIN_W - 8;
+    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H + 16;
+    
+    /* Speed buttons */
+    int speed_y = wy + 22;
+    if (my >= speed_y && my < speed_y + 18) {
+        int sx = wx + 8;
+        for (int s = 0; s < 4; s++) {
+            int btn_w = 38;
+            if (mx >= sx && mx < sx + btn_w) {
+                game.sim.speed = s;
+                return 1;
+            }
+            sx += btn_w + 2;
+        }
+    }
+    
+    /* Tool buttons */
+    int grid_y = speed_y + 24;
+    for (int i = 0; i < TOOL_BTN_COUNT; i++) {
+        int col = i % TOOL_COLS;
+        int row = i / TOOL_COLS;
+        int bx = wx + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+        int by = grid_y + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+        
+        if (mx >= bx && mx < bx + TOOL_BTN_SIZE &&
+            my >= by && my < by + TOOL_BTN_SIZE) {
+            game.build_type = tool_buttons[i].type;
+            printf("Build: %s\n", tower_item_name(game.build_type));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ---------- Minimap click helper ---------- */
+static int minimap_click(int mx, int my)
+{
+    int wx = game.screen_w - MAP_WIN_W - 8;
+    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    int map_x = wx + 4;
+    int map_y = wy + 20;
+    int map_w = MAP_WIN_W - 8;
+    int map_h = MAP_WIN_H - 24;
+    
+    if (mx >= map_x && mx < map_x + map_w &&
+        my >= map_y && my < map_y + map_h) {
+        /* Click in minimap: jump camera to that floor */
+        int total_floors = TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1;
+        int clicked_floor = TOWER_MIN_FLOOR + 
+            ((map_y + map_h - my) * total_floors / map_h);
+        game.cam_fy = -clicked_floor * CELL_H;
+        return 1;
+    }
+    return 0;
 }
 
 /* ---------- Menu interaction helpers ---------- */
@@ -1803,6 +2457,12 @@ static void handle_event(SDL_Event *ev)
                 game.menu_open = -1;
                 break;
             }
+            
+            /* Toolbox click */
+            if (toolbox_click(ev->button.x, ev->button.y)) break;
+            
+            /* Minimap click */
+            if (minimap_click(ev->button.x, ev->button.y)) break;
             
             /* Normal game click */
             if (game.build_type != ITEM_NONE) {
@@ -2162,6 +2822,8 @@ int main(int argc, char *argv[])
     game.menu_hover = -1;
     game.menu_bar_hover = -1;
     game.rainy_day = 0;
+    add_event_message("Welcome to ConcilliaTower!");
+    add_event_message("Click to build your tower.");
     
     /* Build demo tower with all unit types */
     tower_build_demo(&game.tower);
@@ -2207,10 +2869,38 @@ int main(int argc, char *argv[])
         /* Advance simulation */
         {
             int prev_hour = game.sim.hour;
+            int prev_star = game.tower.star_rating;
+            int prev_pop = game.tower.population;
             game_update(&game.sim, &game.tower);
+            
             /* Decide rainy day at 5 AM (from OpenSkyscraper: every 3rd day) */
             if (prev_hour == 4 && game.sim.hour == 5) {
                 game.rainy_day = (rand() % 3 == 0);
+                if (game.rainy_day) add_event_message("Bad weather incoming...");
+                else add_event_message("Nice weather today!");
+            }
+            
+            /* Star rating change */
+            if (game.tower.star_rating != prev_star) {
+                char buf[48];
+                snprintf(buf, sizeof(buf), "Tower promoted to %d stars!", game.tower.star_rating);
+                add_event_message(buf);
+            }
+            
+            /* Population milestones */
+            if (prev_pop < 100 && game.tower.population >= 100) add_event_message("Population reached 100!");
+            else if (prev_pop < 300 && game.tower.population >= 300) add_event_message("Population reached 300!");
+            else if (prev_pop < 1000 && game.tower.population >= 1000) add_event_message("Population reached 1,000!");
+            
+            /* Event announcements */
+            if (game.sim.event.active && game.sim.event.timer == game.sim.event.duration) {
+                if (game.sim.event.type == EVENT_FIRE) add_event_message("FIRE! Fire in the tower!");
+                else if (game.sim.event.type == EVENT_BOMB) add_event_message("BOMB THREAT reported!");
+            }
+            
+            /* VIP visit */
+            if (game.sim.vip_visiting && !game.sim.vip_satisfied) {
+                /* announced once */
             }
         }
         
