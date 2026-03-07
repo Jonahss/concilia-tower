@@ -260,6 +260,20 @@ typedef struct {
     Sprite         *skyline;     /* 0x8389 — city skyline background */
     int             cloud_count;
     
+    /* UI bitmaps from EXE */
+    SDL_Texture    *ui_items;    /* Toolbox item icons: 32 icons × 32px each, 3 rows (normal+pressed) */
+    int             ui_items_w, ui_items_h;
+    SDL_Texture    *ui_timebar;  /* Info bar background (431×41) */
+    int             ui_timebar_w, ui_timebar_h;
+    SDL_Texture    *ui_star[2];  /* Star rating: [0]=empty, [1]=filled (24×19 each) */
+    int             ui_star_w, ui_star_h;
+    SDL_Texture    *ui_speed;    /* Speed buttons (4 states, normal + pressed) */
+    int             ui_speed_w, ui_speed_h;
+    SDL_Texture    *ui_tools;    /* Tool buttons (bulldozer/finger/inspector) */
+    int             ui_tools_w, ui_tools_h;
+    SDL_Texture    *ui_map;      /* Map background (200×288) */
+    int             ui_map_w, ui_map_h;
+    
     /* Win3.1 Menu system */
     int             menu_open;       /* -1 = closed, 0+ = which top-level menu is open */
     int             menu_hover;      /* which item is hovered in the open dropdown */
@@ -1387,17 +1401,36 @@ static void render_info_window(void)
     int wx = game.screen_w - INFO_BAR_W;
     int wy = HUD_HEIGHT + MENU_BAR_H;
     
-    /* Background — original uses bitmap 0x8140 (tiled horizontal) */
-    draw_win31_rect(wx, wy, INFO_BAR_W, INFO_BAR_H, 1);
+    /* Background — original uses bitmap 0x8140 (431×41, tiled horizontal) */
+    if (game.ui_timebar) {
+        /* Tile the time bar background across the width */
+        for (int tx = wx; tx < wx + INFO_BAR_W; tx += game.ui_timebar_w) {
+            int tw = game.ui_timebar_w;
+            if (tx + tw > wx + INFO_BAR_W) tw = wx + INFO_BAR_W - tx;
+            SDL_Rect src = { 0, 0, tw, game.ui_timebar_h };
+            SDL_Rect dst = { tx, wy, tw, INFO_BAR_H };
+            SDL_RenderCopy(game.renderer, game.ui_timebar, &src, &dst);
+        }
+    } else {
+        draw_win31_rect(wx, wy, INFO_BAR_W, INFO_BAR_H, 1);
+    }
     
     /* Analog clock (left side, like original) */
     int clock_cx = wx + 6 + CLOCK_R;
     int clock_cy = wy + INFO_BAR_H / 2;
     draw_analog_clock(clock_cx, clock_cy, CLOCK_R, game.sim.hour, game.sim.minute);
     
-    /* Star rating (next to clock) */
+    /* Star rating (next to clock) — use actual star bitmaps from EXE */
     int star_x = wx + 6 + CLOCK_R * 2 + 8;
-    if (game.font_small) {
+    if (game.ui_star[0] && game.ui_star[1]) {
+        for (int i = 0; i < 5; i++) {
+            int filled = (i < game.tower.star_rating) ? 1 : 0;
+            SDL_Rect dst = { star_x + i * (game.ui_star_w + 1), wy + 2,
+                            game.ui_star_w, game.ui_star_h };
+            SDL_RenderCopy(game.renderer, game.ui_star[filled], NULL, &dst);
+        }
+    } else if (game.font_small) {
+        /* Fallback: UTF-8 stars */
         SDL_Color gold = {200, 170, 0, 255};
         char stars[32];
         int pos = 0;
@@ -1605,34 +1638,44 @@ static void render_minimap(void)
 #define TOOL_BTN_PAD  4
 #define TOOL_COLS   5
 
-/* Tool button layout */
+/* Tool button layout.
+ * icon_idx = position in the items bitmap (from OpenSkyscraper Item/*.h).
+ * -1 = no bitmap icon, use label text fallback. */
 typedef struct {
     const char *label;
     ItemType    type;
-    uint8_t     r, g, b;  /* Icon color */
+    int         icon_idx;
+    uint8_t     r, g, b;  /* Fallback icon color */
 } ToolButton;
 
+/* Icon indices from OpenSkyscraper (prototype->icon values):
+ *  0=Lobby  1=Floor  2=Stairs  3=Escalator
+ *  4=Elevator 5=ServiceElev 6=ExpressElev 7=Office
+ *  8=HotelS? 9=HotelT? 10=HotelSuite? 11=FastFood
+ *  12=Restaurant 13=Shop? 14=Cinema 15=PartyHall
+ *  16=Security? 17=Medical? 18=Recycling? 19=Metro
+ *  20=Parking? 21=? 22=? 23=? 24=Condo */
 static const ToolButton tool_buttons[] = {
-    { "OFF",  ITEM_OFFICE,       200, 200, 150 },
-    { "CND",  ITEM_CONDO,        180, 220, 180 },
-    { "RST",  ITEM_RESTAURANT,   220, 180, 150 },
-    { "FF",   ITEM_FAST_FOOD,    220, 220, 100 },
-    { "SHP",  ITEM_SHOP,         220, 160, 220 },
-    { "H1",   ITEM_HOTEL_SINGLE, 150, 150, 220 },
-    { "H2",   ITEM_HOTEL_TWIN,   140, 140, 230 },
-    { "H3",   ITEM_HOTEL_SUITE,  120, 120, 240 },
-    { "CIN",  ITEM_CINEMA,        80,  60, 120 },
-    { "PTY",  ITEM_PARTY_HALL,   200, 100, 180 },
-    { "LOB",  ITEM_LOBBY,        210, 200, 160 },
-    { "STR",  ITEM_STAIRS,       180, 175, 170 },
-    { "ESC",  ITEM_ESCALATOR,    170, 170, 180 },
-    { "PKG",  ITEM_PARKING,      160, 160, 160 },
-    { "MTR",  ITEM_METRO,        100, 100, 120 },
-    { "SEC",  ITEM_SECURITY,     180, 180, 200 },
-    { "MED",  ITEM_MEDICAL,      220, 240, 240 },
-    { "RCY",  ITEM_RECYCLING,    100, 180, 100 },
-    { "CTH",  ITEM_CATHEDRAL,    230, 220, 200 },
-    { "NON",  ITEM_NONE,         192, 192, 192 },
+    { "LOB",  ITEM_LOBBY,         0,  210, 200, 160 },
+    { "OFF",  ITEM_OFFICE,        7,  200, 200, 150 },
+    { "CND",  ITEM_CONDO,        24,  180, 220, 180 },
+    { "RST",  ITEM_RESTAURANT,   12,  220, 180, 150 },
+    { "FF",   ITEM_FAST_FOOD,    11,  220, 220, 100 },
+    { "SHP",  ITEM_SHOP,         13,  220, 160, 220 },
+    { "H1",   ITEM_HOTEL_SINGLE,  8,  150, 150, 220 },
+    { "H2",   ITEM_HOTEL_TWIN,    9,  140, 140, 230 },
+    { "H3",   ITEM_HOTEL_SUITE,  10,  120, 120, 240 },
+    { "CIN",  ITEM_CINEMA,       14,   80,  60, 120 },
+    { "PTY",  ITEM_PARTY_HALL,   15,  200, 100, 180 },
+    { "STR",  ITEM_STAIRS,        2,  180, 175, 170 },
+    { "ESC",  ITEM_ESCALATOR,     3,  170, 170, 180 },
+    { "PKG",  ITEM_PARKING,      20,  160, 160, 160 },
+    { "MTR",  ITEM_METRO,        19,  100, 100, 120 },
+    { "SEC",  ITEM_SECURITY,     16,  180, 180, 200 },
+    { "MED",  ITEM_MEDICAL,      17,  220, 240, 240 },
+    { "RCY",  ITEM_RECYCLING,    18,  100, 180, 100 },
+    { "CTH",  ITEM_CATHEDRAL,    21,  230, 220, 200 },
+    { "NON",  ITEM_NONE,         -1,  192, 192, 192 },
 };
 #define TOOL_BTN_COUNT 20
 
@@ -1731,13 +1774,7 @@ static void render_toolbox(void)
         
         int selected = (tool_buttons[i].type == game.build_type);
         
-        /* Button background — colored square */
-        SDL_SetRenderDrawColor(game.renderer, 
-            tool_buttons[i].r, tool_buttons[i].g, tool_buttons[i].b, 255);
-        SDL_Rect btn = { bx + 2, by + 2, TOOL_BTN_SIZE - 4, TOOL_BTN_SIZE - 4 };
-        SDL_RenderFillRect(game.renderer, &btn);
-        
-        /* 3D border */
+        /* 3D border: raised when normal, sunken when selected */
         if (!selected) {
             SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
             SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
@@ -1748,7 +1785,6 @@ static void render_toolbox(void)
             SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
                               bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
         } else {
-            /* Sunken + selection border */
             SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
             SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
             SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
@@ -1757,14 +1793,27 @@ static void render_toolbox(void)
                               bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
             SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
                               bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
-            /* Blue selection indicator */
-            SDL_SetRenderDrawColor(game.renderer, 0, 0, 200, 255);
-            SDL_Rect sel = { bx + 1, by + 1, TOOL_BTN_SIZE - 2, TOOL_BTN_SIZE - 2 };
-            SDL_RenderDrawRect(game.renderer, &sel);
         }
         
-        /* Button label */
-        if (game.font_small) {
+        /* Button content: bitmap icon if available, text label fallback */
+        int icon_drawn = 0;
+        if (game.ui_items && tool_buttons[i].icon_idx >= 0) {
+            int icon_x = tool_buttons[i].icon_idx * 32;
+            int icon_y = selected ? 32 : 0;  /* Pressed row vs normal row */
+            SDL_Rect src = { icon_x, icon_y, 32, 32 };
+            int offset = selected ? 1 : 0;  /* Shift 1px down-right when pressed */
+            SDL_Rect dst = { bx + offset, by + offset, TOOL_BTN_SIZE, TOOL_BTN_SIZE };
+            SDL_RenderCopy(game.renderer, game.ui_items, &src, &dst);
+            icon_drawn = 1;
+        }
+        
+        if (!icon_drawn && game.font_small) {
+            /* Fallback: colored square + text label */
+            SDL_SetRenderDrawColor(game.renderer, 
+                tool_buttons[i].r, tool_buttons[i].g, tool_buttons[i].b, 255);
+            SDL_Rect btn = { bx + 2, by + 2, TOOL_BTN_SIZE - 4, TOOL_BTN_SIZE - 4 };
+            SDL_RenderFillRect(game.renderer, &btn);
+            
             SDL_Color black = {0, 0, 0, 255};
             SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, tool_buttons[i].label, black);
             if (ts) {
@@ -2663,6 +2712,178 @@ int main(int argc, char *argv[])
                         printf("🎨 %s loaded: %dx%d (0x%04X)\n", decos[d].name, sp->w, sp->h, decos[d].id);
                     }
                     SDL_FreeSurface(surf);
+                }
+            }
+        }
+    }
+    
+    /* ===== Load UI bitmaps from EXE ===== */
+    game.ui_items = NULL;
+    game.ui_timebar = NULL;
+    game.ui_star[0] = game.ui_star[1] = NULL;
+    game.ui_speed = NULL;
+    game.ui_tools = NULL;
+    game.ui_map = NULL;
+    
+    {
+        /* Item icons: 3 bitmaps (0x812C-0x812E), each 256×128.
+         * Each has 4 rows × 8 cols of 32×32 icons (32 icons per bitmap).
+         * Rearrange into a single strip: 32 icons wide × 32px tall per bitmap,
+         * then stack 3 bitmaps: total = 1024×96 (normal states).
+         * But we also need pressed states. The bitmaps actually have 2 rows:
+         * top 64px = normal (2 rows of 32px), bottom 64px = pressed (2 rows).
+         * Actually: 256×128 = 8 cols × 4 rows. Icons [0..31] = normal, repeated. */
+        
+        /* Simpler approach: create 1024×64 surface:
+         * top 32px = normal icons (32 across), bottom 32px = pressed.
+         * From 256×128 bitmap: each row is 8 icons at 32×32.
+         * Row 0-1 = normal, Row 2-3 = pressed. */
+        SDL_Surface *items_surf = SDL_CreateRGBSurface(0, 32 * 32, 64, 32,
+            0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+        
+        if (items_surf) {
+            SDL_FillRect(items_surf, NULL, SDL_MapRGBA(items_surf->format, 192, 192, 192, 255));
+            int icons_placed = 0;
+            
+            for (int bi = 0; bi < 3; bi++) {
+                uint16_t bid = 0x812C + bi;
+                NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, bid);
+                if (!res) continue;
+                
+                SDL_Surface *bmp = sprites_dib_to_surface(&game.sprites, res);
+                if (!bmp) continue;
+                
+                /* Each bitmap: 256×128. Top 64px = normal (rows 0,1), bottom 64px = pressed (rows 2,3).
+                 * Extract 8 icons per row, 2 rows normal + 2 rows pressed. */
+                for (int row = 0; row < 2; row++) {
+                    for (int col = 0; col < 8; col++) {
+                        int icon_idx = icons_placed + row * 8 + col;
+                        /* Normal state: copy to top row */
+                        SDL_Rect src = { col * 32, row * 32, 32, 32 };
+                        SDL_Rect dst = { icon_idx * 32, 0, 32, 32 };
+                        SDL_BlitSurface(bmp, &src, items_surf, &dst);
+                        /* Pressed state: copy from bottom half */
+                        SDL_Rect src2 = { col * 32, (row + 2) * 32, 32, 32 };
+                        SDL_Rect dst2 = { icon_idx * 32, 32, 32, 32 };
+                        SDL_BlitSurface(bmp, &src2, items_surf, &dst2);
+                    }
+                }
+                icons_placed += 16;  /* 2 rows × 8 cols */
+                SDL_FreeSurface(bmp);
+            }
+            
+            /* Make gray background transparent */
+            SDL_SetColorKey(items_surf, SDL_TRUE, SDL_MapRGB(items_surf->format, 0x99, 0x99, 0x99));
+            
+            game.ui_items = SDL_CreateTextureFromSurface(game.renderer, items_surf);
+            game.ui_items_w = items_surf->w;
+            game.ui_items_h = items_surf->h;
+            SDL_SetTextureBlendMode(game.ui_items, SDL_BLENDMODE_BLEND);
+            SDL_FreeSurface(items_surf);
+            printf("🎨 Toolbox item icons loaded: %dx%d (%d icons)\n", 
+                   game.ui_items_w, game.ui_items_h, icons_placed);
+        }
+        
+        /* Time bar background: 0x8140 (431×41) */
+        {
+            NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, 0x8140);
+            if (res) {
+                SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+                if (surf) {
+                    game.ui_timebar = SDL_CreateTextureFromSurface(game.renderer, surf);
+                    game.ui_timebar_w = surf->w;
+                    game.ui_timebar_h = surf->h;
+                    SDL_FreeSurface(surf);
+                    printf("🎨 Time bar bg loaded: %dx%d\n", game.ui_timebar_w, game.ui_timebar_h);
+                }
+            }
+        }
+        
+        /* Star rating: 0x8142=empty, 0x8143=filled (24×19 each) */
+        for (int si = 0; si < 2; si++) {
+            uint16_t sid = si == 0 ? 0x8142 : 0x8143;
+            NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, sid);
+            if (res) {
+                SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+                if (surf) {
+                    /* Make gray (0x999999) transparent */
+                    SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGB(surf->format, 0x99, 0x99, 0x99));
+                    game.ui_star[si] = SDL_CreateTextureFromSurface(game.renderer, surf);
+                    if (si == 0) { game.ui_star_w = surf->w; game.ui_star_h = surf->h; }
+                    SDL_SetTextureBlendMode(game.ui_star[si], SDL_BLENDMODE_BLEND);
+                    SDL_FreeSurface(surf);
+                    printf("🎨 Star %s loaded: %dx%d\n", si ? "filled" : "empty",
+                           game.ui_star_w, game.ui_star_h);
+                }
+            }
+        }
+        
+        /* Speed buttons: 0x8258-0x825B (64×32 each, arranged as pairs).
+         * OpenSkyscraper merges: speed[0] = 0x8258 + 0x8259 stacked Y,
+         *                        speed[1] = 0x825A + 0x825B stacked Y,
+         * then joins speed[0] + speed[1] horizontally.
+         * Result: 4 speed states in a 128×64 image (normal top, pressed bottom). */
+        {
+            SDL_Surface *speed_surf = SDL_CreateRGBSurface(0, 128, 64, 32,
+                0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+            if (speed_surf) {
+                SDL_FillRect(speed_surf, NULL, SDL_MapRGBA(speed_surf->format, 192, 192, 192, 255));
+                for (int si = 0; si < 4; si++) {
+                    NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, 0x8258 + si);
+                    if (!res) continue;
+                    SDL_Surface *bmp = sprites_dib_to_surface(&game.sprites, res);
+                    if (!bmp) continue;
+                    /* Each is 64×32. Pair 0+1 go left, pair 2+3 go right. 
+                     * Within pair: first = normal, second = pressed. */
+                    int x_off = (si / 2) * 64;
+                    int y_off = (si % 2) * 32;
+                    SDL_Rect dst = { x_off, y_off, 64, 32 };
+                    SDL_BlitSurface(bmp, NULL, speed_surf, &dst);
+                    SDL_FreeSurface(bmp);
+                }
+                game.ui_speed = SDL_CreateTextureFromSurface(game.renderer, speed_surf);
+                game.ui_speed_w = speed_surf->w;
+                game.ui_speed_h = speed_surf->h;
+                SDL_FreeSurface(speed_surf);
+                printf("🎨 Speed buttons loaded: %dx%d\n", game.ui_speed_w, game.ui_speed_h);
+            }
+        }
+        
+        /* Tool buttons: 0x825C-0x825E (64×21 each — bulldozer, finger, inspector).
+         * OpenSkyscraper merges them vertically. */
+        {
+            SDL_Surface *tools_surf = SDL_CreateRGBSurface(0, 64, 63, 32,
+                0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+            if (tools_surf) {
+                SDL_FillRect(tools_surf, NULL, SDL_MapRGBA(tools_surf->format, 192, 192, 192, 255));
+                for (int ti = 0; ti < 3; ti++) {
+                    NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, 0x825C + ti);
+                    if (!res) continue;
+                    SDL_Surface *bmp = sprites_dib_to_surface(&game.sprites, res);
+                    if (!bmp) continue;
+                    SDL_Rect dst = { 0, ti * 21, 64, 21 };
+                    SDL_BlitSurface(bmp, NULL, tools_surf, &dst);
+                    SDL_FreeSurface(bmp);
+                }
+                game.ui_tools = SDL_CreateTextureFromSurface(game.renderer, tools_surf);
+                game.ui_tools_w = tools_surf->w;
+                game.ui_tools_h = tools_surf->h;
+                SDL_FreeSurface(tools_surf);
+                printf("🎨 Tool buttons loaded: %dx%d\n", game.ui_tools_w, game.ui_tools_h);
+            }
+        }
+        
+        /* Map background: 0x8160 (200×288) */
+        {
+            NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, 0x8160);
+            if (res) {
+                SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+                if (surf) {
+                    game.ui_map = SDL_CreateTextureFromSurface(game.renderer, surf);
+                    game.ui_map_w = surf->w;
+                    game.ui_map_h = surf->h;
+                    SDL_FreeSurface(surf);
+                    printf("🎨 Map background loaded: %dx%d\n", game.ui_map_w, game.ui_map_h);
                 }
             }
         }
