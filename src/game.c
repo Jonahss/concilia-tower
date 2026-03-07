@@ -9,6 +9,7 @@
  */
 #include "game.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Forward declarations */
@@ -416,7 +417,13 @@ void game_update(GameSim *sim, Tower *tower)
      * From JudgeT: commercial tenants accumulate stress from competition */
     if (sim->tick % 120 == 0 && sim->tick > 0) {
         game_judge_tenants(sim, tower);
+        
+        /* Try starting a random event (fires, bombs) */
+        game_try_event(sim, tower);
     }
+    
+    /* Update active events (fire spread, bomb countdown) */
+    game_update_event(sim, tower);
     
     /* Update Santa position */
     game_update_santa(sim);
@@ -442,6 +449,36 @@ void game_update(GameSim *sim, Tower *tower)
         if (sim->quarter >= QUARTER_COUNT) {
             sim->quarter = 0;
             tower->day++;
+            
+            /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
+            if (tower->day % 9 == 3 && tower->star_rating >= 3) {
+                sim->vip_visiting = 1;
+                sim->vip_last_day = tower->day;
+                printf("👔 VIP is visiting the tower today! (Day %d)\n", tower->day);
+            } else {
+                /* VIP evaluation at end of visit day */
+                if (sim->vip_visiting) {
+                    /* VIP satisfied if no stressed/abandoned tenants on hotel floors */
+                    int hotel_ok = 1;
+                    for (int i = 0; i < tower->tenant_count; i++) {
+                        Tenant *t = &tower->tenants[i];
+                        if ((t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
+                             t->type == ITEM_HOTEL_SUITE) &&
+                            (t->state == TENANT_STRESSED || t->state == TENANT_ABANDONED)) {
+                            hotel_ok = 0;
+                            break;
+                        }
+                    }
+                    if (hotel_ok) {
+                        sim->vip_satisfied = 1;
+                        sim->promo.vip_visited = 1;
+                        printf("👔 VIP was satisfied! ⭐ (Helps with star promotion)\n");
+                    } else {
+                        printf("👔 VIP was NOT satisfied. Hotels need improvement.\n");
+                    }
+                    sim->vip_visiting = 0;
+                }
+            }
             
             /* Daily lobby maintenance (from MoneyT) */
             int lobby_cost = calc_lobby_maintenance(tower);
@@ -644,6 +681,162 @@ void game_launch_santa(GameSim *sim, int screen_w)
     sim->santa.x = screen_w + 100;  /* Start off-screen right */
     sim->santa.y = 20;              /* Near top of sky */
     printf("🎅 Ho ho ho! Santa flies across the tower!\n");
+}
+
+/* ================================================================
+ * Random Events (from EventT seg_10c8 + FireT seg_10e8)
+ * ================================================================
+ * Events trigger at star > 2 with security present.
+ * Bomb: timed countdown, guard races to defuse. Blast radius = 6 floors × 40 slots.
+ * Fire: spreads left/right per tick. Burns until timer expires. */
+
+void game_try_event(GameSim *sim, Tower *tower)
+{
+    if (sim->event.active) return;
+    
+    /* From decompiled: fires only at star > 2, with security, during daytime */
+    if (tower->star_rating < 3) return;
+    if (sim->time_of_day == TOD_NIGHT || sim->time_of_day == TOD_DAWN) return;
+    
+    /* Check security exists */
+    int has_security = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        if (tower->tenants[i].type == ITEM_SECURITY &&
+            tower->tenants[i].state != TENANT_ABANDONED) {
+            has_security = 1;
+            break;
+        }
+    }
+    if (!has_security) return;
+    
+    /* Random chance: ~1% per evaluation (every 120 ticks) */
+    if ((rand() % 100) != 0) return;
+    
+    /* Pick random floor with tenants */
+    int max_floor = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        if (tower->tenants[i].floor > max_floor &&
+            tower->tenants[i].state == TENANT_OCCUPIED)
+            max_floor = tower->tenants[i].floor;
+    }
+    if (max_floor < 2) return;
+    
+    int target_floor = 1 + (rand() % max_floor);
+    int target_slot = 5 + (rand() % (TOWER_WIDTH - 10));
+    
+    /* Pick event type: 60% bomb, 40% fire */
+    EventType etype = (rand() % 10 < 6) ? EVENT_BOMB : EVENT_FIRE;
+    
+    sim->event.type = etype;
+    sim->event.active = 1;
+    sim->event.target_floor = target_floor;
+    sim->event.target_slot = target_slot;
+    sim->event.caught = 0;
+    sim->event.damage_cost = 0;
+    
+    if (etype == EVENT_BOMB) {
+        /* Bomb: 600 ticks to defuse (~10 seconds at normal speed) */
+        sim->event.duration = 600;
+        sim->event.timer = sim->event.duration;
+        printf("💣 BOMB THREAT on floor %d! Security is responding...\n", target_floor);
+    } else {
+        /* Fire: burns for 800 ticks, spreads outward */
+        sim->event.duration = 800;
+        sim->event.timer = sim->event.duration;
+        sim->event.fire_left = target_slot;
+        sim->event.fire_right = target_slot;
+        printf("🔥 FIRE on floor %d at slot %d! Spreading...\n", target_floor, target_slot);
+    }
+}
+
+void game_update_event(GameSim *sim, Tower *tower)
+{
+    if (!sim->event.active) return;
+    
+    sim->event.timer--;
+    
+    if (sim->event.type == EVENT_FIRE) {
+        /* Fire spreads left and right each tick */
+        sim->event.fire_left -= FIRE_SPREAD_RATE;
+        sim->event.fire_right += FIRE_SPREAD_RATE;
+        if (sim->event.fire_left < 0) sim->event.fire_left = 0;
+        if (sim->event.fire_right >= TOWER_WIDTH) sim->event.fire_right = TOWER_WIDTH - 1;
+        
+        /* Destroy tenants in fire path (check every 30 ticks) */
+        if (sim->event.timer % 30 == 0) {
+            int fi = floor_to_index(sim->event.target_floor);
+            for (int x = sim->event.fire_left; x <= sim->event.fire_right; x++) {
+                TowerCell *cell = &tower->grid[fi][x];
+                if (cell->tenant_id > 0) {
+                    Tenant *t = tower_tenant(tower, cell->tenant_id);
+                    if (t && t->state != TENANT_ABANDONED) {
+                        sim->event.damage_cost += ITEM_COST[(int)t->type];
+                        printf("🔥 %s on F%d destroyed by fire!\n",
+                               tower_item_name(t->type), t->floor);
+                        t->state = TENANT_ABANDONED;
+                        t->capacity = CAP_EMPTY;
+                        t->population = 0;
+                    }
+                }
+            }
+        }
+    } else if (sim->event.type == EVENT_BOMB) {
+        /* Bomb: security has a chance to catch it each tick */
+        /* Simplified: 0.5% chance per tick that guard reaches it */
+        if ((rand() % 200) == 0) {
+            sim->event.caught = 1;
+            sim->event.active = 0;
+            printf("🛡️ Security caught the bomb on floor %d! Crisis averted.\n",
+                   sim->event.target_floor);
+            return;
+        }
+    }
+    
+    /* Timer expired — resolve */
+    if (sim->event.timer <= 0) {
+        game_resolve_event(sim, tower);
+    }
+}
+
+void game_resolve_event(GameSim *sim, Tower *tower)
+{
+    if (sim->event.type == EVENT_BOMB && !sim->event.caught) {
+        /* BOOM — destroy tenants in blast radius */
+        int min_f = sim->event.target_floor - BOMB_BLAST_FLOORS / 2;
+        int max_f = sim->event.target_floor + BOMB_BLAST_FLOORS / 2;
+        int min_s = sim->event.target_slot - BOMB_BLAST_SLOTS / 2;
+        int max_s = sim->event.target_slot + BOMB_BLAST_SLOTS / 2;
+        
+        if (min_f < TOWER_MIN_FLOOR) min_f = TOWER_MIN_FLOOR;
+        if (max_f > TOWER_MAX_FLOOR) max_f = TOWER_MAX_FLOOR;
+        if (min_s < 0) min_s = 0;
+        if (max_s >= TOWER_WIDTH) max_s = TOWER_WIDTH - 1;
+        
+        int destroyed = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->state == TENANT_ABANDONED) continue;
+            if (t->floor >= min_f && t->floor <= max_f &&
+                t->x >= min_s && t->x + t->width <= max_s + 1) {
+                sim->event.damage_cost += ITEM_COST[(int)t->type];
+                t->state = TENANT_ABANDONED;
+                t->capacity = CAP_EMPTY;
+                t->population = 0;
+                destroyed++;
+            }
+        }
+        
+        tower->money -= sim->event.damage_cost;
+        printf("💥 BOMB EXPLODED on floor %d! %d tenants destroyed, $%d damage!\n",
+               sim->event.target_floor, destroyed, sim->event.damage_cost);
+    } else if (sim->event.type == EVENT_FIRE) {
+        int spread = sim->event.fire_right - sim->event.fire_left;
+        printf("🧯 Fire extinguished on floor %d (spread %d slots, $%d damage)\n",
+               sim->event.target_floor, spread, sim->event.damage_cost);
+    }
+    
+    sim->event.active = 0;
+    sim->event.type = EVENT_NONE;
 }
 
 void game_update_santa(GameSim *sim)

@@ -408,6 +408,48 @@ static void render_sky(void)
         }
     }
     
+    /* Render active fire/bomb event visual effects */
+    if (game.sim.event.active) {
+        int evt_floor = game.sim.event.target_floor;
+        int floor_y = lobby_sy - (evt_floor * CELL_H);
+        
+        if (game.sim.event.type == EVENT_FIRE) {
+            /* Fire: orange/red flickering across burning slots */
+            int fl = game.sim.event.fire_left;
+            int fr = game.sim.event.fire_right;
+            int fx = lobby_sx + fl * CELL_W;
+            int fw = (fr - fl + 1) * CELL_W;
+            
+            /* Flickering fire overlay — alternates orange/red */
+            int flicker = (game.sim.frame % 6 < 3) ? 200 : 255;
+            SDL_SetRenderDrawColor(game.renderer, flicker, flicker/4, 0, 120);
+            SDL_Rect fire_rect = { fx, floor_y, fw, CELL_H };
+            SDL_RenderFillRect(game.renderer, &fire_rect);
+            
+            /* Fire "embers" — small bright spots */
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 0, 180);
+            for (int e = 0; e < 8; e++) {
+                int ex = fx + (rand() % fw);
+                int ey = floor_y + (rand() % CELL_H);
+                SDL_Rect ember = { ex, ey, 3, 3 };
+                SDL_RenderFillRect(game.renderer, &ember);
+            }
+        } else if (game.sim.event.type == EVENT_BOMB) {
+            /* Bomb: pulsing red circle on target location */
+            int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
+            int pulse = 60 + (game.sim.frame % 20) * 4;
+            if (pulse > 120) pulse = 180 - pulse;
+            SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
+            SDL_Rect bomb_rect = { bx - 16, floor_y - 8, 32, CELL_H + 16 };
+            SDL_RenderFillRect(game.renderer, &bomb_rect);
+            
+            /* Bomb icon — small bright spot */
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
+            SDL_Rect icon = { bx - 2, floor_y + CELL_H/2 - 2, 4, 4 };
+            SDL_RenderFillRect(game.renderer, &icon);
+        }
+    }
+    
     /* Render Santa flying across the sky (SantaT: x-=10, y+=1 per tick) */
     if (game.sim.santa.active && game.santa) {
         SDL_Rect dst = {

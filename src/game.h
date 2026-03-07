@@ -221,6 +221,37 @@ typedef struct {
     int total_commercial;  /* Sum of above */
 } ZoneData;
 
+/* --- Event system (from EventT seg_10c8 + FireT seg_10e8) ---
+ * Random disasters: bomb threats and fires.
+ * Bomb: security guards race to find it; explodes if they fail.
+ * Fire: spreads left and right per tick; burns until extinguished.
+ * Both destroy tenants in a blast/burn radius. */
+typedef enum {
+    EVENT_NONE = 0,
+    EVENT_BOMB,        /* Bomb threat — guard must reach target in time */
+    EVENT_FIRE,        /* Fire — spreads and burns */
+} EventType;
+
+/* Blast radius from EventT: 6 floors × 40 slots */
+#define BOMB_BLAST_FLOORS  6
+#define BOMB_BLAST_SLOTS   40
+
+/* Fire spread rate: 2 slots per tick in each direction */
+#define FIRE_SPREAD_RATE   2
+
+typedef struct {
+    EventType type;
+    int       active;
+    int       target_floor;
+    int       target_slot;
+    int       timer;           /* Ticks until resolution */
+    int       duration;        /* Total event duration */
+    int       fire_left;       /* Fire spread: leftmost burning slot */
+    int       fire_right;      /* Fire spread: rightmost burning slot */
+    int       caught;          /* Security guard caught the bomb? */
+    int       damage_cost;     /* Total $ damage from event */
+} EventState;
+
 /* --- Santa system (from SantaT seg_11b8) ---
  * Santa flies diagonally across the sky: x -= 10, y += 1 per tick.
  * Triggered on certain days or as Easter egg. */
@@ -271,6 +302,14 @@ typedef struct {
     /* Santa Easter egg */
     SantaState    santa;
     
+    /* Random events */
+    EventState    event;
+    
+    /* VIP system (from VipT seg_1240) */
+    int           vip_visiting;    /* VIP currently in tower */
+    int           vip_satisfied;   /* VIP was satisfied (for star promotion) */
+    int           vip_last_day;    /* Last day VIP visited */
+    
     /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
     int           last_stress_day;
 } GameSim;
@@ -312,6 +351,18 @@ void game_calc_zones(GameSim *sim, Tower *tower);
 /* Apply zone-based stress to commercial tenants.
  * Too many competitors in same zone = stress accumulation. */
 void game_judge_tenants(GameSim *sim, Tower *tower);
+
+/* --- Events (EventT + FireT) --- */
+
+/* Try to start a random event. Conditions from decompilation:
+ * - Star > 2, security exists, daytime, no active event */
+void game_try_event(GameSim *sim, Tower *tower);
+
+/* Update active event (spread fire, count down bomb timer) */
+void game_update_event(GameSim *sim, Tower *tower);
+
+/* Resolve event: bomb explodes or fire extinguished */
+void game_resolve_event(GameSim *sim, Tower *tower);
 
 /* --- Santa Easter egg (SantaT) --- */
 
