@@ -18,6 +18,8 @@
 #define WINDOW_W    960
 #define WINDOW_H    720
 #define HUD_HEIGHT  32
+#define MENU_BAR_H  20    /* Classic Win3.1 menu bar height */
+#define MENU_ITEM_PAD 12  /* Horizontal padding for menu items */
 
 /* ---------- Sprite IDs for rendering ---------- */
 /* Verified against OpenSkyscraper's SimTowerLoader.cpp */
@@ -252,9 +254,143 @@ typedef struct {
     Sprite         *fireladder;  /* 0x842D — fire escape stairs */
     Sprite         *skyline;     /* 0x8389 — city skyline background */
     int             cloud_count;
+    
+    /* Win3.1 Menu system */
+    int             menu_open;       /* -1 = closed, 0+ = which top-level menu is open */
+    int             menu_hover;      /* which item is hovered in the open dropdown */
+    int             menu_bar_hover;  /* which top-level menu is hovered */
+    
+    /* Weather (from OpenSkyscraper Sky.cpp) */
+    int             rainy_day;       /* 1 = rain today */
 } Game;
 
 static Game game;
+
+/* ---------- Win 3.1 style Menu system ---------- */
+/* Classic Windows 3.1 colors */
+#define WIN31_BG         192, 192, 192  /* Silver/gray background */
+#define WIN31_SHADOW     128, 128, 128  /* Dark border */
+#define WIN31_HIGHLIGHT  255, 255, 255  /* Light border */
+#define WIN31_TEXT        0,   0,   0   /* Black text */
+#define WIN31_SEL_BG      0,   0, 128   /* Navy selection */
+#define WIN31_SEL_TEXT  255, 255, 255   /* White text on selection */
+#define WIN31_DISABLED  128, 128, 128   /* Grayed out text */
+
+typedef struct {
+    const char *label;       /* NULL = separator */
+    ItemType    build_type;  /* ITEM_NONE for non-build actions */
+    int         action;      /* custom action code */
+} MenuItem;
+
+#define ACT_NONE       0
+#define ACT_SPEED_PAUSE  1
+#define ACT_SPEED_1      2
+#define ACT_SPEED_2      3
+#define ACT_SPEED_3      4
+#define ACT_DEBUG_TOGGLE 5
+#define ACT_SCREENSHOT   6
+#define ACT_QUIT         7
+#define ACT_SANTA        8
+
+/* Build > Residential submenu */
+static const MenuItem menu_build_res[] = {
+    { "Office\t1",         ITEM_OFFICE,       ACT_NONE },
+    { "Condo\t2",          ITEM_CONDO,        ACT_NONE },
+    { NULL, ITEM_NONE, ACT_NONE },  /* separator */
+    { "Hotel (Single)\t5", ITEM_HOTEL_SINGLE, ACT_NONE },
+    { "Hotel (Twin)\t6",   ITEM_HOTEL_TWIN,   ACT_NONE },
+    { "Hotel (Suite)\t7",  ITEM_HOTEL_SUITE,  ACT_NONE },
+};
+#define MENU_BUILD_RES_COUNT 6
+
+/* Build > Commercial */
+static const MenuItem menu_build_com[] = {
+    { "Restaurant\t3",    ITEM_RESTAURANT,   ACT_NONE },
+    { "Fast Food\t4",     ITEM_FAST_FOOD,    ACT_NONE },
+    { "Shop\tO",          ITEM_SHOP,         ACT_NONE },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Cinema\tC",        ITEM_CINEMA,       ACT_NONE },
+    { "Party Hall\tP",    ITEM_PARTY_HALL,   ACT_NONE },
+};
+#define MENU_BUILD_COM_COUNT 6
+
+/* Build > Transport */
+static const MenuItem menu_build_trans[] = {
+    { "Stairs\t8",        ITEM_STAIRS,       ACT_NONE },
+    { "Escalator\t9",     ITEM_ESCALATOR,    ACT_NONE },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Lobby\tL",         ITEM_LOBBY,        ACT_NONE },
+    { "Parking\tK",       ITEM_PARKING,      ACT_NONE },
+    { "Metro Station\tM", ITEM_METRO,        ACT_NONE },
+};
+#define MENU_BUILD_TRANS_COUNT 6
+
+/* Build > Services */
+static const MenuItem menu_build_svc[] = {
+    { "Security\tG",      ITEM_SECURITY,     ACT_NONE },
+    { "Medical Center\tX",ITEM_MEDICAL,      ACT_NONE },
+    { "Recycling\tR",     ITEM_RECYCLING,    ACT_NONE },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Cathedral\tH",     ITEM_CATHEDRAL,    ACT_NONE },
+};
+#define MENU_BUILD_SVC_COUNT 5
+
+/* Speed menu */
+static const MenuItem menu_speed[] = {
+    { "Paused\tSpace",    ITEM_NONE,  ACT_SPEED_PAUSE },
+    { "Normal\t+",        ITEM_NONE,  ACT_SPEED_1 },
+    { "Fast\t++",         ITEM_NONE,  ACT_SPEED_2 },
+    { "Turbo\t+++",       ITEM_NONE,  ACT_SPEED_3 },
+};
+#define MENU_SPEED_COUNT 4
+
+/* View menu */
+static const MenuItem menu_view[] = {
+    { "Debug Labels\t`",   ITEM_NONE,  ACT_DEBUG_TOGGLE },
+    { "Screenshot\tF12",   ITEM_NONE,  ACT_SCREENSHOT },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Santa!\tF2",        ITEM_NONE,  ACT_SANTA },
+};
+#define MENU_VIEW_COUNT 4
+
+/* File menu */
+static const MenuItem menu_file[] = {
+    { "Quit\tQ",           ITEM_NONE,  ACT_QUIT },
+};
+#define MENU_FILE_COUNT 1
+
+/* Top-level menus */
+typedef struct {
+    const char     *label;
+    const MenuItem *items;
+    int             count;
+} TopMenu;
+
+static const TopMenu top_menus[] = {
+    { "File",       menu_file,        MENU_FILE_COUNT },
+    { "Build Res.", menu_build_res,   MENU_BUILD_RES_COUNT },
+    { "Build Com.", menu_build_com,   MENU_BUILD_COM_COUNT },
+    { "Transport",  menu_build_trans, MENU_BUILD_TRANS_COUNT },
+    { "Services",   menu_build_svc,   MENU_BUILD_SVC_COUNT },
+    { "Speed",      menu_speed,       MENU_SPEED_COUNT },
+    { "View",       menu_view,        MENU_VIEW_COUNT },
+};
+#define TOP_MENU_COUNT 7
+
+/* Get pixel position of top menu item */
+static void get_top_menu_rect(int idx, int *x, int *y, int *w, int *h)
+{
+    int cx = 4;
+    for (int i = 0; i < TOP_MENU_COUNT; i++) {
+        int tw = (int)strlen(top_menus[i].label) * 8 + MENU_ITEM_PAD * 2;
+        if (i == idx) {
+            *x = cx; *y = HUD_HEIGHT; *w = tw; *h = MENU_BAR_H;
+            return;
+        }
+        cx += tw;
+    }
+    *x = *y = *w = *h = 0;
+}
 
 /* ---------- Cloud positions (fixed, scattered in sky) ---------- */
 typedef struct { int x, y; int cloud_idx; } CloudPos;
@@ -470,22 +606,31 @@ static void render_sky(void)
         SDL_RenderCopy(game.renderer, game.santa->texture, NULL, &dst);
     }
     
-    /* Underground: concrete gray background (like original), gets darker with depth.
-     * In the real game, basements use the same floor sprite (0x83E8) as above ground,
-     * with brown/gray earth visible through gaps between buildings.
-     * We use a concrete gradient: light gray → dark gray. */
+    /* City skyline — tiled at ground level (from Decorations.cpp).
+     * The skyline is 96px wide and drawn across the entire ground line,
+     * behind the tower but in front of the sky. */
+    if (game.skyline) {
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        /* Skyline positioned at ground level (floor 0 top edge) */
+        int skyline_y = lobby_sy - game.skyline->h;
+        for (int sx = -game.skyline->w; sx < game.screen_w + game.skyline->w; sx += game.skyline->w) {
+            SDL_Rect dst = { sx, skyline_y, game.skyline->w, game.skyline->h };
+            SDL_RenderCopy(game.renderer, game.skyline->texture, NULL, &dst);
+        }
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    }
+    
+    /* Underground: concrete gray background (like original), gets darker with depth. */
     int ug_start = lobby_sy + CELL_H;
     if (ug_start < game.screen_h) {
         for (int y = ug_start; y < game.screen_h; y++) {
             int depth = y - ug_start;
-            /* Concrete gray: (160,150,140) → (80,75,70) */
             int r = 160 - depth / 6; if (r < 70) r = 70;
             int g = 150 - depth / 6; if (g < 65) g = 65;
             int b = 140 - depth / 7; if (b < 60) b = 60;
             SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }
-        /* Draw horizontal lines at each basement floor boundary for structure */
         for (int bf = -1; bf >= TOWER_MIN_FLOOR; bf--) {
             int bsx, bsy;
             grid_to_screen(bf, 0, &bsx, &bsy);
@@ -497,22 +642,71 @@ static void render_sky(void)
     }
     
     /* Rain effect — from AnimeT: palette entries 207/213 alternate.
-     * We simulate with diagonal lines that flicker between two sets.
-     * Rain only during certain weather (every 3rd day for now). */
-    if (game.tower.day % 3 == 0 && game.sim.time_of_day != TOD_NIGHT) {
+     * Rain on rainy days (1 in 3 chance, decided at dawn per OpenSkyscraper Sky.cpp). */
+    if (game.rainy_day && game.sim.hour >= 8 && game.sim.hour < 16) {
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-        int rain_set = (game.sim.frame / 4) % 2;  /* Alternate every 4 frames */
-        int alpha = 60 + rain_set * 30;
-        SDL_SetRenderDrawColor(game.renderer, 180, 190, 210, alpha);
+        int rain_set = (game.sim.frame / 4) % 2;
+        int alpha = 50 + rain_set * 25;
+        SDL_SetRenderDrawColor(game.renderer, 170, 180, 200, alpha);
         
-        /* Draw diagonal rain lines across the sky area */
-        int offset = (game.sim.frame * 3) % 20;  /* Animate downward */
-        for (int rx = -200 + offset; rx < game.screen_w + 200; rx += 20) {
-            int ry_top = 0;
+        int offset = (game.sim.frame * 4) % 16;
+        for (int rx = -300 + offset; rx < game.screen_w + 300; rx += 16) {
+            int ry_top = HUD_HEIGHT + MENU_BAR_H;
             int ry_bot = lobby_sy > 0 ? lobby_sy : game.screen_h;
-            /* Alternate which set of rain lines to show */
-            if ((rx / 20 + rain_set) % 2 == 0) {
-                SDL_RenderDrawLine(game.renderer, rx, ry_top, rx - 40, ry_bot);
+            if ((rx / 16 + rain_set) % 2 == 0) {
+                SDL_RenderDrawLine(game.renderer, rx, ry_top, rx - 30, ry_bot);
+            }
+        }
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    }
+    
+    /* Twinkling window lights at night (from AnimeT palette cycling).
+     * At night, scattered small bright pixels over occupied buildings. */
+    if (game.sim.time_of_day == TOD_NIGHT || game.sim.time_of_day == TOD_EVENING) {
+        int twinkle_alpha = (game.sim.time_of_day == TOD_NIGHT) ? 200 : 80;
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        
+        /* Based on AnimeT: 3-phase cycling (counter % 3), amber/white alternating */
+        int phase = game.sim.frame % 3;
+        
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->type == ITEM_LOBBY || t->type == ITEM_FLOOR || 
+                t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR) continue;
+            if (t->state != TENANT_OCCUPIED && t->state != TENANT_VACANT) continue;
+            
+            int tx, ty;
+            grid_to_screen(t->floor, t->x, &tx, &ty);
+            int tw = t->width * CELL_W;
+            
+            /* Scatter light points across the tenant's area */
+            /* Use tenant_id as seed for consistent positions */
+            unsigned int seed = (unsigned int)(t->x * 7 + t->floor * 31 + i * 13);
+            int num_lights = tw / 12;
+            if (num_lights < 2) num_lights = 2;
+            if (num_lights > 8) num_lights = 8;
+            
+            for (int li = 0; li < num_lights; li++) {
+                /* Pseudo-random but deterministic position per light */
+                seed = seed * 1103515245 + 12345;
+                int lx = tx + (int)(seed % (unsigned int)tw);
+                seed = seed * 1103515245 + 12345;
+                int ly = ty + CEIL_H + (int)(seed % (unsigned int)(CELL_H - CEIL_H - 2));
+                
+                /* 3-phase cycle: 1/3 of lights dim each tick */
+                int light_phase = (li + phase) % 3;
+                if (light_phase == 0) {
+                    /* Warm amber */
+                    SDL_SetRenderDrawColor(game.renderer, 255, 220, 100, twinkle_alpha);
+                } else if (light_phase == 1) {
+                    /* Cool white */
+                    SDL_SetRenderDrawColor(game.renderer, 200, 220, 255, twinkle_alpha - 40);
+                } else {
+                    /* Dim (skip this one) */
+                    continue;
+                }
+                SDL_Rect dot = { lx, ly, 2, 2 };
+                SDL_RenderFillRect(game.renderer, &dot);
             }
         }
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
@@ -1021,6 +1215,175 @@ static void render_build_ghost(void)
     }
 }
 
+/* Draw a Win3.1-style raised/sunken rectangle */
+static void draw_win31_rect(int x, int y, int w, int h, int raised)
+{
+    uint8_t hi_r = raised ? 255 : 128, hi_g = raised ? 255 : 128, hi_b = raised ? 255 : 128;
+    uint8_t lo_r = raised ? 128 : 255, lo_g = raised ? 128 : 255, lo_b = raised ? 128 : 255;
+    
+    /* Fill */
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_Rect bg = { x, y, w, h };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* Top + left highlight */
+    SDL_SetRenderDrawColor(game.renderer, hi_r, hi_g, hi_b, 255);
+    SDL_RenderDrawLine(game.renderer, x, y, x + w - 1, y);
+    SDL_RenderDrawLine(game.renderer, x, y, x, y + h - 1);
+    
+    /* Bottom + right shadow */
+    SDL_SetRenderDrawColor(game.renderer, lo_r, lo_g, lo_b, 255);
+    SDL_RenderDrawLine(game.renderer, x, y + h - 1, x + w - 1, y + h - 1);
+    SDL_RenderDrawLine(game.renderer, x + w - 1, y, x + w - 1, y + h - 1);
+}
+
+/* Draw a text string in the small font for menus */
+static int draw_menu_text(const char *text, int x, int y, int selected)
+{
+    if (!game.font_small || !text) return 0;
+    SDL_Color color;
+    if (selected) { color = (SDL_Color){WIN31_SEL_TEXT, 255}; }
+    else          { color = (SDL_Color){WIN31_TEXT, 255}; }
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(game.font_small, text, color);
+    if (!surf) return 0;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(game.renderer, surf);
+    SDL_Rect dst = { x, y, surf->w, surf->h };
+    SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+    int w = surf->w;
+    SDL_DestroyTexture(tex);
+    SDL_FreeSurface(surf);
+    return w;
+}
+
+static void render_menu_bar(void)
+{
+    /* Win3.1 menu bar: gray with raised border */
+    int bar_y = HUD_HEIGHT;
+    draw_win31_rect(0, bar_y, game.screen_w, MENU_BAR_H, 1);
+    
+    /* Draw top-level menu labels */
+    int cx = 8;
+    for (int i = 0; i < TOP_MENU_COUNT; i++) {
+        int tw = (int)strlen(top_menus[i].label) * 7 + MENU_ITEM_PAD * 2;
+        
+        int is_active = (game.menu_open == i);
+        int is_hover = (game.menu_bar_hover == i && game.menu_open < 0);
+        
+        if (is_active) {
+            /* Sunken look when menu is open */
+            SDL_SetRenderDrawColor(game.renderer, WIN31_SEL_BG, 255);
+            SDL_Rect sel = { cx, bar_y + 1, tw, MENU_BAR_H - 2 };
+            SDL_RenderFillRect(game.renderer, &sel);
+            draw_menu_text(top_menus[i].label, cx + MENU_ITEM_PAD, bar_y + 3, 1);
+        } else if (is_hover) {
+            /* Slight highlight on hover */
+            SDL_SetRenderDrawColor(game.renderer, 220, 220, 220, 255);
+            SDL_Rect hl = { cx, bar_y + 1, tw, MENU_BAR_H - 2 };
+            SDL_RenderFillRect(game.renderer, &hl);
+            draw_menu_text(top_menus[i].label, cx + MENU_ITEM_PAD, bar_y + 3, 0);
+        } else {
+            draw_menu_text(top_menus[i].label, cx + MENU_ITEM_PAD, bar_y + 3, 0);
+        }
+        cx += tw;
+    }
+}
+
+static void render_dropdown(void)
+{
+    if (game.menu_open < 0 || game.menu_open >= TOP_MENU_COUNT) return;
+    
+    const TopMenu *tm = &top_menus[game.menu_open];
+    
+    /* Calculate dropdown position */
+    int mx, my, mw, mh;
+    get_top_menu_rect(game.menu_open, &mx, &my, &mw, &mh);
+    
+    int drop_x = mx;
+    int drop_y = my + MENU_BAR_H;
+    int drop_w = 180;
+    int item_h = 18;
+    int sep_h = 6;
+    
+    /* Calculate total dropdown height */
+    int drop_h = 4; /* top/bottom padding */
+    for (int i = 0; i < tm->count; i++) {
+        drop_h += tm->items[i].label ? item_h : sep_h;
+    }
+    
+    /* Draw dropdown shadow */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 80);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_Rect shadow = { drop_x + 3, drop_y + 3, drop_w, drop_h };
+    SDL_RenderFillRect(game.renderer, &shadow);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    
+    /* Draw dropdown background with Win3.1 raised border */
+    draw_win31_rect(drop_x, drop_y, drop_w, drop_h, 1);
+    
+    /* Draw items */
+    int iy = drop_y + 2;
+    for (int i = 0; i < tm->count; i++) {
+        if (!tm->items[i].label) {
+            /* Separator: thin sunken line */
+            SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+            SDL_RenderDrawLine(game.renderer, drop_x + 4, iy + sep_h/2,
+                              drop_x + drop_w - 4, iy + sep_h/2);
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+            SDL_RenderDrawLine(game.renderer, drop_x + 4, iy + sep_h/2 + 1,
+                              drop_x + drop_w - 4, iy + sep_h/2 + 1);
+            iy += sep_h;
+            continue;
+        }
+        
+        int is_hover = (game.menu_hover == i);
+        
+        if (is_hover) {
+            SDL_SetRenderDrawColor(game.renderer, WIN31_SEL_BG, 255);
+            SDL_Rect sel = { drop_x + 2, iy, drop_w - 4, item_h };
+            SDL_RenderFillRect(game.renderer, &sel);
+        }
+        
+        /* Check mark for current speed or active build type */
+        int checked = 0;
+        if (tm->items[i].build_type != ITEM_NONE && 
+            tm->items[i].build_type == game.build_type) checked = 1;
+        if (tm->items[i].action == ACT_SPEED_PAUSE && game.sim.speed == SPEED_PAUSED) checked = 1;
+        if (tm->items[i].action == ACT_SPEED_1 && game.sim.speed == SPEED_NORMAL) checked = 1;
+        if (tm->items[i].action == ACT_SPEED_2 && game.sim.speed == SPEED_FAST) checked = 1;
+        if (tm->items[i].action == ACT_SPEED_3 && game.sim.speed == SPEED_TURBO) checked = 1;
+        if (tm->items[i].action == ACT_DEBUG_TOGGLE && game.show_debug) checked = 1;
+        
+        if (checked) {
+            draw_menu_text("\xe2\x9c\x93", drop_x + 6, iy + 2, is_hover); /* ✓ */
+        }
+        
+        /* Split label and shortcut at tab character */
+        char label_buf[64], shortcut_buf[32];
+        const char *tab = strchr(tm->items[i].label, '\t');
+        if (tab) {
+            int llen = (int)(tab - tm->items[i].label);
+            if (llen > 63) llen = 63;
+            memcpy(label_buf, tm->items[i].label, llen);
+            label_buf[llen] = '\0';
+            strncpy(shortcut_buf, tab + 1, 31);
+            shortcut_buf[31] = '\0';
+        } else {
+            strncpy(label_buf, tm->items[i].label, 63);
+            label_buf[63] = '\0';
+            shortcut_buf[0] = '\0';
+        }
+        
+        draw_menu_text(label_buf, drop_x + 22, iy + 2, is_hover);
+        if (shortcut_buf[0]) {
+            /* Right-align shortcut */
+            int sw = (int)strlen(shortcut_buf) * 7;
+            draw_menu_text(shortcut_buf, drop_x + drop_w - sw - 8, iy + 2, is_hover);
+        }
+        
+        iy += item_h;
+    }
+}
+
 static void render_ui(void)
 {
     /* Semi-transparent dark HUD background */
@@ -1131,6 +1494,12 @@ static void render_ui(void)
              game.tower.money, game.tower.star_rating, game.tower.population,
              game.tower.day, tower_item_name(game.build_type));
     SDL_SetWindowTitle(game.window, title);
+    
+    /* Win3.1 menu bar (below the HUD) */
+    render_menu_bar();
+    
+    /* Open dropdown menu */
+    render_dropdown();
 }
 
 static void render(void)
@@ -1203,6 +1572,75 @@ static void drag_place_units(void)
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
     }
+}
+
+/* ---------- Menu interaction helpers ---------- */
+
+static int menu_bar_hit_test(int mx, int my)
+{
+    if (my < HUD_HEIGHT || my >= HUD_HEIGHT + MENU_BAR_H) return -1;
+    int cx = 8;
+    for (int i = 0; i < TOP_MENU_COUNT; i++) {
+        int tw = (int)strlen(top_menus[i].label) * 7 + MENU_ITEM_PAD * 2;
+        if (mx >= cx && mx < cx + tw) return i;
+        cx += tw;
+    }
+    return -1;
+}
+
+static int dropdown_hit_test(int mx, int my)
+{
+    if (game.menu_open < 0) return -1;
+    const TopMenu *tm = &top_menus[game.menu_open];
+    
+    int dx, dy, dw, dh;
+    get_top_menu_rect(game.menu_open, &dx, &dy, &dw, &dh);
+    int drop_x = dx;
+    int drop_y = dy + MENU_BAR_H;
+    int drop_w = 180;
+    int item_h = 18;
+    int sep_h = 6;
+    
+    if (mx < drop_x || mx >= drop_x + drop_w) return -1;
+    
+    int iy = drop_y + 2;
+    for (int i = 0; i < tm->count; i++) {
+        int h = tm->items[i].label ? item_h : sep_h;
+        if (my >= iy && my < iy + h && tm->items[i].label) return i;
+        iy += h;
+    }
+    return -1;
+}
+
+static void execute_menu_item(const MenuItem *item)
+{
+    if (item->build_type != ITEM_NONE) {
+        game.build_type = item->build_type;
+        printf("Build: %s\n", tower_item_name(game.build_type));
+    }
+    switch (item->action) {
+    case ACT_SPEED_PAUSE: game.sim.speed = SPEED_PAUSED; break;
+    case ACT_SPEED_1:     game.sim.speed = SPEED_NORMAL;  break;
+    case ACT_SPEED_2:     game.sim.speed = SPEED_FAST;    break;
+    case ACT_SPEED_3:     game.sim.speed = SPEED_TURBO;   break;
+    case ACT_DEBUG_TOGGLE: game.show_debug = !game.show_debug; break;
+    case ACT_SCREENSHOT: {
+        SDL_Surface *sshot = SDL_CreateRGBSurface(0, game.screen_w, game.screen_h, 32,
+            0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+        SDL_RenderReadPixels(game.renderer, NULL, SDL_PIXELFORMAT_ARGB8888,
+                             sshot->pixels, sshot->pitch);
+        SDL_SaveBMP(sshot, "/tmp/simtower_screenshot.bmp");
+        SDL_FreeSurface(sshot);
+        printf("Screenshot saved\n");
+        break;
+    }
+    case ACT_QUIT: game.running = 0; break;
+    case ACT_SANTA:
+        if (!game.sim.santa.active) game_launch_santa(&game.sim, game.screen_w);
+        break;
+    default: break;
+    }
+    game.menu_open = -1;
 }
 
 /* ---------- Input handling ---------- */
@@ -1323,27 +1761,65 @@ static void handle_event(SDL_Event *ev)
         game.mouse_y = ev->motion.y;
         screen_to_grid(game.mouse_x, game.mouse_y, 
                        &game.mouse_floor, &game.mouse_cell);
+        
+        /* Menu bar hover tracking */
+        game.menu_bar_hover = menu_bar_hit_test(ev->motion.x, ev->motion.y);
+        
+        /* If a menu is open and we hover over a different menu bar item, switch */
+        if (game.menu_open >= 0 && game.menu_bar_hover >= 0 && 
+            game.menu_bar_hover != game.menu_open) {
+            game.menu_open = game.menu_bar_hover;
+            game.menu_hover = -1;
+        }
+        
+        /* Track dropdown hover */
+        if (game.menu_open >= 0) {
+            game.menu_hover = dropdown_hit_test(ev->motion.x, ev->motion.y);
+        }
         break;
         
     case SDL_MOUSEBUTTONDOWN:
-        if (ev->button.button == SDL_BUTTON_LEFT && game.build_type != ITEM_NONE) {
-            /* Start drag placement */
-            game.dragging = 1;
-            game.drag_start_cell = game.mouse_cell;
-            game.drag_start_floor = game.mouse_floor;
+        if (ev->button.button == SDL_BUTTON_LEFT) {
+            /* Check menu bar click first */
+            int bar_hit = menu_bar_hit_test(ev->button.x, ev->button.y);
+            if (bar_hit >= 0) {
+                if (game.menu_open == bar_hit) {
+                    game.menu_open = -1;  /* Toggle off */
+                } else {
+                    game.menu_open = bar_hit;
+                    game.menu_hover = -1;
+                }
+                break;
+            }
+            
+            /* Check dropdown click */
+            if (game.menu_open >= 0) {
+                int drop_hit = dropdown_hit_test(ev->button.x, ev->button.y);
+                if (drop_hit >= 0) {
+                    execute_menu_item(&top_menus[game.menu_open].items[drop_hit]);
+                    break;
+                }
+                /* Clicked outside menu — close it */
+                game.menu_open = -1;
+                break;
+            }
+            
+            /* Normal game click */
+            if (game.build_type != ITEM_NONE) {
+                game.dragging = 1;
+                game.drag_start_cell = game.mouse_cell;
+                game.drag_start_floor = game.mouse_floor;
+            }
         }
         break;
     
     case SDL_MOUSEBUTTONUP:
         if (ev->button.button == SDL_BUTTON_LEFT && game.dragging) {
-            /* End drag — check if it was a single click or a drag */
             if (game.drag_start_cell == game.mouse_cell && 
                 game.drag_start_floor == game.mouse_floor) {
-                /* Single click: place one unit */
                 tower_place(&game.tower, game.build_type,
                            game.drag_start_floor, game.drag_start_cell);
             } else {
-                /* Drag: place row of units */
                 drag_place_units();
             }
             game.dragging = 0;
@@ -1682,6 +2158,10 @@ int main(int argc, char *argv[])
     tower_init(&game.tower);
     game_init(&game.sim);
     game.show_debug = 0;  /* Start with debug off, F1 to toggle */
+    game.menu_open = -1;
+    game.menu_hover = -1;
+    game.menu_bar_hover = -1;
+    game.rainy_day = 0;
     
     /* Build demo tower with all unit types */
     tower_build_demo(&game.tower);
@@ -1725,7 +2205,14 @@ int main(int argc, char *argv[])
         }
         
         /* Advance simulation */
-        game_update(&game.sim, &game.tower);
+        {
+            int prev_hour = game.sim.hour;
+            game_update(&game.sim, &game.tower);
+            /* Decide rainy day at 5 AM (from OpenSkyscraper: every 3rd day) */
+            if (prev_hour == 4 && game.sim.hour == 5) {
+                game.rainy_day = (rand() % 3 == 0);
+            }
+        }
         
         render();
         frame++;
