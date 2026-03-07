@@ -408,6 +408,15 @@ static void render_sky(void)
         }
     }
     
+    /* Render Santa flying across the sky (SantaT: x-=10, y+=1 per tick) */
+    if (game.sim.santa.active && game.santa) {
+        SDL_Rect dst = {
+            game.sim.santa.x, game.sim.santa.y,
+            game.santa->w, game.santa->h
+        };
+        SDL_RenderCopy(game.renderer, game.santa->texture, NULL, &dst);
+    }
+    
     /* Underground: brown earth gradient below lobby level, gets darker with depth */
     int ug_start = lobby_sy + CELL_H;
     if (ug_start < game.screen_h) {
@@ -603,6 +612,13 @@ static void render_tower(void)
                     SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 80);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
+                } else if (tenant->state == TENANT_STRESSED) {
+                    /* Stressed: pulsing red (from MainteT stress cascade) */
+                    int pulse = 40 + (game.sim.frame % 30) * 2;
+                    if (pulse > 80) pulse = 120 - pulse;
+                    SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
+                    SDL_Rect overlay = { tx, draw_y, tw, draw_h };
+                    SDL_RenderFillRect(game.renderer, &overlay);
                 } else if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
                     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 60);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
@@ -724,8 +740,9 @@ static void render_tower(void)
                 snprintf(info, sizeof(info), "%s [%s %dt] cap:0x%02X",
                          tower_item_name(t->type), sn, t->construction, t->capacity);
             } else {
-                snprintf(info, sizeof(info), "%s [%s] cap:0x%02X pop:%d str:%d",
-                         tower_item_name(t->type), sn, t->capacity, t->population, t->stress);
+                snprintf(info, sizeof(info), "%s [%s] cap:0x%02X pop:%d str:%d z%d",
+                         tower_item_name(t->type), sn, t->capacity, t->population,
+                         t->stress, t->zone);
             }
             
             SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, info, yellow);
@@ -1052,6 +1069,13 @@ static void handle_event(SDL_Event *ev)
             if (game.sim.speed > SPEED_PAUSED) {
                 game.sim.speed--;
                 printf("Speed: %d\n", game.sim.speed);
+            }
+            break;
+        
+        /* Santa! */
+        case SDLK_F2:
+            if (!game.sim.santa.active) {
+                game_launch_santa(&game.sim, game.screen_w);
             }
             break;
         
@@ -1382,6 +1406,32 @@ int main(int argc, char *argv[])
         printf("Loaded %d cloud sprites\n", game.cloud_count);
     } else {
         printf("No cloud sprites found (clouds disabled)\n");
+    }
+    
+    /* Load Santa sprite (0x8388) with white transparency */
+    {
+        NEResourceList *dibs = ne_find_type(&game.exe, 0x8002);
+        NEResource *res = NULL;
+        if (dibs) {
+            for (int j = 0; j < dibs->count; j++) {
+                if (dibs->items[j].id == SPR_SANTA) { res = &dibs->items[j]; break; }
+            }
+        }
+        if (res) {
+            SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+            if (surf) {
+                SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGB(surf->format, 0xFF, 0xFF, 0xFF));
+                Sprite *ss = sprites_find(&game.sprites, SPR_SANTA);
+                if (ss) {
+                    SDL_DestroyTexture(ss->texture);
+                    ss->texture = SDL_CreateTextureFromSurface(game.renderer, surf);
+                    SDL_SetTextureBlendMode(ss->texture, SDL_BLENDMODE_BLEND);
+                    game.santa = ss;
+                    printf("🎅 Santa sprite loaded: %dx%d\n", ss->w, ss->h);
+                }
+                SDL_FreeSurface(surf);
+            }
+        }
     }
     
     /* Print key sprite info for debugging */

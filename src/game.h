@@ -194,6 +194,42 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
     /* ELEVATOR */       {0, 0, 0, 0, 0},
 };
 
+/* --- Zone system (from JudgeT seg_11a8) ---
+ * Tower divided into 7 vertical zones of 15 floors each.
+ * Commercial tenants within same zone compete for customers.
+ * Too many restaurants/shops in one zone = stress. */
+#define NUM_ZONES       7
+#define FLOORS_PER_ZONE 15
+
+/* Zone competition thresholds — how many of each type before stress */
+#define ZONE_MAX_RESTAURANTS  2   /* > 2 restaurants in one zone = stress */
+#define ZONE_MAX_FASTFOOD     3   /* > 3 fast food = stress */
+#define ZONE_MAX_SHOPS        4   /* > 4 shops = stress */
+
+static inline int floor_to_zone(int floor) {
+    if (floor < 0) return 0;
+    int z = floor / FLOORS_PER_ZONE;
+    return (z >= NUM_ZONES) ? NUM_ZONES - 1 : z;
+}
+
+/* Zone data — tracked per zone */
+typedef struct {
+    int restaurant_count;
+    int fastfood_count;
+    int shop_count;
+    int office_count;
+    int total_commercial;  /* Sum of above */
+} ZoneData;
+
+/* --- Santa system (from SantaT seg_11b8) ---
+ * Santa flies diagonally across the sky: x -= 10, y += 1 per tick.
+ * Triggered on certain days or as Easter egg. */
+typedef struct {
+    int  active;    /* 0 = off, 1 = flying */
+    int  x;         /* Pixel position (decreases) */
+    int  y;         /* Pixel position (increases) */
+} SantaState;
+
 /* The simulation state */
 typedef struct {
     /* Time */
@@ -228,6 +264,15 @@ typedef struct {
     
     /* Animation */
     int           frame;            /* Global animation frame counter */
+    
+    /* Zone competition (from JudgeT) */
+    ZoneData      zones[NUM_ZONES];
+    
+    /* Santa Easter egg */
+    SantaState    santa;
+    
+    /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
+    int           last_stress_day;
 } GameSim;
 
 /* Initialize simulation */
@@ -258,5 +303,22 @@ void game_format_time(GameSim *sim, char *buf, int bufsize);
 
 /* Get quarter name string */
 const char *game_quarter_name(Quarter q);
+
+/* --- Zone system (JudgeT) --- */
+
+/* Recalculate zone competition data from all tenants */
+void game_calc_zones(GameSim *sim, Tower *tower);
+
+/* Apply zone-based stress to commercial tenants.
+ * Too many competitors in same zone = stress accumulation. */
+void game_judge_tenants(GameSim *sim, Tower *tower);
+
+/* --- Santa Easter egg (SantaT) --- */
+
+/* Launch Santa flying across the sky */
+void game_launch_santa(GameSim *sim, int screen_w);
+
+/* Update Santa position (call each tick) */
+void game_update_santa(GameSim *sim);
 
 #endif /* GAME_H */

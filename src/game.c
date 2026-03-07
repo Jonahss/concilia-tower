@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Forward declarations */
+static int calc_lobby_maintenance(Tower *tower);
+
 /* Ticks per quarter at each speed */
 static const int TICKS_PER_QUARTER[] = {
     [SPEED_PAUSED] = 0,
@@ -409,6 +412,15 @@ void game_update(GameSim *sim, Tower *tower)
         game_calc_population(sim, tower);
     }
     
+    /* Zone-based stress evaluation — every 120 ticks (~2 seconds)
+     * From JudgeT: commercial tenants accumulate stress from competition */
+    if (sim->tick % 120 == 0 && sim->tick > 0) {
+        game_judge_tenants(sim, tower);
+    }
+    
+    /* Update Santa position */
+    game_update_santa(sim);
+    
     /* Quarter transition */
     if (sim->tick >= sim->ticks_per_quarter) {
         sim->tick = 0;
@@ -430,6 +442,19 @@ void game_update(GameSim *sim, Tower *tower)
         if (sim->quarter >= QUARTER_COUNT) {
             sim->quarter = 0;
             tower->day++;
+            
+            /* Daily lobby maintenance (from MoneyT) */
+            int lobby_cost = calc_lobby_maintenance(tower);
+            if (lobby_cost > 0) {
+                tower->money -= lobby_cost;
+                sim->expenses_this_quarter += lobby_cost;
+            }
+            
+            /* Santa: launch on day 25 of each "year" (every 12 game-days)
+             * Day 25 ≈ Christmas in game time */
+            if (tower->day % 12 == 9 && !sim->santa.active) {
+                game_launch_santa(sim, 960);
+            }
             
             printf("🌅 Day %d begins! Pop: %d, Stars: %d, Money: $%ld\n",
                    tower->day, tower->population, tower->star_rating, tower->money);
@@ -503,4 +528,132 @@ const char *game_quarter_name(Quarter q)
     };
     if (q >= 0 && q < QUARTER_COUNT) return names[q];
     return "???";
+}
+
+/* ================================================================
+ * Zone-based commercial satisfaction (from JudgeT seg_11a8)
+ * ================================================================
+ * Tower is divided into 7 zones of 15 floors each.
+ * Too many competitors in the same zone = unhappy tenants.
+ * This is THE core balance mechanic of SimTower. */
+
+void game_calc_zones(GameSim *sim, Tower *tower)
+{
+    /* Reset all zone counts */
+    memset(sim->zones, 0, sizeof(sim->zones));
+    
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->state == TENANT_ABANDONED || t->state == TENANT_EMPTY ||
+            t->state == TENANT_CONSTRUCTION) continue;
+        
+        int z = floor_to_zone(t->floor);
+        ZoneData *zd = &sim->zones[z];
+        
+        switch (t->type) {
+        case ITEM_RESTAURANT:  zd->restaurant_count++; zd->total_commercial++; break;
+        case ITEM_FAST_FOOD:   zd->fastfood_count++;   zd->total_commercial++; break;
+        case ITEM_SHOP:        zd->shop_count++;        zd->total_commercial++; break;
+        case ITEM_OFFICE:      zd->office_count++;      break;
+        default: break;
+        }
+    }
+}
+
+void game_judge_tenants(GameSim *sim, Tower *tower)
+{
+    /* Recalculate zones first */
+    game_calc_zones(sim, tower);
+    
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED) continue;
+        
+        int z = floor_to_zone(t->floor);
+        ZoneData *zd = &sim->zones[z];
+        int stress_add = 0;
+        
+        /* Zone competition stress — from JudgeT annotation */
+        switch (t->type) {
+        case ITEM_RESTAURANT:
+            if (zd->restaurant_count > ZONE_MAX_RESTAURANTS)
+                stress_add += (zd->restaurant_count - ZONE_MAX_RESTAURANTS) * 5;
+            break;
+        case ITEM_FAST_FOOD:
+            /* Fast food never gets unsatisfied (from JudgeT: returns 0) */
+            break;
+        case ITEM_SHOP:
+            if (zd->shop_count > ZONE_MAX_SHOPS)
+                stress_add += (zd->shop_count - ZONE_MAX_SHOPS) * 3;
+            break;
+        case ITEM_OFFICE:
+            /* Offices don't compete by zone, but overcrowding matters */
+            if (zd->office_count > 8)
+                stress_add += (zd->office_count - 8) * 2;
+            break;
+        default: break;
+        }
+        
+        /* Apply stress */
+        if (stress_add > 0) {
+            t->stress += stress_add;
+            if (t->stress > 70 && t->state == TENANT_OCCUPIED) {
+                t->state = TENANT_STRESSED;
+                /* Only print first time */
+                if (t->stress < 75) {
+                    printf("😰 %s on F%d stressed! (zone %d competition, stress=%d)\n",
+                           tower_item_name(t->type), t->floor, z, t->stress);
+                }
+            }
+        }
+    }
+}
+
+/* ================================================================
+ * Lobby maintenance (from MoneyT seg_1178)
+ * ================================================================
+ * Lobby maintenance scales with star level:
+ *   Star < 3: $100/segment
+ *   Star < 4: $300/segment  
+ *   Star >= 4: $500/segment */
+
+static int calc_lobby_maintenance(Tower *tower)
+{
+    int cost_per_segment;
+    if (tower->star_rating < 3)      cost_per_segment = 100;
+    else if (tower->star_rating < 4) cost_per_segment = 300;
+    else                             cost_per_segment = 500;
+    
+    int lobby_segments = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        if (tower->tenants[i].type == ITEM_LOBBY) lobby_segments++;
+    }
+    
+    return lobby_segments * cost_per_segment;
+}
+
+/* ================================================================
+ * Santa Easter egg (from SantaT seg_11b8)
+ * ================================================================
+ * Santa flies diagonally: x -= 10, y += 1 per tick.
+ * Velocity: 10 horizontal, 1 vertical = very shallow angle. */
+
+void game_launch_santa(GameSim *sim, int screen_w)
+{
+    sim->santa.active = 1;
+    sim->santa.x = screen_w + 100;  /* Start off-screen right */
+    sim->santa.y = 20;              /* Near top of sky */
+    printf("🎅 Ho ho ho! Santa flies across the tower!\n");
+}
+
+void game_update_santa(GameSim *sim)
+{
+    if (!sim->santa.active) return;
+    
+    sim->santa.x -= 3;   /* Fly left (slower than original's 10 for visibility) */
+    sim->santa.y += 1;   /* Drift down slightly */
+    
+    if (sim->santa.x < -200) {
+        sim->santa.active = 0;  /* Off screen */
+    }
 }
