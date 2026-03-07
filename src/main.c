@@ -22,9 +22,9 @@
 /* ---------- Window / display ---------- */
 #define WINDOW_W    960
 #define WINDOW_H    720
-#define HUD_HEIGHT  32
-#define MENU_BAR_H  20    /* Classic Win3.1 menu bar height */
-#define MENU_ITEM_PAD 12  /* Horizontal padding for menu items */
+#define HUD_HEIGHT  0     /* No separate HUD — info window handles it */
+#define MENU_BAR_H  0     /* No menu bar — toolbox is the interface */
+#define MENU_ITEM_PAD 12  /* Horizontal padding for menu items (kept for dropdown code) */
 
 /* ---------- Sprite IDs for rendering ---------- */
 /* Verified against OpenSkyscraper's SimTowerLoader.cpp */
@@ -1243,16 +1243,32 @@ static void render_build_ghost(void)
     }
 }
 
+/* Forward declarations for Win3.1 drawing helpers */
+static void draw_win31_rect(int x, int y, int w, int h, int raised);
+static int draw_menu_text(const char *text, int x, int y, int selected);
+
 /* ========== Win3.1-style Sub-Windows ========== */
 
 /* --- Info Window (clock, stars, money, events) --- */
 /* The original's "Time Window" — has analog clock, star rating,
  * money display, population, and a scrolling event feed. */
 
-#define INFO_WIN_W  180
-#define INFO_WIN_H  200
-#define INFO_WIN_X  8
-#define CLOCK_R     30    /* Clock face radius */
+/* Original SimTower layout (from time.rml / map.rml / toolbox.rml):
+ *  - Info bar: 431×41px across TOP RIGHT (watch + stars + money + date + message)
+ *  - Map: 200px wide, TOP LEFT (buttons + 200×288 map + 24px ground)
+ *  - Toolbox: 128px wide, LEFT below map (speed + tools + items)
+ * 
+ * Our layout follows this but adapts sizes slightly for our resolution. */
+
+#define INFO_BAR_W  500       /* Info bar width (top right, horizontal) */
+#define INFO_BAR_H  42        /* Compact horizontal bar */
+#define CLOCK_R     14        /* Small clock for horizontal bar */
+
+#define MAP_WIN_W   200       /* Map window (left side) */
+#define MAP_WIN_H   280       /* Map height (sky + ground) */
+
+#define TOOL_WIN_W  200       /* Toolbox same width as map, stacked below */
+#define TOOL_WIN_H  200
 
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 {
@@ -1327,67 +1343,21 @@ static void add_event_message(const char *msg)
 
 static void render_info_window(void)
 {
-    int wx = INFO_WIN_X;
-    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    /* Info bar: horizontal strip across the top right (like original time.rml).
+     * Layout: [clock 29×29] [star rating] [date info] [message] [funds/pop right-aligned] */
+    int wx = game.screen_w - INFO_BAR_W;
+    int wy = HUD_HEIGHT + MENU_BAR_H;
     
-    /* Win3.1 window frame */
-    /* Outer raised border */
-    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
-    SDL_Rect bg = { wx, wy, INFO_WIN_W, INFO_WIN_H };
-    SDL_RenderFillRect(game.renderer, &bg);
+    /* Background — original uses bitmap 0x8140 (tiled horizontal) */
+    draw_win31_rect(wx, wy, INFO_BAR_W, INFO_BAR_H, 1);
     
-    /* Title bar — navy blue */
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
-    SDL_Rect title = { wx + 2, wy + 2, INFO_WIN_W - 4, 16 };
-    SDL_RenderFillRect(game.renderer, &title);
-    
-    if (game.font_small) {
-        SDL_Color white = {255, 255, 255, 255};
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "ConcilliaTower", white);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
-        }
-    }
-    
-    /* 3D borders */
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx + INFO_WIN_W - 1, wy);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + INFO_WIN_H - 1);
-    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy + INFO_WIN_H - 1, wx + INFO_WIN_W - 1, wy + INFO_WIN_H - 1);
-    SDL_RenderDrawLine(game.renderer, wx + INFO_WIN_W - 1, wy, wx + INFO_WIN_W - 1, wy + INFO_WIN_H - 1);
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
-    SDL_RenderDrawLine(game.renderer, wx + 1, wy + INFO_WIN_H, wx + INFO_WIN_W, wy + INFO_WIN_H);
-    SDL_RenderDrawLine(game.renderer, wx + INFO_WIN_W, wy + 1, wx + INFO_WIN_W, wy + INFO_WIN_H);
-    
-    int content_y = wy + 20;
-    
-    /* Analog clock */
-    int clock_cx = wx + INFO_WIN_W / 2;
-    int clock_cy = content_y + CLOCK_R + 4;
+    /* Analog clock (left side, like original) */
+    int clock_cx = wx + 6 + CLOCK_R;
+    int clock_cy = wy + INFO_BAR_H / 2;
     draw_analog_clock(clock_cx, clock_cy, CLOCK_R, game.sim.hour, game.sim.minute);
     
-    /* Time text below clock */
-    if (game.font_small) {
-        SDL_Color black = {0, 0, 0, 255};
-        char timebuf[32];
-        game_format_time(&game.sim, timebuf, sizeof(timebuf));
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, timebuf, black);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { clock_cx - ts->w/2, clock_cy + CLOCK_R + 4, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
-        }
-    }
-    
-    /* Star rating display */
-    int star_y = content_y + CLOCK_R * 2 + 22;
+    /* Star rating (next to clock) */
+    int star_x = wx + 6 + CLOCK_R * 2 + 8;
     if (game.font_small) {
         SDL_Color gold = {200, 170, 0, 255};
         char stars[32];
@@ -1403,97 +1373,82 @@ static void render_info_window(void)
         SDL_Surface *ts = TTF_RenderUTF8_Blended(game.font_small, stars, gold);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, star_y, ts->w, ts->h };
+            SDL_Rect dst = { star_x, wy + 3, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
     }
     
-    /* Money + population */
+    /* Date info (center area): "1st WD / 2Q / 83rd Year" style */
+    if (game.font_small) {
+        SDL_Color black = {0, 0, 0, 255};
+        char date_buf[64];
+        const char *qname = game_quarter_name(game.sim.quarter);
+        snprintf(date_buf, sizeof(date_buf), "%s / Day %d", qname, game.tower.day);
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, date_buf, black);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { star_x, wy + 16, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+    
+    /* Funds (right-aligned, top) */
     if (game.font_small) {
         SDL_Color black = {0, 0, 0, 255};
         char money_buf[64];
         format_money(game.tower.money, money_buf, sizeof(money_buf));
-        
-        int text_y = star_y + 16;
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, money_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y, ts->w, ts->h };
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 8, wy + 3, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
         
+        /* Population (right-aligned, bottom) */
         char pop_buf[32];
         snprintf(pop_buf, sizeof(pop_buf), "Pop: %d", game.tower.population);
         ts = TTF_RenderText_Blended(game.font_small, pop_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y + 14, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
-        }
-        
-        /* Day/Quarter */
-        char day_buf[64];
-        snprintf(day_buf, sizeof(day_buf), "Day %d  %s", 
-                 game.tower.day, game_quarter_name(game.sim.quarter));
-        ts = TTF_RenderText_Blended(game.font_small, day_buf, black);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_WIN_W/2 - ts->w/2, text_y + 28, ts->w, ts->h };
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 8, wy + 16, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
     }
     
-    /* Sunken event feed area at bottom */
-    int feed_y = wy + INFO_WIN_H - 40;
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_Rect feed = { wx + 4, feed_y, INFO_WIN_W - 8, 34 };
-    SDL_RenderFillRect(game.renderer, &feed);
-    /* Sunken border */
-    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y, wx + INFO_WIN_W - 5, feed_y);
-    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y, wx + 4, feed_y + 33);
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(game.renderer, wx + 4, feed_y + 33, wx + INFO_WIN_W - 5, feed_y + 33);
-    
-    /* Show last 2 event messages */
+    /* Message strip at bottom of info bar */
     if (game.font_small && event_msg_total > 0) {
         SDL_Color dk = {0, 0, 100, 255};
-        int show = event_msg_total < 2 ? event_msg_total : 2;
-        for (int i = 0; i < show; i++) {
-            int idx = (event_msg_head - show + i + EVENT_MSG_COUNT) % EVENT_MSG_COUNT;
-            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, event_messages[idx], dk);
-            if (ts) {
-                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-                int max_w = INFO_WIN_W - 16;
-                int dw = ts->w > max_w ? max_w : ts->w;
-                SDL_Rect src2 = { 0, 0, dw, ts->h };
-                SDL_Rect dst = { wx + 8, feed_y + 3 + i * 14, dw, ts->h };
-                SDL_RenderCopy(game.renderer, tt, &src2, &dst);
-                SDL_DestroyTexture(tt);
-                SDL_FreeSurface(ts);
-            }
+        int idx = (event_msg_head - 1 + EVENT_MSG_COUNT) % EVENT_MSG_COUNT;
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, event_messages[idx], dk);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            int max_w = INFO_BAR_W - star_x + wx - 16;
+            int dw = ts->w > max_w ? max_w : ts->w;
+            SDL_Rect src2 = { 0, 0, dw, ts->h };
+            SDL_Rect dst = { star_x + 100, wy + 28, dw, ts->h };
+            SDL_RenderCopy(game.renderer, tt, &src2, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
         }
     }
 }
 
 /* --- Minimap Window --- */
-/* Shows the entire tower in a tiny overview with colored dots for tenants. */
-
-#define MAP_WIN_W   160
-#define MAP_WIN_H   200
+/* Shows the entire tower in a tiny overview with colored dots for tenants.
+ * Positioned at TOP LEFT (like original map.rml: left:0, top:0). */
 
 static void render_minimap(void)
 {
-    int wx = game.screen_w - MAP_WIN_W - 8;
-    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    int wx = 0;
+    int wy = HUD_HEIGHT + MENU_BAR_H;
     
     /* Window frame */
     SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
@@ -1604,10 +1559,9 @@ static void render_minimap(void)
 }
 
 /* --- Toolbox Window --- */
-/* The build tool selector with icons for each building type. */
+/* The build tool selector with icons for each building type.
+ * Stacked below the minimap on the LEFT (like original toolbox.rml). */
 
-#define TOOL_WIN_W  180
-#define TOOL_WIN_H  280
 #define TOOL_BTN_SIZE 28
 #define TOOL_BTN_PAD  4
 #define TOOL_COLS   5
@@ -1645,8 +1599,8 @@ static const ToolButton tool_buttons[] = {
 
 static void render_toolbox(void)
 {
-    int wx = game.screen_w - MAP_WIN_W - 8;
-    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H + 16;
+    int wx = 0;
+    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H;
     
     /* Window frame */
     SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
@@ -1979,106 +1933,8 @@ static void render_dropdown(void)
 
 static void render_ui(void)
 {
-    /* Semi-transparent dark HUD background */
-    SDL_SetRenderDrawColor(game.renderer, 20, 20, 35, 210);
-    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect bar = { 0, 0, game.screen_w, HUD_HEIGHT };
-    SDL_RenderFillRect(game.renderer, &bar);
-    /* Subtle bottom border */
-    SDL_SetRenderDrawColor(game.renderer, 80, 80, 120, 180);
-    SDL_RenderDrawLine(game.renderer, 0, HUD_HEIGHT - 1, game.screen_w, HUD_HEIGHT - 1);
-    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
-    
-    if (game.font) {
-        SDL_Color white = {255, 255, 255, 255};
-        SDL_Color gold  = {255, 215, 80, 255};
-        SDL_Color green = {100, 255, 100, 255};
-        SDL_Color cyan  = {100, 200, 255, 255};
-        SDL_Color pink  = {255, 150, 200, 255};
-        
-        int x = 10;
-        int y = (HUD_HEIGHT - 16) / 2; /* Center vertically, assuming ~16px font */
-        
-        /* Money */
-        char money_buf[64];
-        format_money(game.tower.money, money_buf, sizeof(money_buf));
-        x += draw_text(money_buf, x, y, green) + 20;
-        
-        /* Star rating: ★★★☆☆ */
-        {
-            char stars[32];
-            int pos = 0;
-            for (int i = 0; i < 5; i++) {
-                if (i < game.tower.star_rating) {
-                    /* UTF-8 for ★ (U+2605): E2 98 85 */
-                    stars[pos++] = (char)0xE2;
-                    stars[pos++] = (char)0x98;
-                    stars[pos++] = (char)0x85;
-                } else {
-                    /* UTF-8 for ☆ (U+2606): E2 98 86 */
-                    stars[pos++] = (char)0xE2;
-                    stars[pos++] = (char)0x98;
-                    stars[pos++] = (char)0x86;
-                }
-            }
-            stars[pos] = '\0';
-            x += draw_text(stars, x, y, gold) + 20;
-        }
-        
-        /* Population */
-        {
-            char pop_buf[64];
-            snprintf(pop_buf, sizeof(pop_buf), "Pop: %d", game.tower.population);
-            x += draw_text(pop_buf, x, y, cyan) + 20;
-        }
-        
-        /* Day counter + time */
-        {
-            char time_buf[32];
-            game_format_time(&game.sim, time_buf, sizeof(time_buf));
-            char day_buf[96];
-            const char *speed_str[] = {"⏸", "▶", "▶▶", "▶▶▶"};
-            int spd = game.sim.speed;
-            if (spd < 0) spd = 0;
-            if (spd > 3) spd = 3;
-            snprintf(day_buf, sizeof(day_buf), "Day %d  %s  %s  %s",
-                     game.tower.day, time_buf, 
-                     game_quarter_name(game.sim.quarter),
-                     speed_str[spd]);
-            x += draw_text(day_buf, x, y, white) + 30;
-        }
-        
-        /* Tenant count */
-        {
-            char tenant_buf[64];
-            snprintf(tenant_buf, sizeof(tenant_buf), "T:%d/%d",
-                     game.sim.tenants_occupied, game.sim.tenants_total);
-            x += draw_text(tenant_buf, x, y, cyan) + 20;
-        }
-        
-        /* Build tool + cost (right-aligned) */
-        if (game.build_type != ITEM_NONE) {
-            char tool_buf[128];
-            int cost = ITEM_COST[game.build_type];
-            if (cost > 0) {
-                char cost_str[32];
-                format_money(cost, cost_str, sizeof(cost_str));
-                snprintf(tool_buf, sizeof(tool_buf), "[%s %s]",
-                         tower_item_name(game.build_type), cost_str);
-            } else {
-                snprintf(tool_buf, sizeof(tool_buf), "[%s]",
-                         tower_item_name(game.build_type));
-            }
-            /* Measure text width for right-alignment */
-            int tw, th;
-            SDL_Texture *tex = render_text(tool_buf, pink, &tw, &th);
-            if (tex) {
-                SDL_Rect dst = { game.screen_w - tw - 10, y, tw, th };
-                SDL_RenderCopy(game.renderer, tex, NULL, &dst);
-                SDL_DestroyTexture(tex);
-            }
-        }
-    }
+    /* No separate top HUD — the info bar window handles all of it.
+     * The original SimTower has no top status bar either. */
     
     /* Update window title with current state (for VNC title bar) */
     char title[256];
@@ -2088,16 +1944,10 @@ static void render_ui(void)
              game.tower.day, tower_item_name(game.build_type));
     SDL_SetWindowTitle(game.window, title);
     
-    /* Win3.1 menu bar (below the HUD) */
-    render_menu_bar();
-    
-    /* Sub-windows */
-    render_info_window();
-    render_minimap();
-    render_toolbox();
-    
-    /* Open dropdown menu (on top of everything) */
-    render_dropdown();
+    /* Sub-windows (matching original SimTower layout) */
+    render_minimap();      /* Top left */
+    render_toolbox();      /* Left, below map */
+    render_info_window();  /* Top right, horizontal strip */
 }
 
 static void render(void)
@@ -2175,8 +2025,8 @@ static void drag_place_units(void)
 /* ---------- Toolbox click helper ---------- */
 static int toolbox_click(int mx, int my)
 {
-    int wx = game.screen_w - MAP_WIN_W - 8;
-    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H + 16;
+    int wx = 0;
+    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H;
     
     /* Speed buttons */
     int speed_y = wy + 22;
@@ -2213,8 +2063,8 @@ static int toolbox_click(int mx, int my)
 /* ---------- Minimap click helper ---------- */
 static int minimap_click(int mx, int my)
 {
-    int wx = game.screen_w - MAP_WIN_W - 8;
-    int wy = HUD_HEIGHT + MENU_BAR_H + 8;
+    int wx = 0;
+    int wy = HUD_HEIGHT + MENU_BAR_H;
     int map_x = wx + 4;
     int map_y = wy + 20;
     int map_w = MAP_WIN_W - 8;
