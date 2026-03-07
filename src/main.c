@@ -1522,39 +1522,13 @@ static void render_minimap(void)
     int wx = 0;
     int wy = HUD_HEIGHT + MENU_BAR_H;
     
-    /* Window frame */
-    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
-    SDL_Rect bg = { wx, wy, MAP_WIN_W, MAP_WIN_H };
-    SDL_RenderFillRect(game.renderer, &bg);
-    
-    /* Title bar */
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
-    SDL_Rect title = { wx + 2, wy + 2, MAP_WIN_W - 4, 16 };
-    SDL_RenderFillRect(game.renderer, &title);
-    
-    if (game.font_small) {
-        SDL_Color white = {255, 255, 255, 255};
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "Map", white);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
-        }
-    }
-    
-    /* 3D borders */
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx + MAP_WIN_W - 1, wy);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + MAP_WIN_H - 1);
-    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy + MAP_WIN_H - 1, wx + MAP_WIN_W - 1, wy + MAP_WIN_H - 1);
-    SDL_RenderDrawLine(game.renderer, wx + MAP_WIN_W - 1, wy, wx + MAP_WIN_W - 1, wy + MAP_WIN_H - 1);
+    /* Minimap: no title bar (original SimTower style).
+     * The original had 4 mode buttons at the top (Edit/Eval/Pricing/Hotel). */
+    draw_win31_rect(wx, wy, MAP_WIN_W, MAP_WIN_H, 1);
     
     /* Map content area */
     int map_x = wx + 4;
-    int map_y = wy + 20;
+    int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
     int map_h = MAP_WIN_H - 24;
     
@@ -1684,88 +1658,82 @@ static void render_toolbox(void)
     int wx = 0;
     int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H;
     
-    /* Window frame */
-    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
-    SDL_Rect bg = { wx, wy, TOOL_WIN_W, TOOL_WIN_H };
-    SDL_RenderFillRect(game.renderer, &bg);
+    /* Toolbox: no title bar (original SimTower style).
+     * Just a gray raised panel with the controls inside. */
+    draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H, 1);
     
-    /* Title bar */
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
-    SDL_Rect title_rect = { wx + 2, wy + 2, TOOL_WIN_W - 4, 16 };
-    SDL_RenderFillRect(game.renderer, &title_rect);
-    
-    if (game.font_small) {
-        SDL_Color white = {255, 255, 255, 255};
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, "Toolbox", white);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + 6, wy + 3, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
-        }
-    }
-    
-    /* 3D borders */
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx + TOOL_WIN_W - 1, wy);
-    SDL_RenderDrawLine(game.renderer, wx, wy, wx, wy + TOOL_WIN_H - 1);
-    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-    SDL_RenderDrawLine(game.renderer, wx, wy + TOOL_WIN_H - 1, wx + TOOL_WIN_W - 1, wy + TOOL_WIN_H - 1);
-    SDL_RenderDrawLine(game.renderer, wx + TOOL_WIN_W - 1, wy, wx + TOOL_WIN_W - 1, wy + TOOL_WIN_H - 1);
-    
-    /* Speed buttons at top */
-    int speed_y = wy + 22;
-    if (game.font_small) {
-        const char *speed_labels[] = { "\xe2\x8f\xb8", "\xe2\x96\xb6", "\xe2\x96\xb6\xe2\x96\xb6", "\xe2\x96\xb6\xe2\x96\xb6\xe2\x96\xb6" };
-        const char *speed_ascii[] = { "||", ">", ">>", ">>>" };
-        int sx = wx + 8;
+    /* Speed buttons at top — use original bitmap if available.
+     * ui_speed is 128×64: 4 buttons at 32px wide each.
+     * Top 32px = normal, bottom 32px = pressed/selected.
+     * But the layout from OpenSkyscraper is actually:
+     *   0x8258 (64×32) + 0x8259 (64×32) stacked = left half (128×32 ← wait, no)
+     * Actually we stored: x_off = (si/2)*64, y_off = (si%2)*32
+     *   0x8258 → (0, 0), 0x8259 → (0, 32), 0x825A → (64, 0), 0x825B → (64, 32)
+     * So: top row (y=0) = normal for pause(0,0) and fast(64,0)
+     *     bot row (y=32) = pressed for pause(0,32) and fast(64,32)
+     * Each 64×32 sub-bitmap has 2 speed buttons at ~23×24px.
+     * 
+     * Simpler: just render the 4 speed buttons from the bitmap. Each is ~32×32.
+     * Speed 0,1 from left half, Speed 2,3 from right half. */
+    int speed_y = wy + 8;  /* No title bar — start near top */
+    {
+        int sx = wx + (TOOL_WIN_W - 4 * 24) / 2;  /* Center 4 buttons */
         for (int s = 0; s < 4; s++) {
-            int btn_w = 38;
             int selected = ((int)game.sim.speed == s);
+            int btn_w = 23, btn_h = 24;
             
-            /* Button: raised or sunken */
-            if (selected) {
-                SDL_SetRenderDrawColor(game.renderer, 160, 160, 160, 255);
+            if (game.ui_speed) {
+                /* Map speed index to bitmap position:
+                 * Speed 0 (pause): pair 0, btn 0 → src (0, 0/32)
+                 * Speed 1 (play):  pair 0, btn 1 → src (23, 0/32)
+                 * Speed 2 (fast):  pair 1, btn 0 → src (64, 0/32)
+                 * Speed 3 (turbo): pair 1, btn 1 → src (87, 0/32) */
+                int pair = s / 2;
+                int btn_in_pair = s % 2;
+                int src_x = pair * 64 + btn_in_pair * 23;
+                int src_y = selected ? 32 : 0;
+                SDL_Rect src = { src_x, src_y, btn_w, btn_h };
+                SDL_Rect dst = { sx, speed_y, btn_w, btn_h };
+                SDL_RenderCopy(game.renderer, game.ui_speed, &src, &dst);
             } else {
-                SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+                /* Fallback: text buttons */
+                const char *speed_ascii[] = { "||", ">", ">>", ">>>" };
+                draw_win31_rect(sx, speed_y, btn_w, btn_h, !selected);
+                if (game.font_small) {
+                    SDL_Color c = {0, 0, 0, 255};
+                    SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, speed_ascii[s], c);
+                    if (ts) {
+                        SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                        SDL_Rect dst = { sx + btn_w/2 - ts->w/2, speed_y + 3, ts->w, ts->h };
+                        SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                        SDL_DestroyTexture(tt);
+                        SDL_FreeSurface(ts);
+                    }
+                }
             }
-            SDL_Rect btn = { sx, speed_y, btn_w, 18 };
-            SDL_RenderFillRect(game.renderer, &btn);
-            
-            /* 3D border */
-            if (!selected) {
-                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx + btn_w - 1, speed_y);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx, speed_y + 17);
-                SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y + 17, sx + btn_w - 1, speed_y + 17);
-                SDL_RenderDrawLine(game.renderer, sx + btn_w - 1, speed_y, sx + btn_w - 1, speed_y + 17);
-            } else {
-                SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx + btn_w - 1, speed_y);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y, sx, speed_y + 17);
-                SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-                SDL_RenderDrawLine(game.renderer, sx, speed_y + 17, sx + btn_w - 1, speed_y + 17);
-                SDL_RenderDrawLine(game.renderer, sx + btn_w - 1, speed_y, sx + btn_w - 1, speed_y + 17);
-            }
-            
-            SDL_Color c = {0, 0, 0, 255};
-            (void)speed_labels;
-            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, speed_ascii[s], c);
-            if (ts) {
-                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-                SDL_Rect dst = { sx + btn_w/2 - ts->w/2, speed_y + 3, ts->w, ts->h };
-                SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-                SDL_DestroyTexture(tt);
-                SDL_FreeSurface(ts);
-            }
-            sx += btn_w + 2;
+            sx += btn_w + 1;
         }
     }
     
-    /* Tool buttons grid */
-    int grid_y = speed_y + 24;
+    /* Tool action buttons (bulldozer, finger, inspector) — between speed and items.
+     * ui_tools is 64×63 (3 tools at 64×21 each, stacked vertically).
+     * Each 64×21 sub-bitmap: left 21px = normal, middle 21px = pressed, right = more? 
+     * Actually from the RML: tool button is 21×21, with s: 0-21/21-42/42-63 and t: 0-0.5/0.5-1. */
+    int tools_y = speed_y + 28;
+    if (game.ui_tools) {
+        int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
+        for (int t = 0; t < 3; t++) {
+            /* Each tool bitmap (64×21): left half = normal, right half = pressed?
+             * Actually the entire 64px wide is the tool at different states.
+             * Let's just render the left 21×21 portion (normal state). */
+            SDL_Rect src = { 0, t * 21, 21, 21 };
+            SDL_Rect dst = { tx + t * 23, tools_y, 21, 21 };
+            SDL_RenderCopy(game.renderer, game.ui_tools, &src, &dst);
+        }
+    }
+    
+    /* Item buttons grid */
+    int grid_y = tools_y + 26;
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
         int col = i % TOOL_COLS;
         int row = i / TOOL_COLS;
@@ -2688,10 +2656,9 @@ int main(int argc, char *argv[])
             { SPR_ENTRANCES,   &game.entrances,  "Entrance awning" },
             { SPR_CRANE,       &game.crane,       "Construction crane" },
             { SPR_FIRELADDER,  &game.fireladder,  "Fire escape" },
-            { SPR_SKYLINE,     &game.skyline,     "City skyline" },
         };
         NEResourceList *dibs = ne_find_type(&game.exe, 0x8002);
-        for (int d = 0; d < 4; d++) {
+        for (int d = 0; d < 3; d++) {
             *decos[d].target = NULL;
             NEResource *res = NULL;
             if (dibs) {
@@ -2713,6 +2680,29 @@ int main(int argc, char *argv[])
                     }
                     SDL_FreeSurface(surf);
                 }
+            }
+        }
+    }
+    
+    /* Load skyline with sky-blue transparency (not white like other decos) */
+    game.skyline = NULL;
+    {
+        NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, SPR_SKYLINE);
+        if (res) {
+            SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
+            if (surf) {
+                /* The skyline bitmap has RGB(138,212,255) as its sky background.
+                 * Make it transparent so our gradient sky shows through. */
+                SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGB(surf->format, 138, 212, 255));
+                Sprite *sp = sprites_find(&game.sprites, SPR_SKYLINE);
+                if (sp) {
+                    SDL_DestroyTexture(sp->texture);
+                    sp->texture = SDL_CreateTextureFromSurface(game.renderer, surf);
+                    SDL_SetTextureBlendMode(sp->texture, SDL_BLENDMODE_BLEND);
+                    game.skyline = sp;
+                    printf("🎨 City skyline loaded: %dx%d (sky-blue transparent)\n", sp->w, sp->h);
+                }
+                SDL_FreeSurface(surf);
             }
         }
     }
