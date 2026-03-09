@@ -814,6 +814,7 @@ static void render_tower(void)
             }
         }
         if (left > right) continue;  /* Empty floor */
+
         
         /* Floor background — different for above/below ground */
         if (floor > 0) {
@@ -890,6 +891,7 @@ static void render_tower(void)
                 /* Lobby: tile the real lobby sprite across the tenant's actual width */
                 int lobby_px = tenant->x * CELL_W;  /* Lobby start in world pixels */
                 int lobby_pw = tenant->width * CELL_W;  /* Lobby width in pixels */
+
                 for (int lx = 0; lx < lobby_pw; lx += lobby_spr->w) {
                     int lsx = sx_base + lobby_px + lx;
                     int draw_w = lobby_spr->w;
@@ -1041,15 +1043,21 @@ static void render_tower(void)
             grid_to_screen(t->floor, t->x, &tx, &ty);
             int tw = t->width * CELL_W;
             
-            /* Awning on left entrance */
-            SDL_Rect awning_l = { tx - 8, ty - 4, game.entrances->w / 2, game.entrances->h };
-            SDL_Rect src_l = { 0, 0, game.entrances->w / 2, game.entrances->h };
+            /* Awning extends OUTWARD from lobby edges (overhanging the sidewalk).
+             * Left half of sprite = left entrance, right half = right entrance.
+             * Each half is entrances->w/2 pixels wide.
+             * Left awning: right edge aligns with lobby's left edge.
+             * Right awning: left edge aligns with lobby's right edge. */
+            int half_w = game.entrances->w / 2;
+            
+            /* Left entrance — awning extends to the left of the lobby */
+            SDL_Rect src_l = { 0, 0, half_w, game.entrances->h };
+            SDL_Rect awning_l = { tx - half_w, ty, half_w, game.entrances->h };
             SDL_RenderCopy(game.renderer, game.entrances->texture, &src_l, &awning_l);
             
-            /* Awning on right entrance (mirrored) */
-            SDL_Rect awning_r = { tx + tw - game.entrances->w / 2 + 8, ty - 4,
-                                  game.entrances->w / 2, game.entrances->h };
-            SDL_Rect src_r = { game.entrances->w / 2, 0, game.entrances->w / 2, game.entrances->h };
+            /* Right entrance — awning extends to the right of the lobby */
+            SDL_Rect src_r = { half_w, 0, half_w, game.entrances->h };
+            SDL_Rect awning_r = { tx + tw, ty, half_w, game.entrances->h };
             SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
         }
     }

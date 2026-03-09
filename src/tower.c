@@ -43,6 +43,8 @@ void tower_init(Tower *tower)
     }
     
     printf("Tower initialized: $%ld, %d star(s)\n", tower->money, tower->star_rating);
+    printf("  Lobby: x=%d w=%d (cells %d-%d of %d)\n", 
+           lobby_x, lobby_w, lobby_x, lobby_x + lobby_w - 1, TOWER_WIDTH);
 }
 
 TowerCell *tower_cell(Tower *tower, int floor, int x)
