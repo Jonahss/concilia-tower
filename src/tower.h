@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 /* Grid dimensions */
-#define TOWER_WIDTH       94    /* Cells wide (94 cells from decompiled index_map size) */
+#define TOWER_WIDTH       375   /* Cells wide (375 from decompiled 0x177 lobby constant + online sources) */
 #define TOWER_MIN_FLOOR   -9    /* B9 (deepest basement) */
 #define TOWER_MAX_FLOOR   100   /* Maximum height at 5 stars */
 #define TOWER_FLOOR_COUNT (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1)  /* 110 */
