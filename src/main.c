@@ -289,6 +289,11 @@ typedef struct {
     int             win_drag_ox;     /* Mouse offset from window origin at drag start */
     int             win_drag_oy;
     
+    /* Camera panning (middle/right-click drag) */
+    int             cam_panning;     /* 1 if currently panning camera */
+    int             cam_pan_last_x;
+    int             cam_pan_last_y;
+    
     /* Weather (from OpenSkyscraper Sky.cpp) */
     int             rainy_day;       /* 1 = rain today */
 } Game;
@@ -2432,6 +2437,17 @@ static void handle_event(SDL_Event *ev)
         screen_to_grid(game.mouse_x, game.mouse_y, 
                        &game.mouse_floor, &game.mouse_cell);
         
+        /* Camera panning (middle/right-click drag) */
+        if (game.cam_panning) {
+            int dx = ev->motion.x - game.cam_pan_last_x;
+            int dy = ev->motion.y - game.cam_pan_last_y;
+            game.cam_fx -= dx;
+            game.cam_fy -= dy;
+            game.cam_pan_last_x = ev->motion.x;
+            game.cam_pan_last_y = ev->motion.y;
+            break;
+        }
+        
         /* Window dragging */
         if (game.win_dragging) {
             int nx = ev->motion.x - game.win_drag_ox;
@@ -2483,6 +2499,14 @@ static void handle_event(SDL_Event *ev)
         break;
         
     case SDL_MOUSEBUTTONDOWN:
+        /* Middle or right click: start camera pan */
+        if (ev->button.button == SDL_BUTTON_MIDDLE || 
+            ev->button.button == SDL_BUTTON_RIGHT) {
+            game.cam_panning = 1;
+            game.cam_pan_last_x = ev->button.x;
+            game.cam_pan_last_y = ev->button.y;
+            break;
+        }
         if (ev->button.button == SDL_BUTTON_LEFT) {
             /* Check menu bar click first */
             int bar_hit = menu_bar_hit_test(ev->button.x, ev->button.y);
@@ -2550,6 +2574,12 @@ static void handle_event(SDL_Event *ev)
         break;
     
     case SDL_MOUSEBUTTONUP:
+        /* Stop camera pan */
+        if ((ev->button.button == SDL_BUTTON_MIDDLE || 
+             ev->button.button == SDL_BUTTON_RIGHT) && game.cam_panning) {
+            game.cam_panning = 0;
+            break;
+        }
         if (ev->button.button == SDL_BUTTON_LEFT) {
             /* Stop window dragging */
             if (game.win_dragging) {
@@ -2570,9 +2600,17 @@ static void handle_event(SDL_Event *ev)
         }
         break;
         
-    case SDL_MOUSEWHEEL:
-        game.cam_fy -= ev->wheel.y * 60;
+    case SDL_MOUSEWHEEL: {
+        /* Shift+wheel or horizontal wheel = scroll left/right */
+        int shift = (SDL_GetModState() & KMOD_SHIFT);
+        if (shift || ev->wheel.x != 0) {
+            int dx = ev->wheel.x ? ev->wheel.x : ev->wheel.y;
+            game.cam_fx += dx * 60;
+        } else {
+            game.cam_fy -= ev->wheel.y * 60;
+        }
         break;
+    }
         
     case SDL_WINDOWEVENT:
         if (ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
