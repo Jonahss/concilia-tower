@@ -888,49 +888,56 @@ static void render_tower(void)
             int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
             
             if (tenant->type == ITEM_LOBBY && lobby_spr) {
-                /* Lobby sprite layout (from OpenSkyscraper SimTowerLoader::loadLobbies):
-                 * Raw bitmap 0x89E8 is 992×36, containing 3 lobby types at 328px each:
-                 *   [normal 328px] [sky lobby 328px] [high lobby 328px]
-                 * Within each 328px variant:
-                 *   Left 256px (328-9*8) = repeating middle section
-                 *   Right 56px (7*8) = endcap (used for both left and right edges)
-                 * We use variant 0 (normal) for now. */
-                int variant = 0;  /* 0=normal, 1=sky, 2=high — TODO: based on star rating */
-                int var_x = variant * 328;
-                int endcap_w = 7 * 8;   /* 56px */
-                int middle_w = 328 - 9 * 8;  /* 256px */
+                /* Lobby sprite 0x89E8 layout (992×36, verified by pixel inspection):
+                 *   [0-255]   Interior (256px) — brown walls, booth seating, tiled
+                 *   [256-327] Left entrance transition (72px) — plants → glass
+                 *   [328-655] Entrance facade (328px) — teal glass, sky-blue bg
+                 *   [656-911] Interior repeat (256px) — same as 0-255
+                 *   [912-983] Right entrance transition (72px) — plants → glass
+                 *   [984-991] Padding (8px)
+                 *
+                 * Rendering: [left_entrance] [interior tiled...] [right_entrance]
+                 * Left entrance = pixels 256-655 (72 + 328 = 400px transition+facade)
+                 * Right entrance = pixels 912-655 reversed? No — use endcap + flip.
+                 *
+                 * Simpler: use left_transition(72) at left edge,
+                 *          tile interior(256) in the middle,
+                 *          right_transition(72) at right edge. */
+                int interior_src = 0;       /* Interior starts at pixel 0 */
+                int interior_w = 256;       /* 256px repeating interior */
+                int left_cap_src = 256;     /* Left transition at pixel 256 */
+                int cap_w = 72;             /* Each transition is 72px */
+                int right_cap_src = 912;    /* Right transition at pixel 912 */
                 int lobby_pw = tenant->width * CELL_W;
                 
-                /* Left endcap (from right side of variant section) */
-                int ec_src_x = var_x + 328 - endcap_w;
+                /* Left entrance transition */
                 {
-                    int ew = endcap_w;
+                    int ew = cap_w;
                     if (ew > lobby_pw) ew = lobby_pw;
-                    SDL_Rect src_ec = { ec_src_x, 0, ew, lobby_spr->h };
+                    SDL_Rect src_ec = { left_cap_src, 0, ew, lobby_spr->h };
                     SDL_Rect dst_ec = { tx, ty, ew, CELL_H };
                     SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_ec, &dst_ec);
                 }
                 
-                /* Repeating middle section */
-                int mid_start = endcap_w;
-                int mid_end = lobby_pw - endcap_w;
-                for (int mx = mid_start; mx < mid_end; mx += middle_w) {
-                    int mw = middle_w;
+                /* Repeating interior section */
+                int mid_start = cap_w;
+                int mid_end = lobby_pw - cap_w;
+                for (int mx = mid_start; mx < mid_end; mx += interior_w) {
+                    int mw = interior_w;
                     if (mx + mw > mid_end) mw = mid_end - mx;
                     int msx = tx + mx;
                     if (msx + mw < 0 || msx > game.screen_w) continue;
-                    SDL_Rect src_mid = { var_x, 0, mw, lobby_spr->h };
+                    SDL_Rect src_mid = { interior_src, 0, mw, lobby_spr->h };
                     SDL_Rect dst_mid = { msx, ty, mw, CELL_H };
                     SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_mid, &dst_mid);
                 }
                 
-                /* Right endcap (same source, flipped horizontally) */
-                if (lobby_pw > endcap_w) {
-                    int rx = tx + lobby_pw - endcap_w;
-                    SDL_Rect src_ec = { ec_src_x, 0, endcap_w, lobby_spr->h };
-                    SDL_Rect dst_ec = { rx, ty, endcap_w, CELL_H };
-                    SDL_RenderCopyEx(game.renderer, lobby_spr->texture, &src_ec, &dst_ec,
-                                     0, NULL, SDL_FLIP_HORIZONTAL);
+                /* Right entrance transition */
+                if (lobby_pw > cap_w) {
+                    int rx = tx + lobby_pw - cap_w;
+                    SDL_Rect src_ec = { right_cap_src, 0, cap_w, lobby_spr->h };
+                    SDL_Rect dst_ec = { rx, ty, cap_w, CELL_H };
+                    SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_ec, &dst_ec);
                 }
                 x = tenant->x + tenant->width;
                 continue;
