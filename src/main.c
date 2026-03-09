@@ -887,10 +887,11 @@ static void render_tower(void)
             int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
             
             if (tenant->type == ITEM_LOBBY && lobby_spr) {
-                /* Lobby: tile the real lobby sprite across full width */
-                int lobby_pw = TOWER_WIDTH * CELL_W;
+                /* Lobby: tile the real lobby sprite across the tenant's actual width */
+                int lobby_px = tenant->x * CELL_W;  /* Lobby start in world pixels */
+                int lobby_pw = tenant->width * CELL_W;  /* Lobby width in pixels */
                 for (int lx = 0; lx < lobby_pw; lx += lobby_spr->w) {
-                    int lsx = sx_base + lx;
+                    int lsx = sx_base + lobby_px + lx;
                     int draw_w = lobby_spr->w;
                     if (lx + draw_w > lobby_pw) draw_w = lobby_pw - lx;
                     if (lsx + draw_w < 0 || lsx > game.screen_w) continue;
