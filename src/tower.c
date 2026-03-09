@@ -169,38 +169,55 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (floor == 0) {
         /* Ground floor is always supported */
     } else if (is_transport) {
-        /* Transport (stairs/escalators) need support below OR above */
-        int has_support = 0;
+        /* Transport (stairs/escalators) connect two floors — need content on BOTH.
+         * Stairs/escalators span 2 floors (floor and floor+1).
+         * Both floors must have existing content (lobby, office, etc.)
+         * for the stairs to be useful. */
+        int has_lower = 0, has_upper = 0;
+        int lower_idx = floor_to_index(floor);
+        int upper_idx = floor_to_index(floor + height - 1);
         
-        int below_idx = floor_to_index(floor - 1);
-        if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = x; cx < x + width && !has_support; cx++) {
-                if (tower->grid[below_idx][cx].type != ITEM_NONE)
-                    has_support = 1;
+        /* Check lower floor (or floor below it) for content */
+        if (lower_idx >= 0 && lower_idx < TOWER_FLOOR_COUNT) {
+            for (int cx = 0; cx < TOWER_WIDTH && !has_lower; cx++) {
+                if (tower->grid[lower_idx][cx].type != ITEM_NONE)
+                    has_lower = 1;
             }
         }
-        
-        int above_idx = floor_to_index(floor + height);
-        if (!has_support && above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = x; cx < x + width && !has_support; cx++) {
-                if (tower->grid[above_idx][cx].type != ITEM_NONE)
-                    has_support = 1;
-            }
-        }
-        
-        /* Also check the floors they span for existing content */
-        if (!has_support) {
-            for (int f = floor; f < floor + height && !has_support; f++) {
-                int fidx = floor_to_index(f);
-                if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-                for (int cx = x; cx < x + width && !has_support; cx++) {
-                    if (tower->grid[fidx][cx].type != ITEM_NONE)
-                        has_support = 1;
+        /* Also accept if floor below has content */
+        if (!has_lower) {
+            int below_idx = floor_to_index(floor - 1);
+            if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
+                for (int cx = 0; cx < TOWER_WIDTH && !has_lower; cx++) {
+                    if (tower->grid[below_idx][cx].type != ITEM_NONE)
+                        has_lower = 1;
                 }
             }
         }
         
-        if (!has_support) return 0;
+        /* Check upper floor for content */
+        if (upper_idx >= 0 && upper_idx < TOWER_FLOOR_COUNT) {
+            for (int cx = 0; cx < TOWER_WIDTH && !has_upper; cx++) {
+                if (tower->grid[upper_idx][cx].type != ITEM_NONE)
+                    has_upper = 1;
+            }
+        }
+        /* Also accept if floor above top has content */
+        if (!has_upper) {
+            int above_idx = floor_to_index(floor + height);
+            if (above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
+                for (int cx = 0; cx < TOWER_WIDTH && !has_upper; cx++) {
+                    if (tower->grid[above_idx][cx].type != ITEM_NONE)
+                        has_upper = 1;
+                }
+            }
+        }
+        
+        if (!has_lower || !has_upper) {
+            printf("  [reject] %s at F%d: needs content on both floors (lower=%d upper=%d)\n",
+                   tower_item_name(type), floor, has_lower, has_upper);
+            return 0;
+        }
     } else if (floor > 0) {
         /* Above ground: MUST have support directly below */
         int has_support = 0;
