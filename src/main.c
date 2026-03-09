@@ -3148,8 +3148,14 @@ int main(int argc, char *argv[])
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     
-    /* Build demo tower with all unit types */
-    tower_build_demo(&game.tower);
+    /* Build demo tower only if --demo flag is passed */
+    int demo_mode = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--demo") == 0) { demo_mode = 1; break; }
+    }
+    if (demo_mode) {
+        tower_build_demo(&game.tower);
+    }
     
     /* Center camera — show the tower nicely.
      * If screenshot mode with "underground" path, show underground view */
