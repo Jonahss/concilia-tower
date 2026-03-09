@@ -279,6 +279,16 @@ typedef struct {
     int             menu_hover;      /* which item is hovered in the open dropdown */
     int             menu_bar_hover;  /* which top-level menu is hovered */
     
+    /* Moveable window positions (Win3.1 style: drag by title bar, not resizable) */
+    int             info_x, info_y;  /* Info bar window */
+    int             map_x, map_y;    /* Minimap window */
+    int             tool_x, tool_y;  /* Toolbox window */
+    
+    /* Window dragging state */
+    int             win_dragging;    /* 0=none, 1=info, 2=map, 3=toolbox */
+    int             win_drag_ox;     /* Mouse offset from window origin at drag start */
+    int             win_drag_oy;
+    
     /* Weather (from OpenSkyscraper Sky.cpp) */
     int             rainy_day;       /* 1 = rain today */
 } Game;
@@ -1315,6 +1325,7 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 
 #define INFO_BAR_W  500       /* Info bar width (top right, horizontal) */
 #define INFO_BAR_H  42        /* Compact horizontal bar */
+#define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
 #define CLOCK_R     14        /* Small clock for horizontal bar */
 
 #define MAP_WIN_W   200       /* Map window (left side) */
@@ -1394,12 +1405,46 @@ static void add_event_message(const char *msg)
     if (event_msg_total < EVENT_MSG_COUNT) event_msg_total++;
 }
 
+/* Draw a Win3.1 style title bar (navy blue with white text, for window dragging) */
+static void draw_win31_titlebar(int x, int y, int w, const char *title)
+{
+    /* Navy blue background */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+    SDL_Rect bg = { x, y, w, WIN_TITLEBAR_H };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* 3D border */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, x, y, x + w - 1, y);
+    SDL_RenderDrawLine(game.renderer, x, y, x, y + WIN_TITLEBAR_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 255);
+    SDL_RenderDrawLine(game.renderer, x, y + WIN_TITLEBAR_H - 1, x + w - 1, y + WIN_TITLEBAR_H - 1);
+    SDL_RenderDrawLine(game.renderer, x + w - 1, y, x + w - 1, y + WIN_TITLEBAR_H - 1);
+    
+    /* Title text */
+    if (game.font_small && title) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, title, white);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { x + 4, y + 2, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+}
+
 static void render_info_window(void)
 {
-    /* Info bar: horizontal strip across the top right (like original time.rml).
+    /* Info bar: horizontal strip (like original time.rml).
      * Layout: [clock 29×29] [star rating] [date info] [message] [funds/pop right-aligned] */
-    int wx = game.screen_w - INFO_BAR_W;
-    int wy = HUD_HEIGHT + MENU_BAR_H;
+    int wx = game.info_x;
+    int wy = game.info_y;
+    
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, INFO_BAR_W, "Tower Info");
+    wy += WIN_TITLEBAR_H;
     
     /* Background — original uses bitmap 0x8140 (431×41, tiled horizontal) */
     if (game.ui_timebar) {
@@ -1519,18 +1564,21 @@ static void render_info_window(void)
 
 static void render_minimap(void)
 {
-    int wx = 0;
-    int wy = HUD_HEIGHT + MENU_BAR_H;
+    int wx = game.map_x;
+    int wy = game.map_y;
     
-    /* Minimap: no title bar (original SimTower style).
-     * The original had 4 mode buttons at the top (Edit/Eval/Pricing/Hotel). */
-    draw_win31_rect(wx, wy, MAP_WIN_W, MAP_WIN_H, 1);
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, MAP_WIN_W, "Map");
+    wy += WIN_TITLEBAR_H;
+    
+    /* Minimap body */
+    draw_win31_rect(wx, wy, MAP_WIN_W, MAP_WIN_H - WIN_TITLEBAR_H, 1);
     
     /* Map content area */
     int map_x = wx + 4;
     int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
-    int map_h = MAP_WIN_H - 24;
+    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
     
     /* Map background — use original bitmap 0x8160 (200×288) if available.
      * Top 264px = sky, bottom 24px = ground strip (from OpenSkyscraper). */
@@ -1659,12 +1707,15 @@ static const ToolButton tool_buttons[] = {
 
 static void render_toolbox(void)
 {
-    int wx = 0;
-    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H;
+    int wx = game.tool_x;
+    int wy = game.tool_y;
     
-    /* Toolbox: no title bar (original SimTower style).
-     * Just a gray raised panel with the controls inside. */
-    draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H, 1);
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, TOOL_WIN_W, "Tools");
+    wy += WIN_TITLEBAR_H;
+    
+    /* Toolbox body */
+    draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H - WIN_TITLEBAR_H, 1);
     
     /* Speed buttons at top — use original bitmap if available.
      * ui_speed is 128×64: 4 buttons at 32px wide each.
@@ -1808,7 +1859,7 @@ static void render_toolbox(void)
         snprintf(full_buf, sizeof(full_buf), "%s  %s",
                  tower_item_name(game.build_type), cost_buf);
         
-        int label_y = wy + TOOL_WIN_H - 18;
+        int label_y = wy + TOOL_WIN_H - WIN_TITLEBAR_H - 18;
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
@@ -2085,25 +2136,29 @@ static void drag_place_units(void)
 /* ---------- Toolbox click helper ---------- */
 static int toolbox_click(int mx, int my)
 {
-    int wx = 0;
-    int wy = HUD_HEIGHT + MENU_BAR_H + MAP_WIN_H;
+    int wx = game.tool_x;
+    int wy = game.tool_y + WIN_TITLEBAR_H;  /* Skip title bar */
     
-    /* Speed buttons */
-    int speed_y = wy + 22;
-    if (my >= speed_y && my < speed_y + 18) {
-        int sx = wx + 8;
+    /* Speed buttons — must match render_toolbox layout */
+    int speed_y = wy + 8;
+    {
+        int sx = wx + (TOOL_WIN_W - 4 * 24) / 2;  /* Centered, matching render */
         for (int s = 0; s < 4; s++) {
-            int btn_w = 38;
-            if (mx >= sx && mx < sx + btn_w) {
+            int btn_w = 23, btn_h = 24;
+            if (mx >= sx && mx < sx + btn_w &&
+                my >= speed_y && my < speed_y + btn_h) {
                 game.sim.speed = s;
                 return 1;
             }
-            sx += btn_w + 2;
+            sx += btn_w + 1;
         }
     }
     
-    /* Tool buttons */
-    int grid_y = speed_y + 24;
+    /* Tool action buttons */
+    int tools_y = speed_y + 28;
+    
+    /* Tool item buttons */
+    int grid_y = tools_y + 26;
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
         int col = i % TOOL_COLS;
         int row = i / TOOL_COLS;
@@ -2120,15 +2175,40 @@ static int toolbox_click(int mx, int my)
     return 0;
 }
 
+/* ---------- Window title bar hit test ---------- */
+/* Returns: 1=info, 2=map, 3=toolbox, 0=none */
+static int titlebar_hit_test(int mx, int my)
+{
+    /* Info bar title bar */
+    if (mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
+        my >= game.info_y && my < game.info_y + WIN_TITLEBAR_H) {
+        return 1;
+    }
+    
+    /* Minimap title bar */
+    if (mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
+        my >= game.map_y && my < game.map_y + WIN_TITLEBAR_H) {
+        return 2;
+    }
+    
+    /* Toolbox title bar */
+    if (mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
+        my >= game.tool_y && my < game.tool_y + WIN_TITLEBAR_H) {
+        return 3;
+    }
+    
+    return 0;
+}
+
 /* ---------- Minimap click helper ---------- */
 static int minimap_click(int mx, int my)
 {
-    int wx = 0;
-    int wy = HUD_HEIGHT + MENU_BAR_H;
+    int wx = game.map_x;
+    int wy = game.map_y + WIN_TITLEBAR_H;  /* Skip title bar */
     int map_x = wx + 4;
-    int map_y = wy + 20;
+    int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
-    int map_h = MAP_WIN_H - 24;
+    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
     
     if (mx >= map_x && mx < map_x + map_w &&
         my >= map_y && my < map_y + map_h) {
@@ -2330,6 +2410,40 @@ static void handle_event(SDL_Event *ev)
         screen_to_grid(game.mouse_x, game.mouse_y, 
                        &game.mouse_floor, &game.mouse_cell);
         
+        /* Window dragging */
+        if (game.win_dragging) {
+            int nx = ev->motion.x - game.win_drag_ox;
+            int ny = ev->motion.y - game.win_drag_oy;
+            /* Clamp to screen bounds */
+            switch (game.win_dragging) {
+            case 1: /* Info bar */
+                if (nx < 0) nx = 0;
+                if (nx + INFO_BAR_W > game.screen_w) nx = game.screen_w - INFO_BAR_W;
+                if (ny < 0) ny = 0;
+                if (ny + INFO_BAR_H > game.screen_h) ny = game.screen_h - INFO_BAR_H;
+                game.info_x = nx;
+                game.info_y = ny;
+                break;
+            case 2: /* Minimap */
+                if (nx < 0) nx = 0;
+                if (nx + MAP_WIN_W > game.screen_w) nx = game.screen_w - MAP_WIN_W;
+                if (ny < 0) ny = 0;
+                if (ny + MAP_WIN_H > game.screen_h) ny = game.screen_h - MAP_WIN_H;
+                game.map_x = nx;
+                game.map_y = ny;
+                break;
+            case 3: /* Toolbox */
+                if (nx < 0) nx = 0;
+                if (nx + TOOL_WIN_W > game.screen_w) nx = game.screen_w - TOOL_WIN_W;
+                if (ny < 0) ny = 0;
+                if (ny + TOOL_WIN_H > game.screen_h) ny = game.screen_h - TOOL_WIN_H;
+                game.tool_x = nx;
+                game.tool_y = ny;
+                break;
+            }
+            break;
+        }
+        
         /* Menu bar hover tracking */
         game.menu_bar_hover = menu_bar_hit_test(ev->motion.x, ev->motion.y);
         
@@ -2372,10 +2486,33 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
             
-            /* Toolbox click */
+            /* Window title bar drag start */
+            {
+                int win_hit = titlebar_hit_test(ev->button.x, ev->button.y);
+                if (win_hit > 0) {
+                    game.win_dragging = win_hit;
+                    switch (win_hit) {
+                    case 1: /* Info bar */
+                        game.win_drag_ox = ev->button.x - game.info_x;
+                        game.win_drag_oy = ev->button.y - game.info_y;
+                        break;
+                    case 2: /* Minimap */
+                        game.win_drag_ox = ev->button.x - game.map_x;
+                        game.win_drag_oy = ev->button.y - game.map_y;
+                        break;
+                    case 3: /* Toolbox */
+                        game.win_drag_ox = ev->button.x - game.tool_x;
+                        game.win_drag_oy = ev->button.y - game.tool_y;
+                        break;
+                    }
+                    break;
+                }
+            }
+            
+            /* Toolbox click (body, not title bar) */
             if (toolbox_click(ev->button.x, ev->button.y)) break;
             
-            /* Minimap click */
+            /* Minimap click (body, not title bar) */
             if (minimap_click(ev->button.x, ev->button.y)) break;
             
             /* Normal game click */
@@ -2388,15 +2525,23 @@ static void handle_event(SDL_Event *ev)
         break;
     
     case SDL_MOUSEBUTTONUP:
-        if (ev->button.button == SDL_BUTTON_LEFT && game.dragging) {
-            if (game.drag_start_cell == game.mouse_cell && 
-                game.drag_start_floor == game.mouse_floor) {
-                tower_place(&game.tower, game.build_type,
-                           game.drag_start_floor, game.drag_start_cell);
-            } else {
-                drag_place_units();
+        if (ev->button.button == SDL_BUTTON_LEFT) {
+            /* Stop window dragging */
+            if (game.win_dragging) {
+                game.win_dragging = 0;
+                break;
             }
-            game.dragging = 0;
+            /* Stop building placement drag */
+            if (game.dragging) {
+                if (game.drag_start_cell == game.mouse_cell && 
+                    game.drag_start_floor == game.mouse_floor) {
+                    tower_place(&game.tower, game.build_type,
+                               game.drag_start_floor, game.drag_start_cell);
+                } else {
+                    drag_place_units();
+                }
+                game.dragging = 0;
+            }
         }
         break;
         
@@ -2928,6 +3073,15 @@ int main(int argc, char *argv[])
     game.menu_hover = -1;
     game.menu_bar_hover = -1;
     game.rainy_day = 0;
+    
+    /* Default window positions (matching original SimTower layout) */
+    game.map_x = 0;
+    game.map_y = 0;    /* Top left */
+    game.tool_x = 0;
+    game.tool_y = MAP_WIN_H;  /* Below minimap */
+    game.info_x = game.screen_w - INFO_BAR_W;
+    game.info_y = 0;   /* Top right */
+    game.win_dragging = 0;
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     
