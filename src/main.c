@@ -1124,58 +1124,41 @@ static void render_tower(void)
         }
     }
     
-    /* Fire escape — drawn on BOTH sides of the tower (from Decorations.cpp).
-     * The 48px sprite splits: left 24px on min edge, right 24px on max edge.
-     * Fire stairs only appear on floors that have actual floor items (not every
-     * occupied floor). They use the FULL BUILDING width, not per-floor width. */
+    /* Fire escape — drawn on BOTH sides of each floor's extent.
+     * Each floor gets its own left/right edges (not global building envelope). */
     if (game.fireladder) {
         int half_w = game.fireladder->w / 2;
         
-        /* First, find the full building envelope (min/max x across ALL floors) */
-        int bldg_left = TOWER_WIDTH, bldg_right = -1;
-        int bldg_top = 0;
         for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
             int fidx = floor_to_index(floor);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-            for (int x = 0; x < TOWER_WIDTH; x++) {
-                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                    if (x < bldg_left) bldg_left = x;
-                    if (x > bldg_right) bldg_right = x;
-                    if (floor > bldg_top) bldg_top = floor;
+            
+            /* Find this floor's own left/right extent */
+            int floor_left = TOWER_WIDTH, floor_right = -1;
+            for (int cx = 0; cx < TOWER_WIDTH; cx++) {
+                if (game.tower.grid[fidx][cx].type != ITEM_NONE) {
+                    if (cx < floor_left) floor_left = cx;
+                    if (cx > floor_right) floor_right = cx;
                 }
             }
-        }
-        
-        if (bldg_right >= 0) {
-            /* Draw fire escape on each occupied floor using building envelope edges */
-            for (int floor = 1; floor <= bldg_top; floor++) {
-                int fidx = floor_to_index(floor);
-                if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-                
-                /* Only draw if this floor has something */
-                int has_content = 0;
-                for (int x = bldg_left; x <= bldg_right; x++) {
-                    if (game.tower.grid[fidx][x].type != ITEM_NONE) { has_content = 1; break; }
-                }
-                if (!has_content) continue;
-                
-                int fsx, fsy;
-                grid_to_screen(floor, 0, &fsx, &fsy);
-                
-                /* Left fire escape at building left edge */
-                int lx, ly;
-                grid_to_screen(floor, bldg_left, &lx, &ly);
-                SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
-                SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
-                SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
-                
-                /* Right fire escape at building right edge */
-                int rx_pos, ry;
-                grid_to_screen(floor, bldg_right + 1, &rx_pos, &ry);
-                SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
-                SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
-                SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
-            }
+            if (floor_left > floor_right) continue;  /* Empty floor */
+            
+            int fsx, fsy;
+            grid_to_screen(floor, 0, &fsx, &fsy);
+            
+            /* Left fire escape at THIS floor's left edge */
+            int lx, ly;
+            grid_to_screen(floor, floor_left, &lx, &ly);
+            SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
+            SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
+            
+            /* Right fire escape at THIS floor's right edge */
+            int rx_pos, ry;
+            grid_to_screen(floor, floor_right + 1, &rx_pos, &ry);
+            SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
+            SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
         }
     }
     
