@@ -71,20 +71,34 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     int cost = ITEM_COST[type];
     
     /* Check bounds — multi-floor items extend upward from placement floor */
-    if (x < 0 || x + width > TOWER_WIDTH) return 0;
+    if (x < 0 || x + width > TOWER_WIDTH) {
+        printf("  [reject] %s at F%d x%d: bounds (x+w=%d > TW=%d)\n",
+               tower_item_name(type), floor, x, x+width, TOWER_WIDTH);
+        return 0;
+    }
     if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
     if (floor + height - 1 > TOWER_MAX_FLOOR) return 0;
     
     /* Check funds */
-    if (tower->money < cost) return 0;
+    if (tower->money < cost) {
+        printf("  [reject] %s at F%d x%d: insufficient funds ($%ld < $%d)\n",
+               tower_item_name(type), floor, x, tower->money, cost);
+        return 0;
+    }
     
     /* Lobby placement: 4-cell segments on every 15th floor.
      * Can overlap existing lobby cells (extends the lobby).
      * From LobbyMake (seg_11e8) + OpenSkyscraper Game.cpp. */
     if (type == ITEM_LOBBY) {
-        if (floor % 15 != 0) return 0;
+        if (floor % 15 != 0) {
+            printf("  [reject] Lobby at F%d: not a lobby floor (F%%15=%d)\n", floor, floor%15);
+            return 0;
+        }
         if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
-        if (x < 0 || x + width > TOWER_WIDTH) return 0;
+        if (x < 0 || x + width > TOWER_WIDTH) {
+            printf("  [reject] Lobby at F%d x%d: bounds (x+w=%d > TW=%d)\n", floor, x, x+width, TOWER_WIDTH);
+            return 0;
+        }
         if (tower->money < cost) return 0;
         /* Lobby segments CAN overlap existing lobby — that's how extension works.
          * But they can't overlap non-lobby items. */
@@ -92,7 +106,11 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
             for (int cx = x; cx < x + width; cx++) {
                 ItemType existing = tower->grid[fidx][cx].type;
-                if (existing != ITEM_NONE && existing != ITEM_LOBBY) return 0;
+                if (existing != ITEM_NONE && existing != ITEM_LOBBY) {
+                    printf("  [reject] Lobby at F%d x%d: cell %d has %s\n",
+                           floor, x, cx, tower_item_name(existing));
+                    return 0;
+                }
             }
         }
         /* Floor 0: always allowed. Upper lobbies: need floor below. */
@@ -125,7 +143,12 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             int fidx = floor_to_index(f);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
             for (int cx = x; cx < x + width; cx++) {
-                if (tower->grid[fidx][cx].type != ITEM_NONE) return 0;
+                if (tower->grid[fidx][cx].type != ITEM_NONE) {
+                    printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
+                           tower_item_name(type), floor, x, f, cx,
+                           tower_item_name(tower->grid[fidx][cx].type));
+                    return 0;
+                }
             }
         }
     }
