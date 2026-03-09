@@ -2179,7 +2179,7 @@ static int toolbox_click(int mx, int my)
 /* Returns: 1=info, 2=map, 3=toolbox, 0=none */
 static int titlebar_hit_test(int mx, int my)
 {
-    /* Info bar title bar */
+    /* Info bar title bar (only the thin title strip, not the whole bar) */
     if (mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
         my >= game.info_y && my < game.info_y + WIN_TITLEBAR_H) {
         return 1;
@@ -2197,6 +2197,28 @@ static int titlebar_hit_test(int mx, int my)
         return 3;
     }
     
+    return 0;
+}
+
+/* Check if a point is inside any UI window (body or title bar).
+ * Used to prevent clicks from falling through to the game world. */
+static int point_in_any_window(int mx, int my)
+{
+    /* Info bar */
+    if (mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
+        my >= game.info_y && my < game.info_y + INFO_BAR_H + WIN_TITLEBAR_H) {
+        return 1;
+    }
+    /* Minimap */
+    if (mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
+        my >= game.map_y && my < game.map_y + MAP_WIN_H) {
+        return 1;
+    }
+    /* Toolbox */
+    if (mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
+        my >= game.tool_y && my < game.tool_y + TOOL_WIN_H) {
+        return 1;
+    }
     return 0;
 }
 
@@ -2514,6 +2536,9 @@ static void handle_event(SDL_Event *ev)
             
             /* Minimap click (body, not title bar) */
             if (minimap_click(ev->button.x, ev->button.y)) break;
+            
+            /* Block clicks that land on any window body from reaching the game */
+            if (point_in_any_window(ev->button.x, ev->button.y)) break;
             
             /* Normal game click */
             if (game.build_type != ITEM_NONE) {
