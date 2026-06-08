@@ -1,2 +1,5 @@
 *.o
 *.bak
+
+# build output
+/simtower
