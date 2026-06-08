@@ -8,7 +8,19 @@
 set -e
 cd "$(dirname "$0")/.."
 PROJECT_DIR="$(pwd)"
-EXE_PATH="${PROJECT_DIR}/../OpenSkyscraper/data/SIMTOWER.EXE"
+
+# Locate SIMTOWER.EXE (assets). Override with $SIMTOWER_EXE, else try known paths.
+find_exe() {
+    local c
+    for c in "${SIMTOWER_EXE}" \
+             "${PROJECT_DIR}/../OpenSkyscraper/data/SIMTOWER.EXE" \
+             "${HOME}/.claude-agent/archive/openclaw/workspace/projects/OpenSkyscraper/data/SIMTOWER.EXE"; do
+        [[ -n "$c" && -f "$c" ]] && { echo "$c"; return 0; }
+    done
+    echo "ERROR: SIMTOWER.EXE not found. Set \$SIMTOWER_EXE." >&2
+    return 1
+}
+EXE_PATH="$(find_exe)" || exit 1
 DISPLAY_NUM=:99
 BMP_PATH="/tmp/simtower_screenshot.bmp"
 OUT="${1:-/tmp/ct_screenshot.png}"
