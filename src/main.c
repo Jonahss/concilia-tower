@@ -679,8 +679,16 @@ static void render_sky(void)
             SDL_SetTextureColorMod(game.skyline->texture, 255, 255, 255);
         }
         
-        for (int sx = -game.skyline->w; sx < game.screen_w + game.skyline->w; sx += game.skyline->w) {
-            SDL_Rect dst = { sx, skyline_y, game.skyline->w, game.skyline->h };
+        /* Skyline scrolls horizontally with the camera, wrapped at the 96px
+         * tile width — matches decomp seg_1048 (FUN_1048_03a3 offsets the strip
+         * by the camera scroll with a % 0x60 wrap) and OpenSkyscraper's
+         * world position x*96. Previously this loop used raw screen coords, so
+         * the distant city stayed glued to the window while the tower panned
+         * underneath it. See annotated/seg_1048_SkyT.c. */
+        int tile_w = game.skyline->w;            /* 96px (res 0x8389, 96x55) */
+        int shift = (int)game.cam_fx % tile_w;   /* world scroll, may be < 0 */
+        for (int sx = -tile_w - shift; sx < game.screen_w + tile_w; sx += tile_w) {
+            SDL_Rect dst = { sx, skyline_y, tile_w, game.skyline->h };
             SDL_RenderCopy(game.renderer, game.skyline->texture, NULL, &dst);
         }
         /* Reset color mod */
