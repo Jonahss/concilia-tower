@@ -48,7 +48,10 @@ typedef enum {
     ITEM_RECYCLING,     /* Recycling center: 6 cells wide, 2 floors, underground */
     ITEM_STAIRS,        /* Stairs: 8 cells wide, connects 2 floors */
     ITEM_ESCALATOR,     /* Escalator: 8 cells wide, connects 2 floors */
-    ITEM_ELEVATOR_SHAFT,/* Elevator shaft: 4 cells wide, variable height */
+    ITEM_ELEVATOR_SHAFT,/* Standard elevator shaft: 4 cells wide, variable height */
+    ITEM_ELEVATOR_SERVICE, /* Service elevator: freight/staff transport */
+    ITEM_ELEVATOR_EXPRESS, /* Express elevator: stops only on lobby/sky-lobby floors */
+    ITEM_HOUSEKEEPING,  /* Housekeeping: services hotel rooms */
     ITEM_TYPE_COUNT
 } ItemType;
 
@@ -77,6 +80,9 @@ static const int ITEM_WIDTH[] = {
     [ITEM_STAIRS] = 8,       /* 64px — sprite 448/7 = 64px per frame ✓ */
     [ITEM_ESCALATOR] = 8,    /* 64px — sprite 512/8 = 64px per frame ✓ */
     [ITEM_ELEVATOR_SHAFT] = 4, /* 32px (standard) */
+    [ITEM_ELEVATOR_SERVICE] = 4,
+    [ITEM_ELEVATOR_EXPRESS] = 4,
+    [ITEM_HOUSEKEEPING] = 4,
 };
 
 /* Item heights in floors */
@@ -103,6 +109,9 @@ static const int ITEM_HEIGHT[] = {
     [ITEM_STAIRS] = 2,       /* OpenSkyscraper: int2(8,2) */
     [ITEM_ESCALATOR] = 2,    /* OpenSkyscraper: int2(8,2) */
     [ITEM_ELEVATOR_SHAFT] = 1,
+    [ITEM_ELEVATOR_SERVICE] = 1,
+    [ITEM_ELEVATOR_EXPRESS] = 1,
+    [ITEM_HOUSEKEEPING] = 1,
 };
 
 /* Item costs — CANONICAL from SimTower (GameFAQs BStuart guide) */
@@ -128,7 +137,10 @@ static const int ITEM_COST[] = {
     [ITEM_RECYCLING] = 500000,
     [ITEM_STAIRS] = 5000,
     [ITEM_ESCALATOR] = 20000,
-    [ITEM_ELEVATOR_SHAFT] = 200000,
+    [ITEM_ELEVATOR_SHAFT] = 200000,   /* Standard elevator */
+    [ITEM_ELEVATOR_SERVICE] = 80000,  /* Service elevator */
+    [ITEM_ELEVATOR_EXPRESS] = 400000, /* Express elevator */
+    [ITEM_HOUSEKEEPING] = 100000,
 };
 
 /* Which items are underground-only */
@@ -144,6 +156,7 @@ static const int ITEM_UNDERGROUND_ONLY[] = {
     [ITEM_MEDICAL] = 0, [ITEM_SECURITY] = 0,
     [ITEM_RECYCLING] = 1,   /* Underground only */
     [ITEM_STAIRS] = 0, [ITEM_ESCALATOR] = 0, [ITEM_ELEVATOR_SHAFT] = 0,
+    [ITEM_ELEVATOR_SERVICE] = 0, [ITEM_ELEVATOR_EXPRESS] = 0, [ITEM_HOUSEKEEPING] = 0,
 };
 
 /* A single cell in the tower grid */

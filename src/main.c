@@ -190,8 +190,11 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
     case ITEM_STAIRS:        *frame_w = 64;  return SPR_STAIRS_COMP;
     case ITEM_ESCALATOR:     *frame_w = 64;  return SPR_ESCALATOR_COMP;
-    case ITEM_ELEVATOR_SHAFT:*frame_w = 32;  return SPR_ELEV_SHAFT;
+    case ITEM_ELEVATOR_SHAFT:
+    case ITEM_ELEVATOR_SERVICE:
+    case ITEM_ELEVATOR_EXPRESS: *frame_w = 32; return SPR_ELEV_SHAFT; /* reuse shaft art for now */
     case ITEM_FLOOR:         *frame_w = 0;   return 0;
+    case ITEM_HOUSEKEEPING:  *frame_w = 0;   return 0; /* no exterior sprite yet (fallback block) */
     default:                 *frame_w = 0;   return 0;
     }
 }
@@ -217,6 +220,7 @@ static void item_fallback_color(ItemType type, uint8_t *r, uint8_t *g, uint8_t *
     case ITEM_SECURITY:     *r=180; *g=180; *b=200; break;
     case ITEM_RECYCLING:    *r=100; *g=180; *b=100; break;
     case ITEM_FLOOR:        *r=200; *g=200; *b=200; break;
+    case ITEM_HOUSEKEEPING: *r=200; *g=190; *b=160; break;
     default:                *r=100; *g=100; *b=100; break;
     }
 }
@@ -1756,13 +1760,17 @@ static const ToolButton tool_buttons[] = {
     /* Steps group: stairs / escalator (click-and-hold) */
     { "STR",  ITEM_STAIRS,         2,  180, 175, 170,
       { ITEM_STAIRS, ITEM_ESCALATOR }, { 2, 3 }, 2 },
-    TB("ELV",  ITEM_ELEVATOR_SHAFT, 4,  160, 170, 180),
+    /* Elevator group: standard / service / express (click-and-hold) */
+    { "ELV",  ITEM_ELEVATOR_SHAFT, 4,  160, 170, 180,
+      { ITEM_ELEVATOR_SHAFT, ITEM_ELEVATOR_SERVICE, ITEM_ELEVATOR_EXPRESS }, { 4, 5, 6 }, 3 },
     TB("PKG",  ITEM_PARKING,       17,  160, 160, 160),
     TB("RCY",  ITEM_RECYCLING,     18,  100, 180, 100),
     TB("MTR",  ITEM_METRO,         19,  100, 100, 120),
     TB("CTH",  ITEM_CATHEDRAL,     20,  230, 220, 200),
     TB("MED",  ITEM_MEDICAL,       22,  220, 240, 240),
-    TB("SEC",  ITEM_SECURITY,      25,  180, 180, 200),
+    /* Services group: security / housekeeping (click-and-hold) */
+    { "SEC",  ITEM_SECURITY,      25,  180, 180, 200,
+      { ITEM_SECURITY, ITEM_HOUSEKEEPING }, { 25, 23 }, 2 },
 };
 #undef TB
 #define TOOL_BTN_COUNT 18
@@ -3267,6 +3275,9 @@ int main(int argc, char *argv[])
     game.info_y = 0;   /* Top right */
     game.win_dragging = 0;
     game.tool_popup = -1;
+    /* Test affordance: --screenshot renders one input-less frame, so allow forcing
+     * a group's pull-down open for visual verification (TB_POPUP=<button index>). */
+    if (getenv("TB_POPUP")) game.tool_popup = atoi(getenv("TB_POPUP"));
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     

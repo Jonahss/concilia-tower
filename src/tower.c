@@ -382,7 +382,8 @@ const char *tower_item_name(ItemType type)
         "None", "Lobby", "Floor", "Office", "Condo", "Hotel(S)", "Hotel(T)",
         "Hotel(Suite)", "Restaurant", "Fast Food", "Shop", "Cinema", "Party Hall",
         "Metro", "Parking", "Cathedral", "Medical", "Security", "Recycling",
-        "Stairs", "Escalator", "Elevator"
+        "Stairs", "Escalator", "Elevator",
+        "Service Elev", "Express Elev", "Housekeeping"
     };
     if (type >= 0 && type < ITEM_TYPE_COUNT) return names[type];
     return "Unknown";
