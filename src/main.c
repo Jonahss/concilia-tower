@@ -1383,8 +1383,8 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define MAP_WIN_W   200       /* Map window (left side) */
 #define MAP_WIN_H   280       /* Map height (sky + ground) */
 
-#define TOOL_WIN_W  200       /* Toolbox same width as map, stacked below */
-#define TOOL_WIN_H  290       /* Fits play/pause + tools + 5-row icon grid + cost */
+#define TOOL_WIN_W  128       /* Faithful toolbox width (toolbox.rml: 128px = 4×32 icons) */
+#define TOOL_WIN_H  264       /* Fits play/pause + tools + 5-row icon grid + cost */
 
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 {
@@ -1723,8 +1723,8 @@ static void render_minimap(void)
  * Stacked below the minimap on the LEFT (like original toolbox.rml). */
 
 #define TOOL_BTN_SIZE 32    /* Match original 32×32 icon size */
-#define TOOL_BTN_PAD  2
-#define TOOL_COLS   5
+#define TOOL_BTN_PAD  0     /* Original buttons abut edge-to-edge (bevel is in the art) */
+#define TOOL_COLS   4       /* 4×32 = the faithful 128px window width */
 
 /* Tool button layout.
  * icon_idx = position in the items bitmap (from OpenSkyscraper Item/*.h).
@@ -1800,7 +1800,8 @@ static int tool_grid_origin_y(void)
 static void tool_button_rect(int i, int *bx, int *by)
 {
     int col = i % TOOL_COLS, row = i / TOOL_COLS;
-    *bx = game.tool_x + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+    int margin = (TOOL_WIN_W - TOOL_COLS * (TOOL_BTN_SIZE + TOOL_BTN_PAD)) / 2;
+    *bx = game.tool_x + margin + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
     *by = tool_grid_origin_y() + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
 }
 
@@ -1983,9 +1984,9 @@ static void render_toolbox(void)
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            int dw = ts->w > TOOL_WIN_W - 12 ? TOOL_WIN_W - 12 : ts->w;
+            int dw = ts->w > TOOL_WIN_W - 8 ? TOOL_WIN_W - 8 : ts->w;
             SDL_Rect src2 = { 0, 0, dw, ts->h };
-            SDL_Rect dst = { wx + 6, label_y, dw, ts->h };
+            SDL_Rect dst = { wx + 4, label_y, dw, ts->h };
             SDL_RenderCopy(game.renderer, tt, &src2, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
