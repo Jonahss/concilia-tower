@@ -235,6 +235,7 @@ typedef struct {
     SDL_Renderer   *renderer;
     TTF_Font       *font;
     TTF_Font       *font_small;
+    TTF_Font       *font_info;   /* 13px — time.rml stats/date size */
     int             running;
     int             screen_w, screen_h;
     int             show_debug;   /* Toggle diagnostic labels */
@@ -1516,12 +1517,12 @@ static void render_info_window(void)
     int clock_cy = wy + INFO_BAR_H / 2;
     draw_analog_clock(clock_cx, clock_cy, CLOCK_R, game.sim.hour, game.sim.minute);
     
-    /* Star rating (next to clock) — use actual star bitmaps from EXE */
-    int star_x = wx + 6 + CLOCK_R * 2 + 8;
+    /* Star rating — time.rml: left 42, top 2, block 108×22 (pitch 108/5) */
+    int star_x = wx + 42;
     if (game.ui_star[0] && game.ui_star[1]) {
         for (int i = 0; i < 5; i++) {
             int filled = (i < game.tower.star_rating) ? 1 : 0;
-            SDL_Rect dst = { star_x + i * (game.ui_star_w + 1), wy + 2,
+            SDL_Rect dst = { star_x + (i * 108) / 5, wy + 2,
                             game.ui_star_w, game.ui_star_h };
             SDL_RenderCopy(game.renderer, game.ui_star[filled], NULL, &dst);
         }
@@ -1548,60 +1549,70 @@ static void render_info_window(void)
         }
     }
     
-    /* Date info (center area): "1st WD / 2Q / 83rd Year" style */
-    if (game.font_small) {
+    /* Date — time.rml: left 160, top 3, 13px, "1st WD / 2Q / 83rd Year" */
+    TTF_Font *finfo = game.font_info ? game.font_info : game.font_small;
+    if (finfo) {
         SDL_Color black = {0, 0, 0, 255};
+        static const char *wd_names[] = { "1st WD", "2nd WD", "3rd WD", "WE" };
+        const char *wd = (game.sim.quarter >= 0 && game.sim.quarter < 4)
+                         ? wd_names[game.sim.quarter] : "?";
+        int q = (game.tower.day - 1) % 4 + 1;
+        int year = (game.tower.day - 1) / 4 + 1;
+        int ylast = year % 10, yten = year % 100;
+        const char *ysuf = (yten >= 11 && yten <= 13) ? "th"
+                         : ylast == 1 ? "st" : ylast == 2 ? "nd"
+                         : ylast == 3 ? "rd" : "th";
         char date_buf[64];
-        const char *qname = game_quarter_name(game.sim.quarter);
-        snprintf(date_buf, sizeof(date_buf), "%s / Day %d", qname, game.tower.day);
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, date_buf, black);
+        snprintf(date_buf, sizeof(date_buf), "%s / %dQ / %d%s Year",
+                 wd, q, year, ysuf);
+        SDL_Surface *ts = TTF_RenderText_Blended(finfo, date_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { star_x, wy + 16, ts->w, ts->h };
+            SDL_Rect dst = { wx + 160, wy + 3, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
     }
-    
-    /* Funds (right-aligned, top) */
-    if (game.font_small) {
+
+    /* Funds — time.rml: right-aligned 6px from edge, top 2 */
+    if (finfo) {
         SDL_Color black = {0, 0, 0, 255};
         char money_buf[64];
         format_money(game.tower.money, money_buf, sizeof(money_buf));
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, money_buf, black);
+        SDL_Surface *ts = TTF_RenderText_Blended(finfo, money_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 8, wy + 3, ts->w, ts->h };
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 2, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
-        
-        /* Population (right-aligned, bottom) */
+
+        /* Population — time.rml: right 6, top 19, bare number */
         char pop_buf[32];
-        snprintf(pop_buf, sizeof(pop_buf), "Pop: %d", game.tower.population);
-        ts = TTF_RenderText_Blended(game.font_small, pop_buf, black);
+        snprintf(pop_buf, sizeof(pop_buf), "%d", game.tower.population);
+        ts = TTF_RenderText_Blended(finfo, pop_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 8, wy + 16, ts->w, ts->h };
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 19, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
     }
-    
-    /* Message strip at bottom of info bar */
+
+    /* Message strip — time.rml: top 22, padding-left 42, padding-right 130, 11px */
     if (game.font_small && event_msg_total > 0) {
         SDL_Color dk = {0, 0, 100, 255};
         int idx = (event_msg_head - 1 + EVENT_MSG_COUNT) % EVENT_MSG_COUNT;
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, event_messages[idx], dk);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            int max_w = INFO_BAR_W - star_x + wx - 16;
+            int max_w = INFO_BAR_W - 42 - 130;
             int dw = ts->w > max_w ? max_w : ts->w;
             SDL_Rect src2 = { 0, 0, dw, ts->h };
-            SDL_Rect dst = { star_x + 100, wy + 28, dw, ts->h };
+            SDL_Rect dst = { wx + 42, wy + 22, dw, ts->h };
             SDL_RenderCopy(game.renderer, tt, &src2, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
@@ -2824,6 +2835,7 @@ static void init_fonts(void)
         if (game.font) {
             printf("Font loaded: %s\n", font_paths[i]);
             game.font_small = TTF_OpenFont(font_paths[i], 11);
+            game.font_info = TTF_OpenFont(font_paths[i], 13);
             return;
         }
     }
@@ -3443,6 +3455,7 @@ int main(int argc, char *argv[])
     sprites_free(&game.sprites);
     if (game.font) TTF_CloseFont(game.font);
     if (game.font_small) TTF_CloseFont(game.font_small);
+    if (game.font_info) TTF_CloseFont(game.font_info);
     TTF_Quit();
     SDL_DestroyRenderer(game.renderer);
     SDL_DestroyWindow(game.window);
