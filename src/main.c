@@ -284,6 +284,9 @@ typedef struct {
     int             map_x, map_y;    /* Minimap window */
     int             tool_x, tool_y;  /* Toolbox window */
     
+    /* Toolbox group pull-down (click-and-hold) state */
+    int             tool_popup;      /* index into tool_buttons[] whose sub-menu is open, or -1 */
+
     /* Window dragging state */
     int             win_dragging;    /* 0=none, 1=info, 2=map, 3=toolbox */
     int             win_drag_ox;     /* Mouse offset from window origin at drag start */
@@ -1710,46 +1713,144 @@ static void render_minimap(void)
 /* Tool button layout.
  * icon_idx = position in the items bitmap (from OpenSkyscraper Item/*.h).
  * -1 = no bitmap icon, use label text fallback. */
+/* A toolbar slot. If sub_count == 0 it's a plain button that selects `type`.
+ * If sub_count > 0 it's a GROUP: the button shows icon_idx (the primary, = sub[0]),
+ * and click-and-hold pulls down a menu of the sub-items (faithful to the original
+ * "click and hold for a pop-up menu" behavior). */
+#define TOOL_SUB_MAX 4
 typedef struct {
     const char *label;
     ItemType    type;
     int         icon_idx;
     uint8_t     r, g, b;  /* Fallback icon color */
+    ItemType    sub[TOOL_SUB_MAX];
+    int         sub_icon[TOOL_SUB_MAX];
+    int         sub_count;
 } ToolButton;
 
-/* Icon indices VERIFIED by dumping the real button sheet (SIMTOWER.EXE res
- * 0x812C) — 26 icons, row-major 8-per-row. The loader flattens that grid into a
- * 26-wide strip, so icon_idx is the flat 0..25 position. Verified cells:
- *  0=Lobby 1=Floor 2=Stairs 3=Escalator 4=room 5=room($) 6=room 7=office(desk)
- *  8=HotelSingle(1) 9=HotelTwin(2) 10=HotelSuite(S) 11=FastFood 12=Restaurant
- *  13=Shop 14=Cinema 15=PartyHall 16=Elevator 17=Parking(P) 18=Recycling
- *  19=Metro 20=Cathedral 21=? 22=Medical(H) 23=Housekeeping 24=? 25=Security(SECOM)
- * NOTE: office vs condo among 4/5/6/7 is a best guess (7=office desk is clear;
- * condo=4); confirm visually. */
+/* Icon indices — AUTHORITATIVE, from OpenSkyscraper's item prototypes (p->icon)
+ * cross-checked against the dumped SIMTOWER.EXE sheet (res 0x812C, 26 icons,
+ * row-major 8/row; the loader flattens to a 26-wide strip so icon_idx = flat
+ * 0..25 cell):
+ *  0=Lobby 1=Floor 2=Stairs 3=Escalator 4=Elevator(standard) 5=Elevator(service)
+ *  6=Elevator(express) 7=Office 8=HotelSingle 9=HotelTwin 10=HotelSuite
+ *  11=FastFood 12=Restaurant 13=Shop 14=Cinema 15=PartyHall 17=Parking
+ *  18=Recycling 19=Metro 20=Cathedral 22=Medical 23=Housekeeping 24=Condo
+ *  25=Security. (4/5/6 are the three elevator types; 24=Condo, not a generic
+ *  room — confirmed by Jonah + OS Condo.h.) */
+/* Plain (non-group) button — zero-fills the sub-menu fields. */
+#define TB(lbl, ty, ic, r, g, b) { lbl, ty, ic, r, g, b, {0}, {0}, 0 }
 static const ToolButton tool_buttons[] = {
-    { "LOB",  ITEM_LOBBY,          0,  210, 200, 160 },
-    { "FLR",  ITEM_FLOOR,          1,  200, 200, 190 },
-    { "OFF",  ITEM_OFFICE,         7,  200, 200, 150 },
-    { "CND",  ITEM_CONDO,          4,  180, 220, 180 },
-    { "H1",   ITEM_HOTEL_SINGLE,   8,  150, 150, 220 },
-    { "H2",   ITEM_HOTEL_TWIN,     9,  140, 140, 230 },
-    { "H3",   ITEM_HOTEL_SUITE,   10,  120, 120, 240 },
-    { "FF",   ITEM_FAST_FOOD,     11,  220, 220, 100 },
-    { "RST",  ITEM_RESTAURANT,    12,  220, 180, 150 },
-    { "SHP",  ITEM_SHOP,          13,  220, 160, 220 },
-    { "CIN",  ITEM_CINEMA,        14,   80,  60, 120 },
-    { "PTY",  ITEM_PARTY_HALL,    15,  200, 100, 180 },
-    { "STR",  ITEM_STAIRS,         2,  180, 175, 170 },
-    { "ESC",  ITEM_ESCALATOR,      3,  170, 170, 180 },
-    { "ELV",  ITEM_ELEVATOR_SHAFT,16,  160, 170, 180 },
-    { "PKG",  ITEM_PARKING,       17,  160, 160, 160 },
-    { "RCY",  ITEM_RECYCLING,     18,  100, 180, 100 },
-    { "MTR",  ITEM_METRO,         19,  100, 100, 120 },
-    { "CTH",  ITEM_CATHEDRAL,     20,  230, 220, 200 },
-    { "MED",  ITEM_MEDICAL,       22,  220, 240, 240 },
-    { "SEC",  ITEM_SECURITY,      25,  180, 180, 200 },
+    TB("LOB",  ITEM_LOBBY,          0,  210, 200, 160),
+    TB("FLR",  ITEM_FLOOR,          1,  200, 200, 190),
+    TB("OFF",  ITEM_OFFICE,         7,  200, 200, 150),
+    TB("CND",  ITEM_CONDO,         24,  180, 220, 180),
+    /* Hotel group: single / twin / suite (click-and-hold) */
+    { "HTL",  ITEM_HOTEL_SINGLE,   8,  150, 150, 220,
+      { ITEM_HOTEL_SINGLE, ITEM_HOTEL_TWIN, ITEM_HOTEL_SUITE }, { 8, 9, 10 }, 3 },
+    TB("FF",   ITEM_FAST_FOOD,     11,  220, 220, 100),
+    TB("RST",  ITEM_RESTAURANT,    12,  220, 180, 150),
+    TB("SHP",  ITEM_SHOP,          13,  220, 160, 220),
+    TB("CIN",  ITEM_CINEMA,        14,   80,  60, 120),
+    TB("PTY",  ITEM_PARTY_HALL,    15,  200, 100, 180),
+    /* Steps group: stairs / escalator (click-and-hold) */
+    { "STR",  ITEM_STAIRS,         2,  180, 175, 170,
+      { ITEM_STAIRS, ITEM_ESCALATOR }, { 2, 3 }, 2 },
+    TB("ELV",  ITEM_ELEVATOR_SHAFT, 4,  160, 170, 180),
+    TB("PKG",  ITEM_PARKING,       17,  160, 160, 160),
+    TB("RCY",  ITEM_RECYCLING,     18,  100, 180, 100),
+    TB("MTR",  ITEM_METRO,         19,  100, 100, 120),
+    TB("CTH",  ITEM_CATHEDRAL,     20,  230, 220, 200),
+    TB("MED",  ITEM_MEDICAL,       22,  220, 240, 240),
+    TB("SEC",  ITEM_SECURITY,      25,  180, 180, 200),
 };
-#define TOOL_BTN_COUNT 21
+#undef TB
+#define TOOL_BTN_COUNT 18
+
+/* Geometry helpers — single source of truth shared by render_toolbox,
+ * toolbox_click and the pull-down popup so they never drift apart. */
+static int tool_grid_origin_y(void)
+{
+    int wy = game.tool_y + WIN_TITLEBAR_H;
+    int speed_y = wy + 8;
+    int tools_y = speed_y + 28;
+    return tools_y + 26;            /* grid_y */
+}
+
+static void tool_button_rect(int i, int *bx, int *by)
+{
+    int col = i % TOOL_COLS, row = i / TOOL_COLS;
+    *bx = game.tool_x + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+    *by = tool_grid_origin_y() + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+}
+
+/* Rect of sub-item j (0-based) in the pull-down for group button i — a vertical
+ * column directly below the group button. */
+static void tool_sub_rect(int i, int j, int *bx, int *by)
+{
+    int gx, gy;
+    tool_button_rect(i, &gx, &gy);
+    *bx = gx;
+    *by = gy + (j + 1) * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
+}
+
+/* Draw one 32×32 item icon (from ui_items) with a raised/sunken 3D border. */
+static void draw_tool_icon(int bx, int by, int icon_idx, int selected)
+{
+    if (!selected) {
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
+        SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
+        SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+        SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+        SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+    } else {
+        SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+        SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
+        SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+        SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
+    }
+    if (game.ui_items && icon_idx >= 0) {
+        int off = selected ? 1 : 0;
+        SDL_Rect src = { icon_idx * 32, selected ? 32 : 0, 32, 32 };
+        SDL_Rect dst = { bx + off, by + off, TOOL_BTN_SIZE, TOOL_BTN_SIZE };
+        SDL_RenderCopy(game.renderer, game.ui_items, &src, &dst);
+    }
+}
+
+/* Small triangle in the lower-right corner marking a group (pull-down) button. */
+static void draw_pulldown_marker(int bx, int by)
+{
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    for (int k = 0; k < 5; k++) {
+        SDL_RenderDrawLine(game.renderer,
+                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3,
+                           bx + TOOL_BTN_SIZE - 2,     by + TOOL_BTN_SIZE - 3);
+        SDL_RenderDrawLine(game.renderer,
+                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3 - k,
+                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3);
+    }
+}
+
+/* Render the open pull-down menu (if any) on top of the toolbox. */
+static void render_tool_popup(void)
+{
+    int i = game.tool_popup;
+    if (i < 0 || i >= TOOL_BTN_COUNT) return;
+    const ToolButton *g = &tool_buttons[i];
+    if (g->sub_count <= 0) return;
+    for (int j = 0; j < g->sub_count; j++) {
+        int bx, by;
+        tool_sub_rect(i, j, &bx, &by);
+        /* Opaque background so the pull-down reads as a menu over the grid. */
+        SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+        SDL_Rect bg = { bx - 1, by - 1, TOOL_BTN_SIZE + 2, TOOL_BTN_SIZE + 2 };
+        SDL_RenderFillRect(game.renderer, &bg);
+        draw_tool_icon(bx, by, g->sub_icon[j], g->sub[j] == game.build_type);
+    }
+}
 
 static void render_toolbox(void)
 {
@@ -1803,64 +1904,35 @@ static void render_toolbox(void)
     /* Item buttons grid */
     int grid_y = tools_y + 26;
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
-        int col = i % TOOL_COLS;
-        int row = i / TOOL_COLS;
-        int bx = wx + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
-        int by = grid_y + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
-        
-        int selected = (tool_buttons[i].type == game.build_type);
-        
-        /* 3D border: raised when normal, sunken when selected */
-        if (!selected) {
-            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-            SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
-            SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
-            SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-            SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, 
-                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
-            SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
-                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
-        } else {
-            SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
-            SDL_RenderDrawLine(game.renderer, bx, by, bx + TOOL_BTN_SIZE - 1, by);
-            SDL_RenderDrawLine(game.renderer, bx, by, bx, by + TOOL_BTN_SIZE - 1);
-            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-            SDL_RenderDrawLine(game.renderer, bx, by + TOOL_BTN_SIZE - 1, 
-                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
-            SDL_RenderDrawLine(game.renderer, bx + TOOL_BTN_SIZE - 1, by, 
-                              bx + TOOL_BTN_SIZE - 1, by + TOOL_BTN_SIZE - 1);
-        }
-        
-        /* Button content: bitmap icon if available, text label fallback */
-        int icon_drawn = 0;
-        if (game.ui_items && tool_buttons[i].icon_idx >= 0) {
-            int icon_x = tool_buttons[i].icon_idx * 32;
-            int icon_y = selected ? 32 : 0;  /* Pressed row vs normal row */
-            SDL_Rect src = { icon_x, icon_y, 32, 32 };
-            int offset = selected ? 1 : 0;  /* Shift 1px down-right when pressed */
-            SDL_Rect dst = { bx + offset, by + offset, TOOL_BTN_SIZE, TOOL_BTN_SIZE };
-            SDL_RenderCopy(game.renderer, game.ui_items, &src, &dst);
-            icon_drawn = 1;
-        }
-        
-        if (!icon_drawn && game.font_small) {
+        int bx, by;
+        tool_button_rect(i, &bx, &by);
+        const ToolButton *tb = &tool_buttons[i];
+
+        /* A group button stays highlighted when any of its sub-items is active. */
+        int selected = (tb->type == game.build_type);
+        for (int j = 0; j < tb->sub_count; j++)
+            if (tb->sub[j] == game.build_type) selected = 1;
+
+        if (game.ui_items && tb->icon_idx >= 0) {
+            draw_tool_icon(bx, by, tb->icon_idx, selected);
+        } else if (game.font_small) {
             /* Fallback: colored square + text label */
-            SDL_SetRenderDrawColor(game.renderer, 
-                tool_buttons[i].r, tool_buttons[i].g, tool_buttons[i].b, 255);
+            SDL_SetRenderDrawColor(game.renderer, tb->r, tb->g, tb->b, 255);
             SDL_Rect btn = { bx + 2, by + 2, TOOL_BTN_SIZE - 4, TOOL_BTN_SIZE - 4 };
             SDL_RenderFillRect(game.renderer, &btn);
-            
             SDL_Color black = {0, 0, 0, 255};
-            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, tool_buttons[i].label, black);
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, tb->label, black);
             if (ts) {
                 SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-                SDL_Rect dst = { bx + TOOL_BTN_SIZE/2 - ts->w/2, 
+                SDL_Rect dst = { bx + TOOL_BTN_SIZE/2 - ts->w/2,
                                  by + TOOL_BTN_SIZE/2 - ts->h/2, ts->w, ts->h };
                 SDL_RenderCopy(game.renderer, tt, NULL, &dst);
                 SDL_DestroyTexture(tt);
                 SDL_FreeSurface(ts);
             }
         }
+
+        if (tb->sub_count > 0) draw_pulldown_marker(bx, by);
     }
     
     /* Cost display at bottom */
@@ -1886,6 +1958,9 @@ static void render_toolbox(void)
             SDL_FreeSurface(ts);
         }
     }
+
+    /* Pull-down menu (if a group button is open) draws last, on top of all else. */
+    render_tool_popup();
 }
 
 /* Draw a Win3.1-style raised/sunken rectangle */
@@ -2171,23 +2246,43 @@ static int toolbox_click(int mx, int my)
         }
     }
     
-    /* Tool action buttons */
-    int tools_y = speed_y + 28;
-    
-    /* Tool item buttons */
-    int grid_y = tools_y + 26;
+    /* If a pull-down is open, a click on one of its sub-items selects that item. */
+    if (game.tool_popup >= 0 && game.tool_popup < TOOL_BTN_COUNT) {
+        const ToolButton *g = &tool_buttons[game.tool_popup];
+        for (int j = 0; j < g->sub_count; j++) {
+            int bx, by;
+            tool_sub_rect(game.tool_popup, j, &bx, &by);
+            if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
+                game.build_type = g->sub[j];
+                game.tool_popup = -1;
+                printf("Build: %s\n", tower_item_name(game.build_type));
+                return 1;
+            }
+        }
+    }
+
+    /* Item buttons grid (groups toggle their pull-down; singles select directly). */
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
-        int col = i % TOOL_COLS;
-        int row = i / TOOL_COLS;
-        int bx = wx + 6 + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
-        int by = grid_y + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
-        
-        if (mx >= bx && mx < bx + TOOL_BTN_SIZE &&
-            my >= by && my < by + TOOL_BTN_SIZE) {
-            game.build_type = tool_buttons[i].type;
+        int bx, by;
+        tool_button_rect(i, &bx, &by);
+        if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
+            const ToolButton *tb = &tool_buttons[i];
+            if (tb->sub_count > 0) {
+                game.tool_popup = (game.tool_popup == i) ? -1 : i;  /* toggle */
+            } else {
+                game.tool_popup = -1;
+            }
+            game.build_type = tb->type;   /* primary (= sub[0] for a group) */
             printf("Build: %s\n", tower_item_name(game.build_type));
             return 1;
         }
+    }
+
+    /* Click elsewhere while a pull-down is open dismisses it (and consumes the
+     * click so it can't accidentally place a facility in the tower). */
+    if (game.tool_popup >= 0) {
+        game.tool_popup = -1;
+        return 1;
     }
     return 0;
 }
@@ -2597,6 +2692,20 @@ static void handle_event(SDL_Event *ev)
             if (game.win_dragging) {
                 game.win_dragging = 0;
                 break;
+            }
+            /* Click-and-hold pull-down: releasing over a sub-item selects it. */
+            if (game.tool_popup >= 0 && game.tool_popup < TOOL_BTN_COUNT) {
+                const ToolButton *g = &tool_buttons[game.tool_popup];
+                for (int j = 0; j < g->sub_count; j++) {
+                    int bx, by;
+                    tool_sub_rect(game.tool_popup, j, &bx, &by);
+                    if (ev->button.x >= bx && ev->button.x < bx + TOOL_BTN_SIZE &&
+                        ev->button.y >= by && ev->button.y < by + TOOL_BTN_SIZE) {
+                        game.build_type = g->sub[j];
+                        game.tool_popup = -1;
+                        break;
+                    }
+                }
             }
             /* Stop building placement drag */
             if (game.dragging) {
@@ -3157,6 +3266,7 @@ int main(int argc, char *argv[])
     game.info_x = game.screen_w - INFO_BAR_W;
     game.info_y = 0;   /* Top right */
     game.win_dragging = 0;
+    game.tool_popup = -1;
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     
