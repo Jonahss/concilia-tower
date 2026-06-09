@@ -1519,15 +1519,19 @@ static void render_info_window(void)
     
     /* Star rating — left 42, top 2. The original shows the earned stars in
      * gold plus ONE grey star for the next level to reach (that's why the EXE
-     * has exactly two star bitmaps), side by side at their native 24px. */
+     * has exactly two star bitmaps). The 24px-wide bitmaps carry 3 columns of
+     * pure-white PADDING on the right (pixel-scanned; the star highlights are
+     * cream, never white) — the real cell is 21px, so crop and pitch at 21. */
+    #define STAR_CELL_W 21
     int star_x = wx + 42;
     if (game.ui_star[0] && game.ui_star[1]) {
         int shown = game.tower.star_rating < 5 ? game.tower.star_rating + 1 : 5;
         for (int i = 0; i < shown; i++) {
             int filled = (i < game.tower.star_rating) ? 1 : 0;
-            SDL_Rect dst = { star_x + i * game.ui_star_w, wy + 2,
-                            game.ui_star_w, game.ui_star_h };
-            SDL_RenderCopy(game.renderer, game.ui_star[filled], NULL, &dst);
+            SDL_Rect src = { 0, 0, STAR_CELL_W, game.ui_star_h };
+            SDL_Rect dst = { star_x + i * STAR_CELL_W, wy + 2,
+                            STAR_CELL_W, game.ui_star_h };
+            SDL_RenderCopy(game.renderer, game.ui_star[filled], &src, &dst);
         }
     } else if (game.font_small) {
         /* Fallback: UTF-8 stars */
