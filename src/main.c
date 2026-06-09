@@ -241,6 +241,7 @@ typedef struct {
     
     /* Build mode */
     ItemType        build_type;
+    int             demolish_mode;   /* Bulldozer active: clicks remove facilities */
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
     
@@ -1265,7 +1266,7 @@ static void render_tower(void)
 
 static void render_build_ghost(void)
 {
-    if (game.build_type == ITEM_NONE) return;
+    if (game.demolish_mode || game.build_type == ITEM_NONE) return;
     
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
@@ -1903,7 +1904,9 @@ static void render_toolbox(void)
          * (x=t*21, normal row y=0). */
         int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
         for (int t = 0; t < 3; t++) {
-            SDL_Rect src = { t * 21, 0, 21, 21 };
+            /* Bulldozer (t==0) draws pressed (row y=21) while demolish mode is on. */
+            int row_y = (t == 0 && game.demolish_mode) ? 21 : 0;
+            SDL_Rect src = { t * 21, row_y, 21, 21 };
             SDL_Rect dst = { tx + t * 23, tools_y, 21, 21 };
             SDL_RenderCopy(game.renderer, game.ui_tools, &src, &dst);
         }
@@ -2253,7 +2256,28 @@ static int toolbox_click(int mx, int my)
             }
         }
     }
-    
+
+    /* Tool action buttons (bulldozer / finger / inspector) — must match render. */
+    {
+        int tools_y = speed_y + 28;
+        int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
+        if (my >= tools_y && my < tools_y + 21) {
+            for (int t = 0; t < 3; t++) {
+                int bxt = tx + t * 23;
+                if (mx >= bxt && mx < bxt + 21) {
+                    if (t == 0) {                 /* Bulldozer: toggle demolish mode */
+                        game.demolish_mode = !game.demolish_mode;
+                        if (game.demolish_mode) game.tool_popup = -1;
+                        printf("Bulldozer %s\n", game.demolish_mode ? "ON" : "off");
+                    } else {                      /* Finger / inspector: not yet wired */
+                        game.demolish_mode = 0;
+                    }
+                    return 1;
+                }
+            }
+        }
+    }
+
     /* If a pull-down is open, a click on one of its sub-items selects that item. */
     if (game.tool_popup >= 0 && game.tool_popup < TOOL_BTN_COUNT) {
         const ToolButton *g = &tool_buttons[game.tool_popup];
@@ -2263,6 +2287,7 @@ static int toolbox_click(int mx, int my)
             if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
                 game.build_type = g->sub[j];
                 game.tool_popup = -1;
+                game.demolish_mode = 0;
                 printf("Build: %s\n", tower_item_name(game.build_type));
                 return 1;
             }
@@ -2281,6 +2306,7 @@ static int toolbox_click(int mx, int my)
                 game.tool_popup = -1;
             }
             game.build_type = tb->type;   /* primary (= sub[0] for a group) */
+            game.demolish_mode = 0;
             printf("Build: %s\n", tower_item_name(game.build_type));
             return 1;
         }
@@ -2679,6 +2705,21 @@ static void handle_event(SDL_Event *ev)
             /* Block clicks that land on any window body from reaching the game */
             if (point_in_any_window(ev->button.x, ev->button.y)) break;
             
+            /* Bulldozer: remove the facility under the cursor. */
+            if (game.demolish_mode) {
+                int fidx = floor_to_index(game.mouse_floor);
+                if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
+                    game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
+                    uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
+                    if (tid) {
+                        printf("Demolish: %s\n",
+                               tower_item_name(game.tower.grid[fidx][game.mouse_cell].type));
+                        tower_remove(&game.tower, tid);
+                    }
+                }
+                break;
+            }
+
             /* Normal game click */
             if (game.build_type != ITEM_NONE) {
                 game.dragging = 1;
@@ -3275,9 +3316,12 @@ int main(int argc, char *argv[])
     game.info_y = 0;   /* Top right */
     game.win_dragging = 0;
     game.tool_popup = -1;
-    /* Test affordance: --screenshot renders one input-less frame, so allow forcing
-     * a group's pull-down open for visual verification (TB_POPUP=<button index>). */
+    game.demolish_mode = 0;
+    /* Test affordances: --screenshot renders one input-less frame, so allow forcing
+     * UI states for visual verification — TB_POPUP=<button index> opens a group's
+     * pull-down; DEMOLISH=1 activates the bulldozer. */
     if (getenv("TB_POPUP")) game.tool_popup = atoi(getenv("TB_POPUP"));
+    if (getenv("DEMOLISH")) game.demolish_mode = 1;
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     
