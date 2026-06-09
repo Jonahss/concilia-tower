@@ -1517,12 +1517,15 @@ static void render_info_window(void)
     int clock_cy = wy + INFO_BAR_H / 2;
     draw_analog_clock(clock_cx, clock_cy, CLOCK_R, game.sim.hour, game.sim.minute);
     
-    /* Star rating — time.rml: left 42, top 2, block 108×22 (pitch 108/5) */
+    /* Star rating — left 42, top 2. The original shows the earned stars in
+     * gold plus ONE grey star for the next level to reach (that's why the EXE
+     * has exactly two star bitmaps), side by side at their native 24px. */
     int star_x = wx + 42;
     if (game.ui_star[0] && game.ui_star[1]) {
-        for (int i = 0; i < 5; i++) {
+        int shown = game.tower.star_rating < 5 ? game.tower.star_rating + 1 : 5;
+        for (int i = 0; i < shown; i++) {
             int filled = (i < game.tower.star_rating) ? 1 : 0;
-            SDL_Rect dst = { star_x + (i * 108) / 5, wy + 2,
+            SDL_Rect dst = { star_x + i * game.ui_star_w, wy + 2,
                             game.ui_star_w, game.ui_star_h };
             SDL_RenderCopy(game.renderer, game.ui_star[filled], NULL, &dst);
         }
@@ -1583,7 +1586,9 @@ static void render_info_window(void)
         SDL_Surface *ts = TTF_RenderText_Blended(finfo, money_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 2, ts->w, ts->h };
+            /* The bg art's Fund box interior is y3..18 — baseline-align with
+             * the baked-in "Fund" label, not the rml's top:2. */
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 4, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
@@ -1595,7 +1600,8 @@ static void render_info_window(void)
         ts = TTF_RenderText_Blended(finfo, pop_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 19, ts->w, ts->h };
+            /* Pop box interior is y21..36 in the bg art */
+            SDL_Rect dst = { wx + INFO_BAR_W - ts->w - 6, wy + 21, ts->w, ts->h };
             SDL_RenderCopy(game.renderer, tt, NULL, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
@@ -1609,10 +1615,11 @@ static void render_info_window(void)
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, event_messages[idx], dk);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            /* The bg art's sunken message groove interior is x41..301, y25..35 */
             int max_w = INFO_BAR_W - 42 - 130;
             int dw = ts->w > max_w ? max_w : ts->w;
             SDL_Rect src2 = { 0, 0, dw, ts->h };
-            SDL_Rect dst = { wx + 42, wy + 22, dw, ts->h };
+            SDL_Rect dst = { wx + 43, wy + 24, dw, ts->h };
             SDL_RenderCopy(game.renderer, tt, &src2, &dst);
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
@@ -3193,9 +3200,11 @@ int main(int argc, char *argv[])
             }
         }
         
-        /* Star rating: 0x8142=empty, 0x8143=filled (24×19 each) */
+        /* Star rating: 0x8142=GOLD (earned), 0x8143=GREY (next to earn) —
+         * verified by dumping both; the ids are the reverse of what the
+         * names suggest. ui_star[0]=grey/empty, [1]=gold/filled. */
         for (int si = 0; si < 2; si++) {
-            uint16_t sid = si == 0 ? 0x8142 : 0x8143;
+            uint16_t sid = si == 0 ? 0x8143 : 0x8142;
             NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, sid);
             if (res) {
                 SDL_Surface *surf = sprites_dib_to_surface(&game.sprites, res);
