@@ -189,6 +189,9 @@ typedef struct {
     int      complaints;   /* Strike count (3 = forced action). From MainteT. */
     int      zone;         /* Commercial zone (0-6, floors/15). From JudgeT. */
     int      upgrade_day;  /* Last upgrade day (3-day cadence). From MainteT. */
+    uint8_t  hosted;       /* Hotel room: guests stayed overnight */
+    uint8_t  dirty;        /* Hotel room: needs housekeeping before it can re-rent */
+    uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
 } Tenant;
 
 #define MAX_TENANTS 4096
@@ -210,6 +213,18 @@ typedef struct {
     int       cam_x;
     int       cam_y;
 } Tower;
+
+/* Vertical transport categories */
+static inline int item_is_elevator(ItemType t)
+{
+    return t == ITEM_ELEVATOR_SHAFT || t == ITEM_ELEVATOR_SERVICE ||
+           t == ITEM_ELEVATOR_EXPRESS;
+}
+
+static inline int item_is_transport(ItemType t)
+{
+    return t == ITEM_STAIRS || t == ITEM_ESCALATOR || item_is_elevator(t);
+}
 
 /* Convert floor number to grid array index */
 static inline int floor_to_index(int floor)

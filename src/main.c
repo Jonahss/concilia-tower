@@ -3410,7 +3410,19 @@ int main(int argc, char *argv[])
             int prev_hour = game.sim.hour;
             int prev_star = game.tower.star_rating;
             int prev_pop = game.tower.population;
+            int prev_unreach = game.sim.unreachable_tenants;
             game_update(&game.sim, &game.tower);
+
+            /* Commute feedback: units cut off from the entrance */
+            if (game.sim.unreachable_tenants > prev_unreach) {
+                char buf[48];
+                snprintf(buf, sizeof(buf), "%d unit%s cannot be reached!",
+                         game.sim.unreachable_tenants,
+                         game.sim.unreachable_tenants == 1 ? "" : "s");
+                add_event_message(buf);
+            } else if (prev_unreach > 0 && game.sim.unreachable_tenants == 0) {
+                add_event_message("All units connected.");
+            }
             
             /* Decide rainy day at 5 AM (from OpenSkyscraper: every 3rd day) */
             if (prev_hour == 4 && game.sim.hour == 5) {

@@ -68,9 +68,23 @@ int game_calc_population(GameSim *sim, Tower *tower)
         Tenant *t = &tower->tenants[i];
         if (t->type == ITEM_NONE || t->type == ITEM_LOBBY || t->type == ITEM_FLOOR)
             continue;
-        if (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR || 
-            t->type == ITEM_ELEVATOR_SHAFT) continue;
-        
+        if (item_is_transport(t->type)) continue;
+
+        /* Nobody can be somewhere they can't get to */
+        {
+            int fidx = floor_to_index(t->floor);
+            int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
+            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
+                !(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx])) {
+                t->population = 0;
+                continue;
+            }
+            if (t->dirty) {   /* dirty hotel room = no guests tonight */
+                t->population = 0;
+                continue;
+            }
+        }
+
         /* Check if this tenant type is active at current time of day */
         int type_idx = (int)t->type;
         if (type_idx < ITEM_TYPE_COUNT && TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day]) {
@@ -280,12 +294,24 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         Tenant *t = &tower->tenants[i];
         if (t->type == ITEM_NONE || t->type == ITEM_LOBBY || t->type == ITEM_FLOOR)
             continue;
-        if (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR || 
-            t->type == ITEM_ELEVATOR_SHAFT) continue;
-        
+        if (item_is_transport(t->type)) continue;
+
         int type_idx = (int)t->type;
-        int is_active = (type_idx < ITEM_TYPE_COUNT) ? 
+        int is_active = (type_idx < ITEM_TYPE_COUNT) ?
                         TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day] : 0;
+
+        /* Commute gating: space nobody can reach from the entrance never
+         * rents, and a dirty hotel room can't take guests until cleaned. */
+        int is_hotel = (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
+                        t->type == ITEM_HOTEL_SUITE);
+        {
+            int fidx = floor_to_index(t->floor);
+            int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
+            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
+                !(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]))
+                is_active = 0;
+            if (is_hotel && t->dirty) is_active = 0;
+        }
         
         /* State machine */
         switch ((TenantState)t->state) {
@@ -330,10 +356,19 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 
                 /* Stress management — from MainteT */
                 if (t->stress > 0) t->stress--;
+
+                /* Hotel guests staying the night leave a room to clean */
+                if (is_hotel && sim->time_of_day == TOD_NIGHT) t->hosted = 1;
             } else if (t->type != ITEM_CONDO) {
                 /* Close for the inactive period */
                 t->state = TENANT_VACANT;
                 /* Don't zero capacity here — let update_capacity handle the fade */
+
+                /* Checkout: the room needs housekeeping before it re-rents */
+                if (is_hotel && t->hosted) {
+                    t->dirty = 1;
+                    t->hosted = 0;
+                }
             }
             break;
             
@@ -379,10 +414,172 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
     *out_expenses += expenses;
 }
 
+/* --- Transport reachability ---
+ * The original never rents space people can't commute to: every floor must
+ * connect to the ground entrance via stairs, escalators or elevators.
+ * Two networks:
+ *   public  — tenants/visitors: stairs/escalators, standard elevators,
+ *             express elevators (lobby/sky-lobby/basement stops only)
+ *   service — staff (housekeeping/security): all of the above PLUS service
+ *             elevators (superset of public)
+ * Elevator type semantics from ElevatorsT (+0x0001: 0=standard, 1=express,
+ * 2=service). Car movement and wait times are NOT simulated yet — this is
+ * pure connectivity. */
+
+/* Does an elevator of this type stop at this floor (grid index)? */
+static int elevator_stops_at(ItemType ty, int fidx)
+{
+    if (ty != ITEM_ELEVATOR_EXPRESS) return 1;
+    int wf = index_to_floor(fidx);
+    return wf <= 0 || (wf % 15) == 0;   /* basements, ground, sky lobbies */
+}
+
+#define MAX_TRANSPORT_LINKS 1024
+
+void game_update_reachability(GameSim *sim, Tower *tower)
+{
+    memset(sim->reach_public, 0, sizeof(sim->reach_public));
+    memset(sim->reach_service, 0, sizeof(sim->reach_service));
+    int ground = floor_to_index(TOWER_LOBBY_FLOOR);
+    sim->reach_public[ground] = 1;
+    sim->reach_service[ground] = 1;
+
+    /* Collect stair/escalator links (floor f <-> f+1) once */
+    static int link_a[MAX_TRANSPORT_LINKS];
+    int link_count = 0;
+    for (int i = 0; i < tower->tenant_count && link_count < MAX_TRANSPORT_LINKS; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
+        int a = floor_to_index(t->floor);
+        if (a >= 0 && a + 1 < TOWER_FLOOR_COUNT) link_a[link_count++] = a;
+    }
+
+    /* Collect elevator shaft runs once: contiguous same-type segments in a
+     * column form one shaft. (Each segment's leftmost cell marks presence.) */
+    typedef struct { ItemType ty; int lo, hi; } ShaftRun;
+    static ShaftRun runs[MAX_TRANSPORT_LINKS];
+    int run_count = 0;
+    for (int x = 0; x < TOWER_WIDTH && run_count < MAX_TRANSPORT_LINKS; x++) {
+        for (int f = 0; f < TOWER_FLOOR_COUNT; ) {
+            TowerCell *c = &tower->grid[f][x];
+            if (!item_is_elevator(c->type) || c->cell_index != 0) { f++; continue; }
+            ItemType ty = c->type;
+            int lo = f;
+            while (f < TOWER_FLOOR_COUNT && tower->grid[f][x].type == ty &&
+                   tower->grid[f][x].cell_index == 0) f++;
+            runs[run_count].ty = ty;
+            runs[run_count].lo = lo;
+            runs[run_count].hi = f - 1;
+            if (++run_count >= MAX_TRANSPORT_LINKS) break;
+        }
+    }
+
+    /* Fixed-point relaxation over the links until nothing new is reached */
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int i = 0; i < link_count; i++) {
+            int a = link_a[i], b = link_a[i] + 1;
+            if (sim->reach_public[a] != sim->reach_public[b]) {
+                sim->reach_public[a] = sim->reach_public[b] = 1;
+                changed = 1;
+            }
+            if (sim->reach_service[a] != sim->reach_service[b]) {
+                sim->reach_service[a] = sim->reach_service[b] = 1;
+                changed = 1;
+            }
+        }
+        for (int i = 0; i < run_count; i++) {
+            ShaftRun *r = &runs[i];
+            int pub_ok = (r->ty != ITEM_ELEVATOR_SERVICE);
+            int any_pub = 0, any_svc = 0;
+            for (int s = r->lo; s <= r->hi; s++) {
+                if (!elevator_stops_at(r->ty, s)) continue;
+                any_pub |= sim->reach_public[s];
+                any_svc |= sim->reach_service[s];
+            }
+            for (int s = r->lo; s <= r->hi; s++) {
+                if (!elevator_stops_at(r->ty, s)) continue;
+                if (pub_ok && any_pub && !sim->reach_public[s]) {
+                    sim->reach_public[s] = 1;
+                    changed = 1;
+                }
+                if (any_svc && !sim->reach_service[s]) {
+                    sim->reach_service[s] = 1;
+                    changed = 1;
+                }
+            }
+        }
+    }
+
+    /* Stats for UI feedback */
+    int unreach = 0, dirty = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type == ITEM_NONE || t->type == ITEM_LOBBY ||
+            t->type == ITEM_FLOOR || item_is_transport(t->type)) continue;
+        int fidx = floor_to_index(t->floor);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+        int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
+        if (!(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]))
+            unreach++;
+        if (t->dirty) dirty++;
+    }
+    sim->unreachable_tenants = unreach;
+    sim->dirty_rooms = dirty;
+}
+
+/* --- Housekeeping ---
+ * After checkout, hotel rooms stay dirty (and unrentable) until a
+ * housekeeping unit cleans them. Housekeepers work morning/afternoon, travel
+ * the service network, and each unit handles a limited number of rooms per
+ * day — too few units and rooms sit dirty, losing the night's income. */
+#define HK_ROOMS_PER_DAY 12
+
+static void update_housekeeping(GameSim *sim, Tower *tower)
+{
+    if (sim->time_of_day != TOD_MORNING && sim->time_of_day != TOD_AFTERNOON) {
+        /* Off shift — reset the day's quotas; rooms keep their dirty flag */
+        for (int i = 0; i < tower->tenant_count; i++)
+            if (tower->tenants[i].type == ITEM_HOUSEKEEPING)
+                tower->tenants[i].cleaned_today = 0;
+        return;
+    }
+
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *hk = &tower->tenants[i];
+        if (hk->type != ITEM_HOUSEKEEPING) continue;
+        if (hk->state != TENANT_OCCUPIED) continue;   /* built + on shift */
+        if (hk->cleaned_today >= HK_ROOMS_PER_DAY) continue;
+        int hf = floor_to_index(hk->floor);
+        if (hf < 0 || hf >= TOWER_FLOOR_COUNT || !sim->reach_service[hf]) continue;
+
+        /* Clean one reachable dirty room per pass (paces the work out) */
+        for (int j = 0; j < tower->tenant_count; j++) {
+            Tenant *room = &tower->tenants[j];
+            if (!room->dirty) continue;
+            int rf = floor_to_index(room->floor);
+            if (rf < 0 || rf >= TOWER_FLOOR_COUNT || !sim->reach_service[rf])
+                continue;
+            room->dirty = 0;
+            hk->cleaned_today++;
+            break;
+        }
+    }
+}
+
 /* --- Main simulation update --- */
 
 void game_update(GameSim *sim, Tower *tower)
 {
+    /* Reachability is layout-driven, so refresh it even while paused (build
+     * mode needs current data); throttled — it only changes on placement. */
+    static int reach_throttle = 0;
+    if (reach_throttle-- <= 0) {
+        game_update_reachability(sim, tower);
+        reach_throttle = 15;
+    }
+
     if (sim->speed == SPEED_PAUSED) return;
     
     sim->ticks_per_quarter = TICKS_PER_QUARTER[sim->speed];
@@ -403,6 +600,7 @@ void game_update(GameSim *sim, Tower *tower)
     if (sim->tick % 4 == 0) {
         long tick_income = 0, tick_expenses = 0;
         update_tenants(sim, tower, &tick_income, &tick_expenses);
+        update_housekeeping(sim, tower);
         tower->money += tick_income - tick_expenses;
         sim->income_this_quarter += tick_income;
         sim->expenses_this_quarter += tick_expenses;

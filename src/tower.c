@@ -130,18 +130,20 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         return 1;
     }
     
-    /* Transport items (stairs/escalators) can go on any floor */
+    /* Stairs/escalators OVERLAY existing floors; elevators occupy their own
+     * cells but share transports' placement freedoms (any floor, basement). */
     int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
-    
-    /* Floor 0 is lobby-only (from OpenSkyscraper: "Only lobbies may be built on the ground floor") */
-    if (floor == 0 && type != ITEM_LOBBY && type != ITEM_FLOOR && !is_transport) {
+
+    /* Floor 0 is lobby-only — except transports: elevators and stairs connect
+     * at the ground lobby in the original. */
+    if (floor == 0 && type != ITEM_LOBBY && type != ITEM_FLOOR && !item_is_transport(type)) {
         printf("  [reject] %s at F0: only lobbies on ground floor\n", tower_item_name(type));
         return 0;
     }
-    
+
     /* Underground-only items must be below floor 0 */
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
-    if (!is_transport && !ITEM_UNDERGROUND_ONLY[type] && 
+    if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
         type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0) return 0;
     
     /* Check for overlap on ALL floors this item occupies */

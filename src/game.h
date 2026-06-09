@@ -93,6 +93,9 @@ static const int CONSTRUCTION_TIME[] = {
     [ITEM_STAIRS] = 40,
     [ITEM_ESCALATOR] = 56,
     [ITEM_ELEVATOR_SHAFT] = 8,
+    [ITEM_ELEVATOR_SERVICE] = 8,
+    [ITEM_ELEVATOR_EXPRESS] = 8,
+    [ITEM_HOUSEKEEPING] = 40,
 };
 
 /* Promotion flags — from decompiled seg_1148 (offsets 0xB922-0xB92D) */
@@ -140,6 +143,9 @@ static const int TENANT_INCOME[] = {
     [ITEM_STAIRS] = 0,
     [ITEM_ESCALATOR] = 0,
     [ITEM_ELEVATOR_SHAFT] = 0,
+    [ITEM_ELEVATOR_SERVICE] = 0,
+    [ITEM_ELEVATOR_EXPRESS] = 0,
+    [ITEM_HOUSEKEEPING] = 0,    /* Service, no direct income */
 };
 
 /* Population per tenant type when occupied */
@@ -166,6 +172,9 @@ static const int TENANT_POPULATION[] = {
     [ITEM_STAIRS] = 0,
     [ITEM_ESCALATOR] = 0,
     [ITEM_ELEVATOR_SHAFT] = 0,
+    [ITEM_ELEVATOR_SERVICE] = 0,
+    [ITEM_ELEVATOR_EXPRESS] = 0,
+    [ITEM_HOUSEKEEPING] = 3,    /* Cleaning staff on shift */
 };
 
 /* Which times of day each tenant type is active */
@@ -192,6 +201,9 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
     /* STAIRS */         {0, 0, 0, 0, 0},
     /* ESCALATOR */      {0, 0, 0, 0, 0},
     /* ELEVATOR */       {0, 0, 0, 0, 0},
+    /* ELEV_SERVICE */   {0, 0, 0, 0, 0},
+    /* ELEV_EXPRESS */   {0, 0, 0, 0, 0},
+    /* HOUSEKEEPING */   {0, 1, 1, 0, 0},  /* Cleans after morning checkout */
 };
 
 /* --- Zone system (from JudgeT seg_11a8) ---
@@ -312,6 +324,14 @@ typedef struct {
     
     /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
     int           last_stress_day;
+
+    /* Transport reachability (recomputed from the tower layout each tick).
+     * public  = tenants/visitors commuting from the ground entrance
+     * service = staff (housekeeping/security), may also use service elevators */
+    uint8_t       reach_public[TOWER_FLOOR_COUNT];
+    uint8_t       reach_service[TOWER_FLOOR_COUNT];
+    int           unreachable_tenants; /* Units cut off from the entrance */
+    int           dirty_rooms;         /* Hotel rooms waiting on housekeeping */
 } GameSim;
 
 /* Initialize simulation */
@@ -330,6 +350,9 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star);
 
 /* Recalculate population from all tenants */
 int game_calc_population(GameSim *sim, Tower *tower);
+
+/* Recompute floor reachability (public + service networks) from transports */
+void game_update_reachability(GameSim *sim, Tower *tower);
 
 /* Measure tower width on underground floors (for promotion check) */
 int game_measure_width(Tower *tower);
