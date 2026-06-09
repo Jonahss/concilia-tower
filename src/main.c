@@ -1850,10 +1850,21 @@ static void render_tool_popup(void)
     if (i < 0 || i >= TOOL_BTN_COUNT) return;
     const ToolButton *g = &tool_buttons[i];
     if (g->sub_count <= 0) return;
+
+    /* Sub-items use the same button-face grey as the toolbar (they're the same
+     * button bitmaps in the original) — a pull-down menu is distinguished by a
+     * drop-shadow, not a different fill colour. Draw a soft shadow behind the
+     * whole column first so it reads as a floating menu. */
+    int x0, y0, xn, yn;
+    tool_sub_rect(i, 0, &x0, &y0);
+    tool_sub_rect(i, g->sub_count - 1, &xn, &yn);
+    SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 255);
+    SDL_Rect shadow = { x0 + 2, y0 + 2, TOOL_BTN_SIZE + 2, (yn - y0) + TOOL_BTN_SIZE + 2 };
+    SDL_RenderFillRect(game.renderer, &shadow);
+
     for (int j = 0; j < g->sub_count; j++) {
         int bx, by;
         tool_sub_rect(i, j, &bx, &by);
-        /* Opaque background so the pull-down reads as a menu over the grid. */
         SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
         SDL_Rect bg = { bx - 1, by - 1, TOOL_BTN_SIZE + 2, TOOL_BTN_SIZE + 2 };
         SDL_RenderFillRect(game.renderer, &bg);
