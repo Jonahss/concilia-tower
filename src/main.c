@@ -1375,7 +1375,7 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define MAP_WIN_H   280       /* Map height (sky + ground) */
 
 #define TOOL_WIN_W  200       /* Toolbox same width as map, stacked below */
-#define TOOL_WIN_H  220       /* Taller to fit 4 rows of 32×32 icons */
+#define TOOL_WIN_H  290       /* Fits play/pause + tools + 5-row icon grid + cost */
 
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 {
@@ -1717,36 +1717,39 @@ typedef struct {
     uint8_t     r, g, b;  /* Fallback icon color */
 } ToolButton;
 
-/* Icon indices from OpenSkyscraper (prototype->icon values):
- *  0=Lobby  1=Floor  2=Stairs  3=Escalator
- *  4=Elevator 5=ServiceElev 6=ExpressElev 7=Office
- *  8=HotelS? 9=HotelT? 10=HotelSuite? 11=FastFood
- *  12=Restaurant 13=Shop? 14=Cinema 15=PartyHall
- *  16=Security? 17=Medical? 18=Recycling? 19=Metro
- *  20=Parking? 21=? 22=? 23=? 24=Condo */
+/* Icon indices VERIFIED by dumping the real button sheet (SIMTOWER.EXE res
+ * 0x812C) — 26 icons, row-major 8-per-row. The loader flattens that grid into a
+ * 26-wide strip, so icon_idx is the flat 0..25 position. Verified cells:
+ *  0=Lobby 1=Floor 2=Stairs 3=Escalator 4=room 5=room($) 6=room 7=office(desk)
+ *  8=HotelSingle(1) 9=HotelTwin(2) 10=HotelSuite(S) 11=FastFood 12=Restaurant
+ *  13=Shop 14=Cinema 15=PartyHall 16=Elevator 17=Parking(P) 18=Recycling
+ *  19=Metro 20=Cathedral 21=? 22=Medical(H) 23=Housekeeping 24=? 25=Security(SECOM)
+ * NOTE: office vs condo among 4/5/6/7 is a best guess (7=office desk is clear;
+ * condo=4); confirm visually. */
 static const ToolButton tool_buttons[] = {
-    { "LOB",  ITEM_LOBBY,         0,  210, 200, 160 },
-    { "OFF",  ITEM_OFFICE,        7,  200, 200, 150 },
-    { "CND",  ITEM_CONDO,        24,  180, 220, 180 },
-    { "RST",  ITEM_RESTAURANT,   12,  220, 180, 150 },
-    { "FF",   ITEM_FAST_FOOD,    11,  220, 220, 100 },
-    { "SHP",  ITEM_SHOP,         13,  220, 160, 220 },
-    { "H1",   ITEM_HOTEL_SINGLE,  8,  150, 150, 220 },
-    { "H2",   ITEM_HOTEL_TWIN,    9,  140, 140, 230 },
-    { "H3",   ITEM_HOTEL_SUITE,  10,  120, 120, 240 },
-    { "CIN",  ITEM_CINEMA,       14,   80,  60, 120 },
-    { "PTY",  ITEM_PARTY_HALL,   15,  200, 100, 180 },
-    { "STR",  ITEM_STAIRS,        2,  180, 175, 170 },
-    { "ESC",  ITEM_ESCALATOR,     3,  170, 170, 180 },
-    { "PKG",  ITEM_PARKING,      20,  160, 160, 160 },
-    { "MTR",  ITEM_METRO,        19,  100, 100, 120 },
-    { "SEC",  ITEM_SECURITY,     16,  180, 180, 200 },
-    { "MED",  ITEM_MEDICAL,      17,  220, 240, 240 },
-    { "RCY",  ITEM_RECYCLING,    18,  100, 180, 100 },
-    { "CTH",  ITEM_CATHEDRAL,    21,  230, 220, 200 },
-    { "NON",  ITEM_NONE,         -1,  192, 192, 192 },
+    { "LOB",  ITEM_LOBBY,          0,  210, 200, 160 },
+    { "FLR",  ITEM_FLOOR,          1,  200, 200, 190 },
+    { "OFF",  ITEM_OFFICE,         7,  200, 200, 150 },
+    { "CND",  ITEM_CONDO,          4,  180, 220, 180 },
+    { "H1",   ITEM_HOTEL_SINGLE,   8,  150, 150, 220 },
+    { "H2",   ITEM_HOTEL_TWIN,     9,  140, 140, 230 },
+    { "H3",   ITEM_HOTEL_SUITE,   10,  120, 120, 240 },
+    { "FF",   ITEM_FAST_FOOD,     11,  220, 220, 100 },
+    { "RST",  ITEM_RESTAURANT,    12,  220, 180, 150 },
+    { "SHP",  ITEM_SHOP,          13,  220, 160, 220 },
+    { "CIN",  ITEM_CINEMA,        14,   80,  60, 120 },
+    { "PTY",  ITEM_PARTY_HALL,    15,  200, 100, 180 },
+    { "STR",  ITEM_STAIRS,         2,  180, 175, 170 },
+    { "ESC",  ITEM_ESCALATOR,      3,  170, 170, 180 },
+    { "ELV",  ITEM_ELEVATOR_SHAFT,16,  160, 170, 180 },
+    { "PKG",  ITEM_PARKING,       17,  160, 160, 160 },
+    { "RCY",  ITEM_RECYCLING,     18,  100, 180, 100 },
+    { "MTR",  ITEM_METRO,         19,  100, 100, 120 },
+    { "CTH",  ITEM_CATHEDRAL,     20,  230, 220, 200 },
+    { "MED",  ITEM_MEDICAL,       22,  220, 240, 240 },
+    { "SEC",  ITEM_SECURITY,      25,  180, 180, 200 },
 };
-#define TOOL_BTN_COUNT 20
+#define TOOL_BTN_COUNT 21
 
 static void render_toolbox(void)
 {
@@ -1760,71 +1763,38 @@ static void render_toolbox(void)
     /* Toolbox body */
     draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H - WIN_TITLEBAR_H, 1);
     
-    /* Speed buttons at top — use original bitmap if available.
-     * ui_speed is 128×64: 4 buttons at 32px wide each.
-     * Top 32px = normal, bottom 32px = pressed/selected.
-     * But the layout from OpenSkyscraper is actually:
-     *   0x8258 (64×32) + 0x8259 (64×32) stacked = left half (128×32 ← wait, no)
-     * Actually we stored: x_off = (si/2)*64, y_off = (si%2)*32
-     *   0x8258 → (0, 0), 0x8259 → (0, 32), 0x825A → (64, 0), 0x825B → (64, 32)
-     * So: top row (y=0) = normal for pause(0,0) and fast(64,0)
-     *     bot row (y=32) = pressed for pause(0,32) and fast(64,32)
-     * Each 64×32 sub-bitmap has 2 speed buttons at ~23×24px.
-     * 
-     * Simpler: just render the 4 speed buttons from the bitmap. Each is ~32×32.
-     * Speed 0,1 from left half, Speed 2,3 from right half. */
-    int speed_y = wy + 8;  /* No title bar — start near top */
+    /* Speed buttons at top. The original toolbar has just TWO buttons — Play and
+     * Pause — each with a normal + pressed state (verified by dumping the EXE):
+     *   0x8258 play-normal, 0x8259 play-pressed, 0x825A pause-normal, 0x825B
+     *   pause-pressed. The loader packs these into ui_speed (128×64): play at
+     *   src x=0, pause at x=64; normal row y=0, pressed row y=32. Play shows
+     *   pressed while the sim runs (speed>0); Pause shows pressed while stopped.
+     *   (Multi-speed 1x/2x/3x is via menu/keyboard, not the toolbar.) */
+    int speed_y = wy + 8;
     {
-        int sx = wx + (TOOL_WIN_W - 4 * 24) / 2;  /* Center 4 buttons */
-        for (int s = 0; s < 4; s++) {
-            int selected = ((int)game.sim.speed == s);
-            int btn_w = 23, btn_h = 24;
-            
-            if (game.ui_speed) {
-                /* Map speed index to bitmap position:
-                 * Speed 0 (pause): pair 0, btn 0 → src (0, 0/32)
-                 * Speed 1 (play):  pair 0, btn 1 → src (23, 0/32)
-                 * Speed 2 (fast):  pair 1, btn 0 → src (64, 0/32)
-                 * Speed 3 (turbo): pair 1, btn 1 → src (87, 0/32) */
-                int pair = s / 2;
-                int btn_in_pair = s % 2;
-                int src_x = pair * 64 + btn_in_pair * 23;
-                int src_y = selected ? 32 : 0;
-                SDL_Rect src = { src_x, src_y, btn_w, btn_h };
-                SDL_Rect dst = { sx, speed_y, btn_w, btn_h };
-                SDL_RenderCopy(game.renderer, game.ui_speed, &src, &dst);
-            } else {
-                /* Fallback: text buttons */
-                const char *speed_ascii[] = { "||", ">", ">>", ">>>" };
-                draw_win31_rect(sx, speed_y, btn_w, btn_h, !selected);
-                if (game.font_small) {
-                    SDL_Color c = {0, 0, 0, 255};
-                    SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, speed_ascii[s], c);
-                    if (ts) {
-                        SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-                        SDL_Rect dst = { sx + btn_w/2 - ts->w/2, speed_y + 3, ts->w, ts->h };
-                        SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-                        SDL_DestroyTexture(tt);
-                        SDL_FreeSurface(ts);
-                    }
-                }
-            }
-            sx += btn_w + 1;
+        int bw = 40, bh = 24, gap = 4;
+        int sx = wx + (TOOL_WIN_W - (2 * bw + gap)) / 2;
+        int playing = (game.sim.speed > 0);
+        if (game.ui_speed) {
+            SDL_Rect psrc = { 0,  playing ? 32 : 0, 64, 32 };  /* Play */
+            SDL_Rect pdst = { sx, speed_y, bw, bh };
+            SDL_RenderCopy(game.renderer, game.ui_speed, &psrc, &pdst);
+            SDL_Rect qsrc = { 64, playing ? 0 : 32, 64, 32 };  /* Pause */
+            SDL_Rect qdst = { sx + bw + gap, speed_y, bw, bh };
+            SDL_RenderCopy(game.renderer, game.ui_speed, &qsrc, &qdst);
         }
     }
     
-    /* Tool action buttons (bulldozer, finger, inspector) — between speed and items.
-     * ui_tools is 64×63 (3 tools at 64×21 each, stacked vertically).
-     * Each 64×21 sub-bitmap: left 21px = normal, middle 21px = pressed, right = more? 
-     * Actually from the RML: tool button is 21×21, with s: 0-21/21-42/42-63 and t: 0-0.5/0.5-1. */
+    /* Tool action buttons (bulldozer, finger, inspector) — between speed and items. */
     int tools_y = speed_y + 28;
     if (game.ui_tools) {
+        /* ui_tools is 64×63: each source bitmap (0x825C/D/E = normal/pressed/
+         * disabled) holds all 3 tools laid out HORIZONTALLY (bulldozer, finger,
+         * inspector at x=0/21/42) and is stacked into rows 0/21/42. So tool t =
+         * (x=t*21, normal row y=0). */
         int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
         for (int t = 0; t < 3; t++) {
-            /* Each tool bitmap (64×21): left half = normal, right half = pressed?
-             * Actually the entire 64px wide is the tool at different states.
-             * Let's just render the left 21×21 portion (normal state). */
-            SDL_Rect src = { 0, t * 21, 21, 21 };
+            SDL_Rect src = { t * 21, 0, 21, 21 };
             SDL_Rect dst = { tx + t * 23, tools_y, 21, 21 };
             SDL_RenderCopy(game.renderer, game.ui_tools, &src, &dst);
         }
@@ -1902,7 +1872,9 @@ static void render_toolbox(void)
         snprintf(full_buf, sizeof(full_buf), "%s  %s",
                  tower_item_name(game.build_type), cost_buf);
         
-        int label_y = wy + TOOL_WIN_H - WIN_TITLEBAR_H - 18;
+        /* Place below the icon grid, not at a fixed window offset (the grid grew). */
+        int rows = (TOOL_BTN_COUNT + TOOL_COLS - 1) / TOOL_COLS;
+        int label_y = grid_y + rows * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 4;
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
         if (ts) {
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
@@ -2182,18 +2154,20 @@ static int toolbox_click(int mx, int my)
     int wx = game.tool_x;
     int wy = game.tool_y + WIN_TITLEBAR_H;  /* Skip title bar */
     
-    /* Speed buttons — must match render_toolbox layout */
+    /* Speed buttons — two only (Play / Pause), must match render_toolbox layout */
     int speed_y = wy + 8;
     {
-        int sx = wx + (TOOL_WIN_W - 4 * 24) / 2;  /* Centered, matching render */
-        for (int s = 0; s < 4; s++) {
-            int btn_w = 23, btn_h = 24;
-            if (mx >= sx && mx < sx + btn_w &&
-                my >= speed_y && my < speed_y + btn_h) {
-                game.sim.speed = s;
+        int bw = 40, bh = 24, gap = 4;
+        int sx = wx + (TOOL_WIN_W - (2 * bw + gap)) / 2;
+        if (my >= speed_y && my < speed_y + bh) {
+            if (mx >= sx && mx < sx + bw) {            /* Play */
+                if (game.sim.speed == 0) game.sim.speed = 1;
                 return 1;
             }
-            sx += btn_w + 1;
+            if (mx >= sx + bw + gap && mx < sx + 2 * bw + gap) {  /* Pause */
+                game.sim.speed = 0;
+                return 1;
+            }
         }
     }
     
