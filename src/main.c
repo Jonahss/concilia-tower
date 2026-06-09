@@ -1368,9 +1368,7 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 
 #define INFO_BAR_W  431       /* Info/time bar width — faithful to original (time.rml: 431px) */
 #define INFO_BAR_H  41        /* Faithful time-bar height (time.rml: 41px) */
-#define WIN_TITLEBAR_H 0      /* Title bars removed — original SimTower windows have none.
-                               * Kept as 0 so window-body/hit-test math collapses cleanly;
-                               * window dragging is a deferred feature (see win_dragging). */
+#define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
 #define CLOCK_R     14        /* Small clock for horizontal bar */
 
 #define MAP_WIN_W   200       /* Map window (left side) */
@@ -1450,13 +1448,47 @@ static void add_event_message(const char *msg)
     if (event_msg_total < EVENT_MSG_COUNT) event_msg_total++;
 }
 
+/* Draw a Win3.1 style title bar (navy blue with white text, for window dragging) */
+static void draw_win31_titlebar(int x, int y, int w, const char *title)
+{
+    /* Navy blue background */
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+    SDL_Rect bg = { x, y, w, WIN_TITLEBAR_H };
+    SDL_RenderFillRect(game.renderer, &bg);
+    
+    /* 3D border */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(game.renderer, x, y, x + w - 1, y);
+    SDL_RenderDrawLine(game.renderer, x, y, x, y + WIN_TITLEBAR_H - 1);
+    SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 255);
+    SDL_RenderDrawLine(game.renderer, x, y + WIN_TITLEBAR_H - 1, x + w - 1, y + WIN_TITLEBAR_H - 1);
+    SDL_RenderDrawLine(game.renderer, x + w - 1, y, x + w - 1, y + WIN_TITLEBAR_H - 1);
+    
+    /* Title text */
+    if (game.font_small && title) {
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, title, white);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { x + 4, y + 2, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    }
+}
+
 static void render_info_window(void)
 {
     /* Info bar: horizontal strip (like original time.rml).
      * Layout: [clock 29×29] [star rating] [date info] [message] [funds/pop right-aligned] */
     int wx = game.info_x;
     int wy = game.info_y;
-
+    
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, INFO_BAR_W, "Tower Info");
+    wy += WIN_TITLEBAR_H;
+    
     /* Background — original uses bitmap 0x8140 (431×41, tiled horizontal) */
     if (game.ui_timebar) {
         /* Tile the time bar background across the width */
@@ -1577,7 +1609,11 @@ static void render_minimap(void)
 {
     int wx = game.map_x;
     int wy = game.map_y;
-
+    
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, MAP_WIN_W, "Map");
+    wy += WIN_TITLEBAR_H;
+    
     /* Minimap body */
     draw_win31_rect(wx, wy, MAP_WIN_W, MAP_WIN_H - WIN_TITLEBAR_H, 1);
     
@@ -1716,7 +1752,11 @@ static void render_toolbox(void)
 {
     int wx = game.tool_x;
     int wy = game.tool_y;
-
+    
+    /* Title bar for dragging */
+    draw_win31_titlebar(wx, wy, TOOL_WIN_W, "Tools");
+    wy += WIN_TITLEBAR_H;
+    
     /* Toolbox body */
     draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H - WIN_TITLEBAR_H, 1);
     
