@@ -1366,8 +1366,8 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
  * 
  * Our layout follows this but adapts sizes slightly for our resolution. */
 
-#define INFO_BAR_W  500       /* Info bar width (top right, horizontal) */
-#define INFO_BAR_H  42        /* Compact horizontal bar */
+#define INFO_BAR_W  431       /* Info/time bar width — faithful to original (time.rml: 431px) */
+#define INFO_BAR_H  41        /* Faithful time-bar height (time.rml: 41px) */
 #define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
 #define CLOCK_R     14        /* Small clock for horizontal bar */
 
