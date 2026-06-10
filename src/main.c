@@ -1692,6 +1692,16 @@ static void render_elv_dialog(void)
             SDL_RenderFillRect(game.renderer, &cc);
             SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
             SDL_RenderDrawRect(game.renderer, &cc);
+            /* home floor = the original's red diamond marker */
+            if (active && s->home[ci] == f) {
+                SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
+                int mx0 = cc.x + cc.w / 2, my0 = cc.y + cc.h / 2;
+                for (int dlt = -4; dlt <= 4; dlt++) {
+                    int half = 4 - (dlt < 0 ? -dlt : dlt);
+                    SDL_RenderDrawLine(game.renderer, mx0 - half, my0 + dlt,
+                                       mx0 + half, my0 + dlt);
+                }
+            }
             if (active && s->car[ci].active && s->car[ci].floor == f) {
                 ElevatorCar *c = &s->car[ci];
                 if (c->passengers >= s->capacity)
@@ -1776,6 +1786,16 @@ static int elv_dialog_click(int mx, int my)
         int f = s->hi - r;
         if (elv_structural_stop(s, f))
             people_set_serviced(ps, si, f, !s->serviced[f]);
+        return 1;
+    }
+
+    /* car columns: click a cell to set that car's home floor (red diamond) */
+    int ccx = gx + ELV_CELL + 6;
+    if (mx >= ccx && mx < ccx + CARS_PER_SHAFT * ELV_CELL &&
+        my >= top && my < top + rows * ELV_CELL) {
+        int ci = (mx - ccx) / ELV_CELL;
+        int f = s->hi - (my - top) / ELV_CELL;
+        people_set_home(ps, si, ci, f);
         return 1;
     }
 

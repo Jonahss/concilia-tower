@@ -145,6 +145,7 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
     for (int i = 0; i < count; i++) {
         ElevatorShaft *ns = &fresh[i];
         for (int f = ns->lo; f <= ns->hi; f++) ns->serviced[f] = 1;
+        for (int k = 0; k < CARS_PER_SHAFT; k++) ns->home[k] = ns->lo;
         for (int j = 0; j < ps->shaft_count; j++) {
             ElevatorShaft *os = &ps->shafts[j];
             if (!os->active || os->x != ns->x || os->type != ns->type)
@@ -153,6 +154,11 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             int lo = os->lo > ns->lo ? os->lo : ns->lo;
             int hi = os->hi < ns->hi ? os->hi : ns->hi;
             for (int f = lo; f <= hi; f++) ns->serviced[f] = os->serviced[f];
+            for (int k = 0; k < CARS_PER_SHAFT; k++) {
+                int h = os->home[k];
+                ns->home[k] = (uint8_t)(h < ns->lo ? ns->lo
+                                      : h > ns->hi ? ns->hi : h);
+            }
             break;
         }
     }
@@ -415,6 +421,7 @@ void people_set_num_cars(PeopleSim *ps, int shaft, int n)
         c->active = 1;
         c->floor = c->target = s->lo;
         c->dir = 1;
+        s->home[ci] = s->lo;
     }
     for (int ci = n; ci < s->num_cars; ci++) {   /* retired cars dump riders */
         ElevatorCar *c = &s->car[ci];
@@ -432,6 +439,15 @@ void people_set_num_cars(PeopleSim *ps, int shaft, int n)
         memset(c, 0, sizeof(*c));
     }
     s->num_cars = (uint8_t)n;
+}
+
+void people_set_home(PeopleSim *ps, int shaft, int car, int fidx)
+{
+    if (shaft < 0 || shaft >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (car < 0 || car >= s->num_cars) return;
+    if (fidx < s->lo || fidx > s->hi || !s->serviced[fidx]) return;
+    s->home[car] = (uint8_t)fidx;
 }
 
 void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on)
@@ -461,6 +477,9 @@ void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on)
     if (dn_owner && s->car[dn_owner - 1].assigned_calls)
         s->car[dn_owner - 1].assigned_calls--;
     s->up_call_car[fidx] = s->down_call_car[fidx] = 0;
+    /* cars homed on a disabled stop fall back to the bottom */
+    for (int k = 0; k < s->num_cars; k++)
+        if (s->home[k] == fidx) s->home[k] = s->lo;
 }
 
 static int dequeue(ElevatorShaft *s, int floor, int up)
@@ -716,6 +735,10 @@ static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
         call_elevator(s, c->floor, 0);
 
     int tgt = find_target_floor(s, c, ci);
+    /* FindTargetFloor (1090:1553): a car with no work returns to its
+     * home floor (group +0xBA[8]) instead of idling where it stopped. */
+    if (tgt < 0 && c->floor != s->home[ci] && !c->passengers)
+        tgt = s->home[ci];
     if (tgt < 0) { c->target = c->floor; return; }   /* idle in place */
     c->target = (uint8_t)tgt;
     c->dir = (uint8_t)(tgt > c->floor);

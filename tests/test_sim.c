@@ -283,6 +283,17 @@ static void test_elevator_dialog(void)
           sim.people.people[0].cur_floor == f3,
           "rider dumped at the car's floor to replan");
 
+    /* home floors: idle car with no work returns home (red diamond) */
+    people_set_home(&sim.people, 0, 0, f3);
+    CHECK(s->home[0] == f3, "car 0 homed on floor 3");
+    s->car[0].floor = (uint8_t)g;
+    s->car[0].target = (uint8_t)g;
+    s->car[0].door_timer = 1;          /* doors closing, no work anywhere */
+    for (int t = 0; t < 200; t++) people_update(&sim.people, &tw, t, 1,
+                                               sim.reach_public,
+                                               sim.reach_service);
+    CHECK(s->car[0].floor == f3, "idle car returned to its home floor");
+
     /* settings survive a layout rebuild (shaft extended one floor) */
     people_set_serviced(&sim.people, 0, f3, 0);
     place(ITEM_ELEVATOR_SHAFT, 7, 196);
