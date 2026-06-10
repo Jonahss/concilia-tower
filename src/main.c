@@ -1623,14 +1623,58 @@ static void render_people(void)
     }
 }
 
+/* Column lock for a vertical elevator drag: if the drag started on (or one
+ * floor off — e.g. on the motor cap / pit arrows) an existing same-type
+ * shaft, extend that shaft's column rather than starting a new one at the
+ * click cell. The original's cap arrows are exactly this affordance. */
+static int elevator_drag_column(void)
+{
+    int w = ITEM_WIDTH[game.build_type];
+    static const int dfs[] = { 0, -1, 1 };
+    for (int i = 0; i < 3; i++) {
+        int fidx = floor_to_index(game.drag_start_floor + dfs[i]);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+        for (int cx = game.drag_start_cell - w + 1;
+             cx <= game.drag_start_cell + w - 1; cx++) {
+            if (cx < 0 || cx >= TOWER_WIDTH) continue;
+            TowerCell *cell = &game.tower.grid[fidx][cx];
+            if (cell->type != game.build_type) continue;
+            Tenant *t = tower_tenant(&game.tower, cell->tenant_id);
+            if (t) return t->x;
+        }
+    }
+    return game.drag_start_cell;
+}
+
 static void render_build_ghost(void)
 {
     if (game.demolish_mode || game.build_type == ITEM_NONE) return;
-    
+
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
-    
-    if (game.dragging) {
+
+    if (game.dragging && item_is_elevator(game.build_type)) {
+        /* Elevators drag VERTICALLY: one shaft segment per floor from the
+         * drag start to the mouse, locked to one column. */
+        int x = elevator_drag_column();
+        int f0 = game.drag_start_floor, f1 = game.mouse_floor;
+        int df = (f1 >= f0) ? 1 : -1;
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        for (int f = f0; ; f += df) {
+            int gx, gy;
+            grid_to_screen(f, x, &gx, &gy);
+            if (tower_can_place(&game.tower, game.build_type, f, x))
+                SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
+            else
+                SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
+            SDL_Rect ghost = { gx, gy, width * CELL_W, CELL_H };
+            SDL_RenderFillRect(game.renderer, &ghost);
+            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 160);
+            SDL_RenderDrawRect(game.renderer, &ghost);
+            if (f == f1) break;
+        }
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    } else if (game.dragging) {
         /* Drag placement: show ghost row of units from start to current cell */
         int start = game.drag_start_cell;
         int end = game.mouse_cell;
@@ -2600,14 +2644,32 @@ static void cycle_build_type(int direction)
 static void drag_place_units(void)
 {
     if (game.build_type == ITEM_NONE) return;
-    
+
     int width = ITEM_WIDTH[game.build_type];
     int floor = game.drag_start_floor;
     int start = game.drag_start_cell;
     int end = game.mouse_cell;
     int step_dir = (end >= start) ? 1 : -1;
     int placed = 0;
-    
+
+    /* Elevators drag vertically: extend the shaft one segment per floor,
+     * column locked to the shaft the drag started on (or its caps). */
+    if (item_is_elevator(game.build_type)) {
+        int x = elevator_drag_column();
+        int f1 = game.mouse_floor;
+        int df = (f1 >= floor) ? 1 : -1;
+        for (int f = floor; ; f += df) {
+            if (tower_place(&game.tower, game.build_type, f, x))
+                placed++;
+            if (f == f1) break;
+        }
+        if (placed > 0) {
+            printf("Drag-extended %s at x=%d by %d floor(s)\n",
+                   tower_item_name(game.build_type), x, placed);
+        }
+        return;
+    }
+
     if (step_dir > 0) {
         for (int cur = start; cur + width - 1 < TOWER_WIDTH && cur <= end; cur += width) {
             if (tower_place(&game.tower, game.build_type, floor, cur))
@@ -3165,10 +3227,15 @@ static void handle_event(SDL_Event *ev)
             }
             /* Stop building placement drag */
             if (game.dragging) {
-                if (game.drag_start_cell == game.mouse_cell && 
+                if (game.drag_start_cell == game.mouse_cell &&
                     game.drag_start_floor == game.mouse_floor) {
+                    /* Elevator click snaps to the shaft column, so clicking
+                     * the cap arrows extends the shaft by one floor. */
+                    int px = item_is_elevator(game.build_type)
+                                 ? elevator_drag_column()
+                                 : game.drag_start_cell;
                     tower_place(&game.tower, game.build_type,
-                               game.drag_start_floor, game.drag_start_cell);
+                               game.drag_start_floor, px);
                 } else {
                     drag_place_units();
                 }
