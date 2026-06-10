@@ -180,7 +180,11 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
     int next_star = current + 1;
     
     if (next_star > 6) return current;
-    if (pop < STAR_POP_THRESHOLD[current]) return current;
+    /* Thresholds for 2-5 stars come from the live tuning table;
+     * TOWER's 15,000 stays hardcoded like the original EXE */
+    int need = (current >= 1 && current <= 4) ? TUNING.star_pop[current - 1]
+                                              : STAR_POP_THRESHOLD[current];
+    if (pop < need) return current;
     
     /* Width check: underground width must be > star * 25 
      * From seg_1148 FUN_1148_01a8 */

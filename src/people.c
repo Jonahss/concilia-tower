@@ -34,6 +34,34 @@
 
 #define GROUND_IDX  (TOWER_LOBBY_FLOOR - TOWER_MIN_FLOOR)
 
+/* The live tuning table — defaults are the EXE's own values (res 0x7F05) */
+Tuning TUNING;
+
+void tuning_reset(void)
+{
+    TUNING = (Tuning){
+        .wait_cap = 300,
+        .penalty_queue_full = 5,
+        .penalty_no_route = 300,
+        .penalty_esc_span = 16,
+        .penalty_stair_span = 35,
+        .penalty_walk_80 = 30,
+        .penalty_walk_125 = 60,
+        .cost_stair_base = 640,
+        .cost_elev_base = 640,
+        .cost_elev_full = 1000,
+        .cost_transfer = 3000,
+        .cost_transfer_full = 6000,
+        .walk_floors_esc = 6,
+        .walk_floors_stair = 3,
+        .capacity_standard = 42,
+        .capacity_service = 21,
+        .judge_moderate = 150,
+        .judge_stressed = 200,
+        .star_pop = { 300, 1000, 5000, 10000 },
+    };
+}
+
 /* Ticks for a walking hop across one floor gap */
 #define WALK_TICKS_STAIR 10
 #define WALK_TICKS_ESC   8
@@ -45,6 +73,7 @@ void people_init(PeopleSim *ps)
 {
     memset(ps, 0, sizeof(*ps));
     ps->cur_phase = 0xff;
+    tuning_reset();
 }
 
 /* ---------- transport layout ---------- */
@@ -90,7 +119,8 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             s->lo = (uint8_t)lo;
             s->hi = (uint8_t)(f - 1);
             s->x = x;
-            /* group+2 from the EXE: 42 standard, 21 express/service */
+            /* group+2 from the EXE: 42 standard, 21 express/service
+             * (refreshed from TUNING every tick; clamped to slots) */
             s->capacity = (ty == ITEM_ELEVATOR_SHAFT) ? 42 : 21;
             s->num_cars = 1;          /* TODO: car count upgrades */
             if (count >= MAX_SHAFTS) break;
@@ -135,7 +165,7 @@ static int can_walk(const PeopleSim *ps, int from, int to, int service)
 {
     int d = to - from, step = d > 0 ? 1 : -1, n = d > 0 ? d : -d;
     if (n == 0) return 1;
-    if (n > 6) return 0;
+    if (n > TUNING.walk_floors_esc) return 0;
     int stairs_seen = 0;
     for (int i = 0, f = from; i < n; i++, f += step) {
         int g = (step > 0) ? f : f - 1;
@@ -148,7 +178,7 @@ static int can_walk(const PeopleSim *ps, int from, int to, int service)
             if (!bits) return 0;
             if (!(bits & 1)) stairs_seen = 1; /* stairs-only gap */
         }
-        if (stairs_seen && n > 3) return 0;   /* any stair caps walk at 3 */
+        if (stairs_seen && n > TUNING.walk_floors_stair) return 0;
     }
     return 1;
 }
@@ -387,8 +417,8 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
     Tenant *t = tower_tenant(tower, p->home_tenant);
     if (t) {
-        if (p->wait_accum >= 200)      t->stress += 15;
-        else if (p->wait_accum >= 150) t->stress += 5;
+        if (p->wait_accum >= TUNING.judge_stressed)      t->stress += 15;
+        else if (p->wait_accum >= TUNING.judge_moderate) t->stress += 5;
         if (t->stress > 100) t->stress = 100;
     }
     ps->wait_total += p->wait_accum;
@@ -750,6 +780,12 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
         if (!s->active) continue;
+        /* capacity tracks the live tuning table (clamped to slot count) */
+        int cap = (s->type == ITEM_ELEVATOR_SHAFT) ? TUNING.capacity_standard
+                                                   : TUNING.capacity_service;
+        if (cap > CAR_SLOTS) cap = CAR_SLOTS;
+        if (cap < 1) cap = 1;
+        s->capacity = (uint8_t)cap;
         for (int ci = 0; ci < s->num_cars; ci++)
             car_tick(ps, tower, s, ci, frame);
     }

@@ -243,6 +243,7 @@ typedef struct {
     int             screen_w, screen_h;
     int             show_debug;   /* Toggle diagnostic labels */
     int             show_stats;   /* Analytics window (F3) */
+    int             show_tuning;  /* Tuning/modding window (F4) */
     
     /* Build mode */
     ItemType        build_type;
@@ -1389,6 +1390,130 @@ static void render_stats_window(void)
     stats_label(gx, gy, foot, (SDL_Color){ 80, 80, 80, 255 });
 }
 
+/* ---------- Tuning window (F4): the master values, live ----------
+ * Every default is the EXE's own number (resource 0x7F05). Tweaks apply
+ * to the running simulation immediately — this is the modding panel. */
+typedef struct { const char *label; int *v; int step, min, max; } TuneRow;
+
+static TuneRow tune_rows[] = {
+    { "Wait cap (frustration)",   &TUNING.wait_cap,            10, 10, 2000 },
+    { "Penalty: queue full",      &TUNING.penalty_queue_full,   1, 0, 1000 },
+    { "Penalty: no route",        &TUNING.penalty_no_route,    10, 0, 1000 },
+    { "Penalty: escalator/span",  &TUNING.penalty_esc_span,     1, 0, 300 },
+    { "Penalty: stairs/span",     &TUNING.penalty_stair_span,   1, 0, 300 },
+    { "Penalty: walk >= 80 cells",&TUNING.penalty_walk_80,      5, 0, 300 },
+    { "Penalty: walk >= 125",     &TUNING.penalty_walk_125,     5, 0, 300 },
+    { "Cost: stairs base",        &TUNING.cost_stair_base,     40, 0, 8000 },
+    { "Cost: elevator base",      &TUNING.cost_elev_base,      40, 0, 8000 },
+    { "Cost: elevator full",      &TUNING.cost_elev_full,      40, 0, 8000 },
+    { "Cost: transfer",           &TUNING.cost_transfer,      100, 0, 16000 },
+    { "Cost: transfer full",      &TUNING.cost_transfer_full, 100, 0, 16000 },
+    { "Walk floors: escalator",   &TUNING.walk_floors_esc,      1, 0, 20 },
+    { "Walk floors: with stairs", &TUNING.walk_floors_stair,    1, 0, 20 },
+    { "Car capacity: standard",   &TUNING.capacity_standard,    1, 1, 42 },
+    { "Car capacity: exp/svc",    &TUNING.capacity_service,     1, 1, 42 },
+    { "Judge: moderate wait",     &TUNING.judge_moderate,       5, 0, 2000 },
+    { "Judge: stressed wait",     &TUNING.judge_stressed,       5, 0, 2000 },
+    { "Star 2 population",        &TUNING.star_pop[0],         50, 0, 100000 },
+    { "Star 3 population",        &TUNING.star_pop[1],        100, 0, 100000 },
+    { "Star 4 population",        &TUNING.star_pop[2],        500, 0, 100000 },
+    { "Star 5 population",        &TUNING.star_pop[3],        500, 0, 100000 },
+};
+#define TUNE_ROWS ((int)(sizeof(tune_rows) / sizeof(tune_rows[0])))
+#define TUNE_W      330
+#define TUNE_ROW_H  19
+
+static void tune_window_origin(int *x, int *y)
+{
+    *x = game.screen_w / 2 - TUNE_W / 2;
+    *y = 56;
+}
+
+/* Returns 1 if the click landed on the window (consumed) */
+static int tuning_click(int mx, int my)
+{
+    if (!game.show_tuning) return 0;
+    int wx, wy;
+    tune_window_origin(&wx, &wy);
+    int body_h = 26 + TUNE_ROWS * TUNE_ROW_H + 30;
+    if (mx < wx || mx >= wx + TUNE_W ||
+        my < wy || my >= wy + WIN_TITLEBAR_H + body_h) return 0;
+
+    int top = wy + WIN_TITLEBAR_H + 22;
+    int row = (my - top) / TUNE_ROW_H;
+    if (my >= top && row >= 0 && row < TUNE_ROWS) {
+        TuneRow *r = &tune_rows[row];
+        if (mx >= wx + TUNE_W - 52 && mx < wx + TUNE_W - 34) {
+            *r->v -= r->step;
+            if (*r->v < r->min) *r->v = r->min;
+        } else if (mx >= wx + TUNE_W - 26 && mx < wx + TUNE_W - 8) {
+            *r->v += r->step;
+            if (*r->v > r->max) *r->v = r->max;
+        }
+        return 1;
+    }
+    /* Reset button strip at the bottom */
+    int ry = top + TUNE_ROWS * TUNE_ROW_H + 4;
+    if (my >= ry && my < ry + 20 && mx >= wx + 8 && mx < wx + 150) {
+        tuning_reset();
+        return 1;
+    }
+    return 1;   /* clicks inside the window never fall through */
+}
+
+static void render_tuning_window(void)
+{
+    if (!game.show_tuning) return;
+    int wx, wy;
+    tune_window_origin(&wx, &wy);
+    int body_h = 26 + TUNE_ROWS * TUNE_ROW_H + 30;
+
+    draw_win31_titlebar(wx, wy, TUNE_W, "Tuning (EXE master values)");
+    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, TUNE_W, body_h };
+    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    SDL_RenderFillRect(game.renderer, &body);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &body);
+
+    stats_label(wx + 8, wy + WIN_TITLEBAR_H + 4,
+                "Live values - defaults from SIMTOWER.EXE",
+                (SDL_Color){ 70, 70, 70, 255 });
+
+    int top = wy + WIN_TITLEBAR_H + 22;
+    for (int i = 0; i < TUNE_ROWS; i++) {
+        int ry = top + i * TUNE_ROW_H;
+        stats_label(wx + 8, ry + 1, tune_rows[i].label,
+                    (SDL_Color){ 0, 0, 0, 255 });
+        char val[16];
+        snprintf(val, sizeof(val), "%d", *tune_rows[i].v);
+        stats_label(wx + TUNE_W - 110, ry + 1, val,
+                    (SDL_Color){ 20, 20, 120, 255 });
+        /* - and + buttons */
+        SDL_Rect minus = { wx + TUNE_W - 52, ry + 1, 18, TUNE_ROW_H - 3 };
+        SDL_Rect plus  = { wx + TUNE_W - 26, ry + 1, 18, TUNE_ROW_H - 3 };
+        SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+        SDL_RenderFillRect(game.renderer, &minus);
+        SDL_RenderFillRect(game.renderer, &plus);
+        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(game.renderer, &minus);
+        SDL_RenderDrawRect(game.renderer, &plus);
+        SDL_RenderDrawLine(game.renderer, minus.x + 5, minus.y + minus.h / 2,
+                           minus.x + minus.w - 6, minus.y + minus.h / 2);
+        SDL_RenderDrawLine(game.renderer, plus.x + 5, plus.y + plus.h / 2,
+                           plus.x + plus.w - 6, plus.y + plus.h / 2);
+        SDL_RenderDrawLine(game.renderer, plus.x + plus.w / 2, plus.y + 3,
+                           plus.x + plus.w / 2, plus.y + plus.h - 4);
+    }
+    int ry = top + TUNE_ROWS * TUNE_ROW_H + 4;
+    SDL_Rect reset = { wx + 8, ry, 142, 20 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &reset);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &reset);
+    stats_label(reset.x + 10, reset.y + 2, "Reset to EXE values",
+                (SDL_Color){ 0, 0, 0, 255 });
+}
+
 /* ---------- People layer: elevator cars + waiting queues ----------
  * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
  * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
@@ -2428,6 +2553,7 @@ static void render(void)
     render_build_ghost();
     render_ui();
     render_stats_window();
+    render_tuning_window();
     
     SDL_RenderPresent(game.renderer);
 }
@@ -2764,6 +2890,11 @@ static void handle_event(SDL_Event *ev)
         case SDLK_F3:
             game.show_stats = !game.show_stats;
             break;
+
+        /* Tuning/modding window */
+        case SDLK_F4:
+            game.show_tuning = !game.show_tuning;
+            break;
         
         /* Debug toggle — F1 gets eaten by browsers, use backtick */
         case SDLK_F1:
@@ -2911,6 +3042,9 @@ static void handle_event(SDL_Event *ev)
             break;
         }
         if (ev->button.button == SDL_BUTTON_LEFT) {
+            /* Tuning window swallows its clicks */
+            if (tuning_click(ev->button.x, ev->button.y)) break;
+
             /* Check menu bar click first */
             int bar_hit = menu_bar_hit_test(ev->button.x, ev->button.y);
             if (bar_hit >= 0) {
@@ -3591,6 +3725,7 @@ int main(int argc, char *argv[])
     if (getenv("TB_POPUP")) game.tool_popup = atoi(getenv("TB_POPUP"));
     if (getenv("DEMOLISH")) game.demolish_mode = 1;
     if (getenv("STATS")) game.show_stats = 1;
+    if (getenv("TUNING")) game.show_tuning = 1;
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
@@ -3639,6 +3774,7 @@ int main(int argc, char *argv[])
     printf("               H=Cathedral X=Medical G=Security R=Recycling O=Shop\n");
     printf("  Tab/Shift+Tab: cycle through all types\n");
     printf("  Space: pause/unpause, +/-: speed up/slow down\n");
+    printf("  F3: analytics graphs, F4: tuning/modding panel\n");
     printf("  ` (backtick): toggle debug labels, F12: screenshot, Q/Esc: quit\n\n");
     
     /* Main loop */

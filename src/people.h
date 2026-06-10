@@ -20,21 +20,50 @@
 #define QUEUE_CAP      40          /* people per direction per floor stop */
 #define CAR_SLOTS      42          /* passenger slots per car (= standard capacity) */
 
-/* Real tuning values (resource 0x7F05 -> DS:0xDD7A..) */
-#define WAIT_CAP            300    /* frustration accumulator hard cap */
-#define PENALTY_QUEUE_FULL  5      /* rejected at a full queue */
-#define PENALTY_NO_ROUTE    300    /* no route at all = instant cap-out */
-#define PENALTY_ESC_SPAN    16     /* per escalator span walked */
-#define PENALTY_STAIR_SPAN  35     /* per stair span walked */
-#define PENALTY_WALK_80     30     /* walk >= 80 cells to a transport */
-#define PENALTY_WALK_125    60     /* walk >= 125 cells */
+/* --- The master tuning table ---
+ * Defaults are the REAL values from EXE resource 0x7F05 (the game loads
+ * its balance constants from a big-endian data resource — everything here
+ * was data in the original too, so runtime tuning is faithful modding).
+ * The macros below alias the live struct so sim code reads naturally. */
+typedef struct {
+    int wait_cap;            /* frustration accumulator hard cap (300) */
+    int penalty_queue_full;  /* rejected at a full queue (5) */
+    int penalty_no_route;    /* no route = instant cap-out (300) */
+    int penalty_esc_span;    /* per escalator span walked (16) */
+    int penalty_stair_span;  /* per stair span walked (35) */
+    int penalty_walk_80;     /* walk >= 80 cells to a transport (30) */
+    int penalty_walk_125;    /* walk >= 125 cells (60) */
+    int cost_stair_base;     /* route scoring (640) */
+    int cost_elev_base;      /* (640) */
+    int cost_elev_full;      /* (1000) */
+    int cost_transfer;       /* (3000) */
+    int cost_transfer_full;  /* (6000) */
+    int walk_floors_esc;     /* walk budget, all-escalator (6) */
+    int walk_floors_stair;   /* walk budget once stairs involved (3) */
+    int capacity_standard;   /* people per standard car (42) */
+    int capacity_service;    /* people per express/service car (21) */
+    int judge_moderate;      /* avg wait -> mild stress (150, probable) */
+    int judge_stressed;      /* avg wait -> heavy stress (200, probable) */
+    int star_pop[4];         /* population for 2..5 stars (300/1k/5k/10k) */
+} Tuning;
 
-/* Route cost table (TransferT FindTransport; lower wins) */
-#define COST_STAIR_BASE     640
-#define COST_ELEV_BASE      640
-#define COST_ELEV_FULL      1000
-#define COST_TRANSFER       3000
-#define COST_TRANSFER_FULL  6000
+extern Tuning TUNING;
+
+/* Reset every field to the EXE's values */
+void tuning_reset(void);
+
+#define WAIT_CAP            (TUNING.wait_cap)
+#define PENALTY_QUEUE_FULL  (TUNING.penalty_queue_full)
+#define PENALTY_NO_ROUTE    (TUNING.penalty_no_route)
+#define PENALTY_ESC_SPAN    (TUNING.penalty_esc_span)
+#define PENALTY_STAIR_SPAN  (TUNING.penalty_stair_span)
+#define PENALTY_WALK_80     (TUNING.penalty_walk_80)
+#define PENALTY_WALK_125    (TUNING.penalty_walk_125)
+#define COST_STAIR_BASE     (TUNING.cost_stair_base)
+#define COST_ELEV_BASE      (TUNING.cost_elev_base)
+#define COST_ELEV_FULL      (TUNING.cost_elev_full)
+#define COST_TRANSFER       (TUNING.cost_transfer)
+#define COST_TRANSFER_FULL  (TUNING.cost_transfer_full)
 #define COST_NO_ROUTE       0x7fff
 
 typedef enum {
