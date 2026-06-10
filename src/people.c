@@ -586,9 +586,11 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
 {
     (void)frame;
     ps->trips_done++;
-    if (p->going_home && p->cur_floor == GROUND_IDX) {
+    if (p->going_home) {
+        /* commuters/patrons leave at ground; staff arrive back at their
+         * unit — either way the return trip ends the entity */
         deliver_stress(ps, tower, p);
-        p->home_tenant = 0;                 /* left the tower */
+        p->home_tenant = 0;
         p->state = PERSON_FREE;
         return;
     }
@@ -800,6 +802,7 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
 
 /* ---------- spawning (UniPeple-lite: commuters only) ---------- */
 
+/* Returns slot index + 1 (0 = no slot), so callers can find the person */
 static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
                         int from, int to, int going_home)
 {
@@ -817,7 +820,22 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
     p->going_home = (uint8_t)going_home;
     p->x = t->x;
     (void)tower;
-    return 1;
+    return slot + 1;
+}
+
+/* Lowest floor with a dirty hotel room (housekeeper dispatch target) */
+static int find_dirty_room_floor(Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->dirty && (t->type == ITEM_HOTEL_SINGLE ||
+                         t->type == ITEM_HOTEL_TWIN ||
+                         t->type == ITEM_HOTEL_SUITE)) {
+            int f = floor_to_index(t->floor);
+            if (f >= 0 && f < TOWER_FLOOR_COUNT) return f;
+        }
+    }
+    return -1;
 }
 
 static int tenant_commuters(const Tenant *t)
@@ -863,13 +881,38 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod)
                         t->type == ITEM_HOTEL_TWIN ||
                         t->type == ITEM_HOTEL_SUITE) && tod == TOD_EVENING &&
                        !t->dirty);
-        if (!inbound) continue;
+        /* venue patrons: lunch/shopping crowd, then the evening crowd */
+        int patron = ((t->type == ITEM_FAST_FOOD || t->type == ITEM_SHOP) &&
+                      tod == TOD_AFTERNOON) ||
+                     ((t->type == ITEM_RESTAURANT || t->type == ITEM_CINEMA ||
+                       t->type == ITEM_PARTY_HALL) && tod == TOD_EVENING);
+        /* housekeepers ride the service net to dirty rooms each dawn */
+        int staff = t->type == ITEM_HOUSEKEEPING &&
+                    (tod == TOD_DAWN || tod == TOD_MORNING);
+        if (!inbound && !patron && !staff) continue;
         if (ps->spawned[i] >= tenant_commuters(t)) continue;
         if ((frame + i) % 8) continue;
         int fidx = floor_to_index(t->floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-        if (spawn_person(ps, tower, t, GROUND_IDX, fidx, 0))
+
+        if (staff) {
+            int dirty = find_dirty_room_floor(tower);
+            if (dirty < 0) continue;
+            int sp = spawn_person(ps, tower, t, fidx, dirty, 0);
+            if (sp) {
+                Person *np = &ps->people[sp - 1];
+                np->service = 1;             /* stairs-only + service cars */
+                np->stay = 4;
+                ps->spawned[i]++;
+            }
+            continue;
+        }
+        int sp = spawn_person(ps, tower, t, GROUND_IDX, fidx, 0);
+        if (sp) {
+            if (patron)
+                ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
             ps->spawned[i]++;
+        }
     }
 }
 
@@ -923,6 +966,18 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
             break;
         case PERSON_QUEUED:  queued++; break;
         case PERSON_RIDING:  riding++; break;
+        case PERSON_AT_DEST:
+            /* patrons/staff: stay a while, then head back (staff return
+             * to their unit, patrons leave via the ground) */
+            if (p->stay && (frame + i) % 8 == 0 && --p->stay == 0) {
+                Tenant *ht = tower_tenant(tower, p->home_tenant);
+                int hf = ht ? floor_to_index(ht->floor) : -1;
+                p->going_home = 1;
+                p->dest_floor = (p->service && hf >= 0) ? (uint8_t)hf
+                                                        : GROUND_IDX;
+                p->state = PERSON_PLANNING;
+            }
+            break;
         default: break;
         }
         if (p->state == PERSON_WALKING) walking++;

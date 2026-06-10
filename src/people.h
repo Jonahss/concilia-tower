@@ -86,6 +86,8 @@ typedef struct {
     uint8_t  service;       /* staff: stairs-only walking, service elevators */
     uint8_t  going_home;    /* trip intent: 0 = inbound, 1 = outbound */
     uint8_t  walk_timer;    /* ticks left on the walking leg */
+    uint8_t  stay;          /* visit countdown at destination (patrons/staff,
+                             * 8-tick units); 0 = resident/commuter */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
     int      wait_start;    /* sim frame when the queue was joined (+0xA) */
     int      x;             /* walking-origin x (home tenant x, GetPersonX) */

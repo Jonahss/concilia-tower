@@ -305,6 +305,66 @@ static void test_elevator_dialog(void)
           "serviced flags survived; new floor defaults on");
 }
 
+/* Patrons visit venues and leave; housekeepers ride the service net */
+static void test_patrons_and_staff(void)
+{
+    printf("patrons & staff trips:\n");
+    fresh();
+    for (int f = 1; f <= 1; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t ff = place(ITEM_FAST_FOOD, 2, BX + 6);
+    for (int f = 0; f <= 1; f++) place(ITEM_STAIRS, f, BX + 30);
+    CHECK(ff != 0, "fast food placed");
+    force_occupied(ff);
+    people_rebuild_transport(&sim.people, &tw);
+
+    int f2 = floor_to_index(2);
+    int seen = 0;
+    for (int frame = 0; frame < 1200 && seen < 5; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+                      sim.reach_public, sim.reach_service);
+        if (people_at(ff, f2, PERSON_AT_DEST) > seen)
+            seen = people_at(ff, f2, PERSON_AT_DEST);
+    }
+    CHECK(seen == 5, "5 lunch patrons walked up to the fast food");
+    int gone = 0;
+    for (int frame = 1200; frame < 6000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+                      sim.reach_public, sim.reach_service);
+        if (sim.people.population_now == 0) { gone = 1; break; }
+    }
+    CHECK(gone, "patrons finished their visit and left");
+
+    /* staff: housekeeping on f1, dirty room on f2, service elevator only —
+     * the housekeeper must ride the service net (staff don't use stairs
+     * they don't have, and there are none) */
+    fresh();
+    uint16_t base = place(ITEM_HOTEL_SINGLE, 1, BX);
+    uint16_t room = place(ITEM_HOTEL_SINGLE, 2, BX);
+    uint16_t hk = place(ITEM_HOUSEKEEPING, 1, BX + 6);
+    uint16_t svc = place(ITEM_ELEVATOR_SERVICE, 0, 250);
+    place(ITEM_ELEVATOR_SERVICE, 1, 250);
+    place(ITEM_ELEVATOR_SERVICE, 2, 250);
+    CHECK(base && room && hk && svc, "hotel stack + housekeeping + service shaft placed");
+    force_occupied(base); force_occupied(room); force_occupied(hk);
+    tenant(room)->dirty = 1;
+    people_rebuild_transport(&sim.people, &tw);
+
+    int dispatched = 0, rode = 0;
+    int f2s = floor_to_index(2);
+    for (int frame = 0; frame < 3000 && !rode; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_DAWN,
+                      sim.reach_public, sim.reach_service);
+        for (int i = 0; i < sim.people.people_high; i++) {
+            Person *p = &sim.people.people[i];
+            if (p->home_tenant != hk || !p->service) continue;
+            dispatched = 1;
+            if (p->state == PERSON_AT_DEST && p->cur_floor == f2s) rode = 1;
+        }
+    }
+    CHECK(dispatched, "housekeeper dispatched");
+    CHECK(rode, "housekeeper rode the service elevator to the dirty room");
+}
+
 int main(void)
 {
     test_stairs();
@@ -314,6 +374,7 @@ int main(void)
     test_walk_rules();
     test_queue_and_stress();
     test_elevator_dialog();
+    test_patrons_and_staff();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }
