@@ -636,10 +636,40 @@ void game_update(GameSim *sim, Tower *tower)
     if (sim->tick >= sim->ticks_per_quarter) {
         sim->tick = 0;
         sim->quarter++;
-        
+
         /* End of quarter — tally finances */
         sim->total_income += sim->income_this_quarter;
         sim->total_expenses += sim->expenses_this_quarter;
+
+        /* Analytics sample (ring buffer, oldest evicted when full) */
+        {
+            StatsHistory *h = &sim->stats;
+            StatSample *smp;
+            if (h->count < STATS_MAX) {
+                smp = &h->s[(h->head + h->count) % STATS_MAX];
+                h->count++;
+            } else {
+                smp = &h->s[h->head];
+                h->head = (h->head + 1) % STATS_MAX;
+            }
+            long dw = sim->people.wait_total - sim->stats_prev_wait_total;
+            long dn = sim->people.wait_samples - sim->stats_prev_wait_samples;
+            sim->stats_prev_wait_total = sim->people.wait_total;
+            sim->stats_prev_wait_samples = sim->people.wait_samples;
+            *smp = (StatSample){
+                .day = tower->day,
+                .quarter = (int8_t)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT),
+                .star = (int8_t)tower->star_rating,
+                .population = tower->population,
+                .commuters = sim->people.population_now,
+                .avg_wait = dn ? (int32_t)(dw / dn) : 0,
+                .balance = tower->money,
+                .income = sim->income_this_quarter,
+                .expenses = sim->expenses_this_quarter,
+                .built_value = tower->built_value,
+                .lost_value = tower->lost_value,
+            };
+        }
         
         printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d, "
                "Commuters %d (avg wait %d)\n",

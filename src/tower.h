@@ -208,6 +208,11 @@ typedef struct {
     int       population;      /* Total people in tower */
     int       day;             /* Game day counter */
     int       quarter;         /* 0-3: Q1, Q2, Q3, Weekend */
+
+    /* Value tracking (for analytics): construction value currently
+     * standing, and value destroyed by bulldozing */
+    long      built_value;
+    long      lost_value;
     
     /* Camera position (pixel coordinates of top-left corner) */
     int       cam_x;

@@ -289,6 +289,7 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->flags = 1;
             }
             tower->money -= cost;
+            tower->built_value += cost;
             printf("Extended lobby on F%d: now x=%d w=%d (cost $%d, balance $%ld)\n",
                    floor, final_left, existing_lobby->width, cost, tower->money);
             return existing_lobby->id;
@@ -298,7 +299,8 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     
     /* Deduct cost */
     tower->money -= cost;
-    
+    tower->built_value += cost;
+
     /* Create tenant */
     uint16_t id = tower->next_tenant_id++;
     Tenant *t = &tower->tenants[tower->tenant_count++];
@@ -360,7 +362,11 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
 {
     Tenant *t = tower_tenant(tower, tenant_id);
     if (!t) return 0;
-    
+
+    /* Value accounting: bulldozed construction is lost value */
+    tower->built_value -= ITEM_COST[t->type];
+    tower->lost_value += ITEM_COST[t->type];
+
     /* Clear grid cells on all floors */
     for (int f = t->floor; f < t->floor + t->height; f++) {
         int idx = floor_to_index(f);

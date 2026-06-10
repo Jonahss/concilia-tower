@@ -274,6 +274,37 @@ typedef struct {
     int  y;         /* Pixel position (increases) */
 } SantaState;
 
+/* --- Analytics: per-quarter time series for the stats window ---
+ * One sample at the end of every quarter (4/day). 1024 samples = 256
+ * game days of history in a ring buffer. */
+#define STATS_MAX 1024
+
+typedef struct {
+    int32_t day;            /* game day of this sample */
+    int8_t  quarter;        /* 0-3 */
+    int8_t  star;
+    int32_t population;
+    int32_t commuters;      /* live person entities */
+    int32_t avg_wait;       /* avg banked elevator wait this quarter */
+    int64_t balance;
+    int64_t income;         /* that quarter's income */
+    int64_t expenses;
+    int64_t built_value;    /* construction value standing */
+    int64_t lost_value;     /* cumulative bulldozed value */
+} StatSample;
+
+typedef struct {
+    StatSample s[STATS_MAX];
+    int count;              /* samples stored (<= STATS_MAX) */
+    int head;               /* oldest sample index once full */
+} StatsHistory;
+
+/* i-th sample, oldest first (0 .. count-1) */
+static inline const StatSample *stats_at(const StatsHistory *h, int i)
+{
+    return &h->s[(h->head + i) % STATS_MAX];
+}
+
 /* The simulation state */
 typedef struct {
     /* Time */
@@ -336,6 +367,11 @@ typedef struct {
 
     /* People + elevator simulation (people.c) */
     PeopleSim     people;
+
+    /* Analytics time series (sampled at each quarter end) */
+    StatsHistory  stats;
+    long          stats_prev_wait_total;   /* for per-quarter wait deltas */
+    long          stats_prev_wait_samples;
 } GameSim;
 
 /* Initialize simulation */

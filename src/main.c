@@ -242,6 +242,7 @@ typedef struct {
     int             running;
     int             screen_w, screen_h;
     int             show_debug;   /* Toggle diagnostic labels */
+    int             show_stats;   /* Analytics window (F3) */
     
     /* Build mode */
     ItemType        build_type;
@@ -1276,6 +1277,118 @@ static void render_tower(void)
     }
 }
 
+/* ---------- Analytics window (F3) ---------- */
+
+#define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
+static void draw_win31_titlebar(int x, int y, int w, const char *title);
+
+static void stats_plot(int gx, int gy, int gw, int gh,
+                       const int64_t *v, int n, SDL_Color col,
+                       int64_t vmin, int64_t vmax)
+{
+    if (n < 2 || vmax <= vmin) return;
+    SDL_SetRenderDrawColor(game.renderer, col.r, col.g, col.b, 255);
+    for (int i = 1; i < n; i++) {
+        int x0 = gx + (i - 1) * (gw - 1) / (n - 1);
+        int x1 = gx + i * (gw - 1) / (n - 1);
+        int y0 = gy + gh - 1 - (int)((v[i-1] - vmin) * (gh - 1) / (vmax - vmin));
+        int y1 = gy + gh - 1 - (int)((v[i] - vmin) * (gh - 1) / (vmax - vmin));
+        SDL_RenderDrawLine(game.renderer, x0, y0, x1, y1);
+    }
+}
+
+static void stats_label(int x, int y, const char *text, SDL_Color col)
+{
+    int tw, th;
+    SDL_Texture *t = render_text(text, col, &tw, &th);
+    if (!t) return;
+    SDL_Rect dst = { x, y, tw, th };
+    SDL_RenderCopy(game.renderer, t, NULL, &dst);
+    SDL_DestroyTexture(t);
+}
+
+static void render_stats_window(void)
+{
+    if (!game.show_stats) return;
+    const int W = 470, H = 330;
+    int wx = game.screen_w - W - 12, wy = 64;
+
+    draw_win31_titlebar(wx, wy, W, "Analytics");
+    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, W, H };
+    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    SDL_RenderFillRect(game.renderer, &body);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &body);
+
+    StatsHistory *h = &game.sim.stats;
+    int n = h->count > 120 ? 120 : h->count;
+    if (n < 2) {
+        stats_label(wx + 12, wy + WIN_TITLEBAR_H + 12,
+                    "Collecting data... (1 sample per quarter)",
+                    (SDL_Color){ 60, 60, 60, 255 });
+        return;
+    }
+    int first = h->count - n;
+
+    /* Gather the visible window of each series */
+    static int64_t pop[120], com[120], inc[120], exp[120], blt[120], lst[120];
+    for (int i = 0; i < n; i++) {
+        const StatSample *s = stats_at(h, first + i);
+        pop[i] = s->population;  com[i] = s->commuters;
+        inc[i] = s->income;      exp[i] = s->expenses;
+        blt[i] = s->built_value; lst[i] = s->lost_value;
+    }
+    const StatSample *last = stats_at(h, h->count - 1);
+
+    struct {
+        const char *title;
+        const int64_t *a, *b;
+        SDL_Color ca, cb;
+        char cur[96];
+    } graphs[3] = {
+        { "Population / Commuters", pop, com,
+          (SDL_Color){ 40, 80, 220, 255 }, (SDL_Color){ 0, 150, 160, 255 }, "" },
+        { "Income / Expenses (per quarter)", inc, exp,
+          (SDL_Color){ 0, 140, 0, 255 }, (SDL_Color){ 200, 30, 30, 255 }, "" },
+        { "Value built / lost", blt, lst,
+          (SDL_Color){ 90, 90, 90, 255 }, (SDL_Color){ 230, 130, 0, 255 }, "" },
+    };
+    snprintf(graphs[0].cur, sizeof(graphs[0].cur), "%d / %d",
+             last->population, last->commuters);
+    snprintf(graphs[1].cur, sizeof(graphs[1].cur), "$%ld / $%ld",
+             (long)last->income, (long)last->expenses);
+    snprintf(graphs[2].cur, sizeof(graphs[2].cur), "$%ld / $%ld",
+             (long)last->built_value, (long)last->lost_value);
+
+    int gx = wx + 10, gw = W - 20, gh = 64;
+    int gy = wy + WIN_TITLEBAR_H + 8;
+    for (int g = 0; g < 3; g++) {
+        stats_label(gx, gy, graphs[g].title, (SDL_Color){ 0, 0, 0, 255 });
+        stats_label(gx + gw - 150, gy, graphs[g].cur,
+                    (SDL_Color){ 60, 60, 60, 255 });
+        gy += 18;
+        SDL_Rect box = { gx, gy, gw, gh };
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_RenderFillRect(game.renderer, &box);
+        SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
+        SDL_RenderDrawRect(game.renderer, &box);
+
+        int64_t lo = graphs[g].a[0], hi = lo;
+        for (int i = 0; i < n; i++) {
+            int64_t v1 = graphs[g].a[i], v2 = graphs[g].b[i];
+            if (v1 < lo) lo = v1; if (v1 > hi) hi = v1;
+            if (v2 < lo) lo = v2; if (v2 > hi) hi = v2;
+        }
+        if (hi == lo) hi = lo + 1;
+        stats_plot(gx + 1, gy + 1, gw - 2, gh - 2, graphs[g].a, n, graphs[g].ca, lo, hi);
+        stats_plot(gx + 1, gy + 1, gw - 2, gh - 2, graphs[g].b, n, graphs[g].cb, lo, hi);
+        gy += gh + 8;
+    }
+    char foot[64];
+    snprintf(foot, sizeof(foot), "%d quarters of history (F3 to close)", h->count);
+    stats_label(gx, gy, foot, (SDL_Color){ 80, 80, 80, 255 });
+}
+
 /* ---------- People layer: elevator cars + waiting queues ----------
  * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
  * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
@@ -1486,7 +1599,6 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 
 #define INFO_BAR_W  431       /* Info/time bar width — faithful to original (time.rml: 431px) */
 #define INFO_BAR_H  41        /* Faithful time-bar height (time.rml: 41px) */
-#define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
 #define CLOCK_R     14        /* Small clock for horizontal bar */
 
 #define MAP_WIN_W   200       /* Map window (left side) */
@@ -2315,6 +2427,7 @@ static void render(void)
     render_people();
     render_build_ghost();
     render_ui();
+    render_stats_window();
     
     SDL_RenderPresent(game.renderer);
 }
@@ -2645,6 +2758,11 @@ static void handle_event(SDL_Event *ev)
             if (!game.sim.santa.active) {
                 game_launch_santa(&game.sim, game.screen_w);
             }
+            break;
+
+        /* Analytics window */
+        case SDLK_F3:
+            game.show_stats = !game.show_stats;
             break;
         
         /* Debug toggle — F1 gets eaten by browsers, use backtick */
@@ -3472,6 +3590,8 @@ int main(int argc, char *argv[])
      * pull-down; DEMOLISH=1 activates the bulldozer. */
     if (getenv("TB_POPUP")) game.tool_popup = atoi(getenv("TB_POPUP"));
     if (getenv("DEMOLISH")) game.demolish_mode = 1;
+    if (getenv("STATS")) game.show_stats = 1;
+    if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     
