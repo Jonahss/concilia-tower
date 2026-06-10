@@ -1818,13 +1818,26 @@ static void render_people(void)
         }
 
         /* Waiting queues: lines of silhouettes at the shaft door (ElvPeple).
-         * Figures picked per person id so the crowd stays varied but stable. */
+         * Figures picked per person id so the crowd stays varied but stable.
+         * The line forms on whichever side of the shaft has building — so
+         * it waits indoors instead of marching into the street. */
         for (int f = s->lo; f <= s->hi && queue_spr; f++) {
             const ElevatorStop *st = &s->stop[f];
             int n = st->up_count + st->down_count;
             if (!n) continue;
             int sx, sy;
             grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
+            int left_in = 0, right_in = 0;
+            for (int d = 1; d <= 4 && !(left_in && right_in); d++) {
+                int lx = s->x - d;
+                int rx = s->x + ITEM_WIDTH[s->type] + d - 1;
+                if (lx >= 0 && game.tower.grid[f][lx].type != ITEM_NONE)
+                    left_in = 1;
+                if (rx < TOWER_WIDTH &&
+                    game.tower.grid[f][rx].type != ITEM_NONE)
+                    right_in = 1;
+            }
+            int rightward = right_in && !left_in;
             int shown = n > 10 ? 10 : n;
             for (int k = 0; k < shown; k++) {
                 uint16_t pid;
@@ -1835,7 +1848,9 @@ static void render_people(void)
                                         % QUEUE_CAP];
                 int fig = (pid * 7) % 40;     /* 40 silhouettes of 16px */
                 SDL_Rect src = { fig * 16, 0, 16, 36 };
-                SDL_Rect dst = { sx - 16 - k * 9, sy, 16, CELL_H };
+                int px = rightward ? sx + shaft_w + k * 9
+                                   : sx - 16 - k * 9;
+                SDL_Rect dst = { px, sy, 16, CELL_H };
                 SDL_RenderCopy(game.renderer, queue_spr->texture, &src, &dst);
             }
         }
