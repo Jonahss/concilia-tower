@@ -42,8 +42,13 @@ the **express** set.
 no subtype overrides it.
 
 **EXE**: group+0x02 = capacity, **42 for standard**, 21 for
-express/service (ElevatorsT + TripT boarding, confirmed by the 42-slot
-passenger arrays: car +0x10 `int32[42]`, +0xB8 `byte[42]`).
+express/service. Confirmed end to end: the build tool's creation calls
+push literal immediates — `push 0x2a; push 0` (standard), `push 0x15;
+push 1` (express), `push 0x15; push 2` (service) — into MakeElevator
+(tenant.c seg_11f8:0x0fea, which stores them at group+2), and boarding
+computes `free = group[+2] − passenger_count` (TripT 1210:03a4). The
+42-slot per-car passenger arrays (`int32[42]`, `byte[42]`) corroborate.
+Yes, exactly double — 21×2 is a design choice, in the machine code.
 
 ## 3. Express speed: it's structure, not horsepower
 
