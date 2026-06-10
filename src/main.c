@@ -966,9 +966,11 @@ static void render_tower(void)
             } else if (item_is_elevator(tenant->type) && spr) {
                 /* Shaft section: always tile 0 of 0x87E8. Tiles 1+ are the
                  * floor-digit variants (1..9, 100) — wiring the real
-                 * per-floor digits comes with the shaft-label pass. */
+                 * per-floor digits comes with the shaft-label pass.
+                 * The 36px tile spans the FULL floor height: the shaft
+                 * overlays the ceiling strip/joists, as in the original. */
                 SDL_Rect src = { 0, 0, 32, spr->h };
-                SDL_Rect dst = { tx, draw_y, tw, draw_h };
+                SDL_Rect dst = { tx, ty, tw, CELL_H };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
@@ -1528,19 +1530,28 @@ static void render_people(void)
         if (!s->active) continue;
         int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
 
-        /* Engine room above the top shaft segment (overhangs the shaft) */
+        /* Machinery caps: the sheet tail is TWO one-shaft-wide tiles —
+         * tile A (up arrow + winch) is the motor room ABOVE the shaft,
+         * tile B (buffer springs + down arrow) is the pit BELOW it.
+         * (OpenSkyscraper splits them the same way: topMotor/bottomMotor;
+         * the arrows are the original's extend-the-shaft handles.) */
         {
             Sprite *eng = sprites_find(&game.sprites,
                 s->type == ITEM_ELEVATOR_EXPRESS ? SPR_ELEV_EXPRESS
                                                  : SPR_ELEV_STD_LOADED);
             if (eng) {
+                int tile_w  = (s->type == ITEM_ELEVATOR_EXPRESS) ? 48 : 32;
+                int tail    = (s->type == ITEM_ELEVATOR_EXPRESS) ? 5 : 4;
                 int ex, ey;
                 grid_to_screen(index_to_floor(s->hi) + 1, s->x, &ex, &ey);
-                SDL_Rect src = (s->type == ITEM_ELEVATOR_EXPRESS)
-                    ? (SDL_Rect){ 5 * 48, 0, 96, 36 }
-                    : (SDL_Rect){ 4 * 32, 0, 64, 36 };
-                SDL_Rect dst = { ex - (src.w - shaft_w) / 2, ey, src.w, CELL_H };
-                SDL_RenderCopy(game.renderer, eng->texture, &src, &dst);
+                SDL_Rect src_top = { tail * tile_w, 0, tile_w, 36 };
+                SDL_Rect dst_top = { ex, ey, shaft_w, CELL_H };
+                SDL_RenderCopy(game.renderer, eng->texture, &src_top, &dst_top);
+
+                grid_to_screen(index_to_floor(s->lo) - 1, s->x, &ex, &ey);
+                SDL_Rect src_bot = { (tail + 1) * tile_w, 0, tile_w, 36 };
+                SDL_Rect dst_bot = { ex, ey, shaft_w, CELL_H };
+                SDL_RenderCopy(game.renderer, eng->texture, &src_bot, &dst_bot);
             }
         }
 
