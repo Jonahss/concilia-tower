@@ -47,6 +47,13 @@ void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect
 void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite, 
                          int x, int y, int w, int h, SDL_Rect *src_rect);
 
+/* Register an animation frame of a palette-cycled ('animated') bitmap
+ * under new_id. steps = how many cycle steps to apply (1 or 2; 3 = base).
+ * Returns 0 on success. */
+int sprites_load_palette_cycled(SpriteAtlas *atlas, NEResourceTable *exe,
+                                SDL_Renderer *renderer, uint16_t id,
+                                uint16_t new_id, int steps);
+
 /* Recreate a sprite's texture with a color as transparent (color key).
  * Returns 0 on success. */
 int sprites_apply_color_key(SpriteAtlas *atlas, SDL_Renderer *renderer,

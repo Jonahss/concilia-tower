@@ -1,6 +1,7 @@
 /* sprites.c - Sprite atlas implementation */
 #include "sprites.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- Palette loading ---------- */
@@ -222,6 +223,53 @@ static SDL_Surface *texture_to_surface(SDL_Renderer *renderer, SDL_Texture *tex,
     SDL_SetRenderTarget(renderer, NULL);
     SDL_DestroyTexture(target);
     return surf;
+}
+
+/* Palette-cycle animation (the EXE's 'animated bitmaps'): frames are made
+ * by cycling color-table entries in place — 197<->198, 199<->200, and a
+ * 3-rotation of 201->202->203. One call = one step; registering steps 1
+ * and 2 of a sheet gives its other two animation frames (step 3 = base).
+ * Used by the elevator engines, security office, cinema marquee. */
+int sprites_load_palette_cycled(SpriteAtlas *atlas, NEResourceTable *exe,
+                                SDL_Renderer *renderer, uint16_t id,
+                                uint16_t new_id, int steps)
+{
+    if (atlas->count >= MAX_SPRITES) return -1;
+    NEResource *res = ne_find(exe, 0x8002, id);
+    if (!res || res->length < 40) return -1;
+
+    /* Copy the resource and cycle the embedded color table */
+    uint8_t *copy = malloc(res->length);
+    if (!copy) return -1;
+    memcpy(copy, res->data, res->length);
+    uint32_t hdr_size = *(uint32_t *)(copy + 0);
+    uint8_t *ct = copy + hdr_size;
+    for (int s = 0; s < steps; s++) {
+        for (int n = 0; n < 4; n++) {
+            uint8_t *o = ct + 197 * 4 + n;
+            uint8_t t;
+            t = o[4];  o[4]  = o[0];  o[0]  = t;          /* 197<->198 */
+            t = o[12]; o[12] = o[8];  o[8]  = t;          /* 199<->200 */
+            t = o[24]; o[24] = o[20]; o[20] = o[16]; o[16] = t; /* 201..203 */
+        }
+    }
+
+    NEResource tmp = *res;
+    tmp.data = copy;
+    SDL_Surface *surf = dib_to_surface(&tmp, atlas);
+    free(copy);
+    if (!surf) return -1;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+    int w = surf->w, h = surf->h;
+    SDL_FreeSurface(surf);
+    if (!tex) return -1;
+    Sprite *sp = &atlas->sprites[atlas->count++];
+    sp->id = new_id;
+    sp->type = 0x8002;
+    sp->texture = tex;
+    sp->w = w;
+    sp->h = h;
+    return 0;
 }
 
 int sprites_apply_color_key(SpriteAtlas *atlas, SDL_Renderer *renderer,

@@ -124,6 +124,11 @@
 #define SPR_ELEV_SERVICE 0x842a   /* service car frames 0-4 (×32) */
 #define SPR_ELEV_STANDARD 0x842b  /* standard frames 0-4 + wide engine (×48) */
 #define SPR_ELEV_EXT     0x842c   /* 2 8px shaft side extensions (wide shaft) */
+/* Synthetic ids: palette-cycle animation frames of the engine sheets */
+#define SPR_ELEV_EXP_F1  0xf829
+#define SPR_ELEV_EXP_F2  0xf929
+#define SPR_ELEV_STD_F1  0xf82b
+#define SPR_ELEV_STD_F2  0xf92b
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
@@ -1820,8 +1825,18 @@ static void render_people(void)
          * the arrows are the original's extend-the-shaft handles.) */
         {
             int is_std = (s->type == ITEM_ELEVATOR_SHAFT);
-            Sprite *eng = sprites_find(&game.sprites,
-                is_std ? SPR_ELEV_STANDARD : SPR_ELEV_EXP_LOADED);
+            /* The motors animate (palette cycle) while any car is moving */
+            int moving = 0;
+            for (int ci = 0; ci < s->num_cars && !moving; ci++)
+                if (s->car[ci].active && s->car[ci].target != s->car[ci].floor)
+                    moving = 1;
+            int ef = moving ? (game.sim.frame / 6) % 3 : 0;
+            uint16_t eng_id = is_std
+                ? (ef == 0 ? SPR_ELEV_STANDARD
+                 : ef == 1 ? SPR_ELEV_STD_F1 : SPR_ELEV_STD_F2)
+                : (ef == 0 ? SPR_ELEV_EXP_LOADED
+                 : ef == 1 ? SPR_ELEV_EXP_F1 : SPR_ELEV_EXP_F2);
+            Sprite *eng = sprites_find(&game.sprites, eng_id);
             if (eng) {
                 int tile_w  = is_std ? 48 : 32;  /* wide engine = standard */
                 int tail    = is_std ? 5 : 4;
@@ -3727,6 +3742,15 @@ int main(int argc, char *argv[])
     /* digit sheet background is the shaft's own near-black (as in OS) */
     sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS,
                             25, 25, 25);
+    /* engine animation frames (palette-cycled 'animated bitmaps') */
+    sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                SPR_ELEV_EXP_LOADED, SPR_ELEV_EXP_F1, 1);
+    sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                SPR_ELEV_EXP_LOADED, SPR_ELEV_EXP_F2, 2);
+    sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                SPR_ELEV_STANDARD, SPR_ELEV_STD_F1, 1);
+    sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                SPR_ELEV_STANDARD, SPR_ELEV_STD_F2, 2);
 
     /* Build composite sprites from raw parts */
     {
