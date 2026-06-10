@@ -1,0 +1,152 @@
+/* people.h - Person entities, elevator cars, and trips
+ *
+ * Ported from the SIMTOWER.EXE decompilation:
+ *   - TransferT (seg_11b0): route scoring, walk budgets, transfer slots
+ *   - TripT (seg_1210): TryStartTrip, queue join, boarding/unboarding
+ *   - ElevatorsT (seg_1090): car state machine, call assignment
+ *   - WaitT (seg_11d8): wait-time -> stress banking
+ *
+ * Tuning constants are the REAL values from EXE resource 0x7F05
+ * (simtower-decomp globals.md #49).
+ */
+#ifndef PEOPLE_H
+#define PEOPLE_H
+
+#include "tower.h"
+
+#define MAX_PEOPLE     4096
+#define MAX_SHAFTS     24          /* original: 24 elevator groups */
+#define CARS_PER_SHAFT 8           /* original: 8 cars per group */
+#define QUEUE_CAP      40          /* people per direction per floor stop */
+#define CAR_SLOTS      42          /* passenger slots per car (= standard capacity) */
+
+/* Real tuning values (resource 0x7F05 -> DS:0xDD7A..) */
+#define WAIT_CAP            300    /* frustration accumulator hard cap */
+#define PENALTY_QUEUE_FULL  5      /* rejected at a full queue */
+#define PENALTY_NO_ROUTE    300    /* no route at all = instant cap-out */
+#define PENALTY_ESC_SPAN    16     /* per escalator span walked */
+#define PENALTY_STAIR_SPAN  35     /* per stair span walked */
+#define PENALTY_WALK_80     30     /* walk >= 80 cells to a transport */
+#define PENALTY_WALK_125    60     /* walk >= 125 cells */
+
+/* Route cost table (TransferT FindTransport; lower wins) */
+#define COST_STAIR_BASE     640
+#define COST_ELEV_BASE      640
+#define COST_ELEV_FULL      1000
+#define COST_TRANSFER       3000
+#define COST_TRANSFER_FULL  6000
+#define COST_NO_ROUTE       0x7fff
+
+typedef enum {
+    PERSON_FREE = 0,
+    PERSON_PLANNING,    /* needs a route toward dest_floor */
+    PERSON_WALKING,     /* on a stair/escalator leg */
+    PERSON_QUEUED,      /* waiting in an elevator stop queue */
+    PERSON_RIDING,      /* inside a car */
+    PERSON_AT_DEST,     /* arrived; waits for the next phase of the day */
+} PersonState;
+
+typedef struct {
+    uint16_t home_tenant;   /* tenant id; 0 = slot free */
+    uint8_t  state;         /* PersonState */
+    uint8_t  cur_floor;     /* grid floor index */
+    uint8_t  dest_floor;    /* final destination of the current trip */
+    uint8_t  leg_floor;     /* arrival floor of the current leg */
+    uint8_t  dir;           /* queue direction while QUEUED (1 = up) */
+    uint8_t  shaft;         /* shaft index while QUEUED/RIDING */
+    uint8_t  service;       /* staff: stairs-only walking, service elevators */
+    uint8_t  going_home;    /* trip intent: 0 = inbound, 1 = outbound */
+    uint8_t  walk_timer;    /* ticks left on the walking leg */
+    uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
+    int      wait_start;    /* sim frame when the queue was joined (+0xA) */
+    int      x;             /* walking-origin x (home tenant x, GetPersonX) */
+} Person;
+
+/* Waiting queues at one floor stop — ring buffers exactly as in the EXE
+ * (stop record: counts/heads + u32 ring[40] per direction) */
+typedef struct {
+    uint8_t  up_count, up_head, down_count, down_head;
+    uint16_t up_ring[QUEUE_CAP];     /* person index + 1; 0 = empty */
+    uint16_t down_ring[QUEUE_CAP];
+} ElevatorStop;
+
+typedef struct {
+    uint8_t  active;
+    uint8_t  floor;         /* current floor (grid index) */
+    uint8_t  target;        /* floor the car is heading to */
+    uint8_t  dir;           /* 1 = up, 0 = down */
+    uint8_t  door_timer;    /* 5..0; 5 = just opened (unboard), odd = board 1,
+                             * 1 = bulk board, 0 = closed */
+    uint8_t  move_timer;    /* ticks until the next floor step */
+    uint8_t  passengers;    /* people on board (car+0x298D) */
+    uint8_t  distinct_dests;/* distinct destination floors aboard (+0x2996) */
+    uint16_t assigned_calls;/* floor calls owned by this car (+0x2994) */
+    uint16_t pax[CAR_SLOTS];        /* person index + 1; 0 = empty */
+    uint8_t  pax_dest[CAR_SLOTS];   /* destination floor per slot (+0x2A42) */
+    uint8_t  dest_count[TOWER_FLOOR_COUNT]; /* requested stops (+0x2A6C) */
+} ElevatorCar;
+
+typedef struct {
+    uint8_t  active;
+    ItemType type;          /* ITEM_ELEVATOR_SHAFT / _SERVICE / _EXPRESS */
+    uint8_t  lo, hi;        /* shaft floor range (grid indices) */
+    int      x;             /* shaft x cell */
+    uint8_t  capacity;      /* 42 standard, 21 express/service (group+2) */
+    uint8_t  num_cars;
+    ElevatorCar  car[CARS_PER_SHAFT];
+    ElevatorStop stop[TOWER_FLOOR_COUNT];
+    uint8_t  up_call_car[TOWER_FLOOR_COUNT];   /* car index + 1; 0 = none */
+    uint8_t  down_call_car[TOWER_FLOOR_COUNT];
+} ElevatorShaft;
+
+typedef struct {
+    Person   people[MAX_PEOPLE];
+    int      people_high;       /* slots ever used (scan bound) */
+
+    ElevatorShaft shafts[MAX_SHAFTS];
+    int      shaft_count;
+
+    /* Per-gap walk map (floor f <-> f+1), faithful to 0xCF10:
+     * bit0 = escalator on this gap, bit1 = stairs */
+    uint8_t  gap_map[TOWER_FLOOR_COUNT];
+
+    uint32_t layout_stamp;      /* transport layout change detection */
+
+    /* Day-phase spawn bookkeeping (one byte per tenant slot) */
+    uint8_t  spawned[MAX_TENANTS];
+    uint8_t  cur_phase;
+
+    /* Stats for UI / digests */
+    int      population_now;    /* live person entities */
+    int      queued_now;
+    int      riding_now;
+    int      walking_now;
+    long     trips_done;
+    long     trips_failed;
+    long     wait_total;        /* sum of banked waits (for avg) */
+    long     wait_samples;
+} PeopleSim;
+
+void people_init(PeopleSim *ps);
+
+/* Rebuild gap map + shafts from the tower. Cheap when nothing changed
+ * (diffs the transport layout; resets cars/queues only on change). */
+void people_rebuild_transport(PeopleSim *ps, Tower *tower);
+
+/* One simulation tick: spawning, trips, queues, cars, stress delivery.
+ * frame = global tick counter, tod = TimeOfDay (game.h value). */
+void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
+                   const uint8_t *reach_public, const uint8_t *reach_service);
+
+/* Join the waiting queue at a stop (exposed for tests).
+ * Returns 1 on success, 0 if the queue is full (cap 40/direction). */
+int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
+                      int person_idx);
+
+/* Average banked wait (0 if no samples yet) */
+static inline int people_avg_wait(const PeopleSim *ps)
+{
+    return ps->wait_samples ? (int)(ps->wait_total / ps->wait_samples) : 0;
+}
+
+#endif /* PEOPLE_H */

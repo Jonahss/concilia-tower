@@ -1265,6 +1265,55 @@ static void render_tower(void)
     }
 }
 
+/* ---------- People layer: elevator cars + waiting queues ---------- */
+static void render_people(void)
+{
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active) continue;
+
+        /* Waiting queues: a line of small figures at the shaft door,
+         * growing away from the shaft (ElvPeple's queue lines) */
+        for (int f = s->lo; f <= s->hi; f++) {
+            int n = s->stop[f].up_count + s->stop[f].down_count;
+            if (!n) continue;
+            int sx, sy;
+            grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
+            int base_y = sy + CELL_H - 8;
+            SDL_SetRenderDrawColor(game.renderer, 40, 40, 80, 255);
+            int shown = n > 12 ? 12 : n;
+            for (int k = 0; k < shown; k++) {
+                SDL_Rect dot = { sx - 6 - k * 5, base_y, 3, 6 };
+                SDL_RenderFillRect(game.renderer, &dot);
+            }
+        }
+
+        /* Cars: a box riding the shaft column, tinted by load,
+         * doors drawn open while the door timer runs */
+        for (int ci = 0; ci < s->num_cars; ci++) {
+            ElevatorCar *c = &s->car[ci];
+            if (!c->active) continue;
+            int sx, sy;
+            grid_to_screen(index_to_floor(c->floor), s->x, &sx, &sy);
+            SDL_Rect car = { sx + 3, sy + CEIL_H + 1,
+                             ITEM_WIDTH[s->type] * CELL_W - 6, TENANT_H - 2 };
+            int load = s->capacity ? (c->passengers * 255) / s->capacity : 0;
+            SDL_SetRenderDrawColor(game.renderer,
+                                   (Uint8)(90 + load / 3), 90,
+                                   (Uint8)(140 - load / 3), 255);
+            SDL_RenderFillRect(game.renderer, &car);
+            SDL_SetRenderDrawColor(game.renderer, 230, 230, 240, 255);
+            SDL_RenderDrawRect(game.renderer, &car);
+            if (c->door_timer) {   /* doors open: light gap in the middle */
+                SDL_SetRenderDrawColor(game.renderer, 250, 250, 210, 255);
+                SDL_Rect gap = { car.x + car.w / 2 - 3, car.y + 2, 6, car.h - 4 };
+                SDL_RenderFillRect(game.renderer, &gap);
+            }
+        }
+    }
+}
+
 static void render_build_ghost(void)
 {
     if (game.demolish_mode || game.build_type == ITEM_NONE) return;
@@ -2203,6 +2252,7 @@ static void render(void)
     
     render_sky();
     render_tower();
+    render_people();
     render_build_ghost();
     render_ui();
     
@@ -3370,6 +3420,16 @@ int main(int argc, char *argv[])
     if (demo_mode) {
         tower_build_demo(&game.tower);
     }
+
+    /* Screenshot affordance: a small commuting scene — an office stack over
+     * the lobby with a standard elevator beside it (COMMUTE_DEMO=1) */
+    if (getenv("COMMUTE_DEMO")) {
+        game.tower.money = 100000000L;
+        for (int f = 1; f <= 6; f++)
+            tower_place(&game.tower, ITEM_OFFICE, f, 183);
+        for (int f = 0; f <= 6; f++)
+            tower_place(&game.tower, ITEM_ELEVATOR_SHAFT, f, 174);
+    }
     
     /* Center camera — show the tower nicely.
      * If screenshot mode with "underground" path, show underground view */
@@ -3462,8 +3522,12 @@ int main(int argc, char *argv[])
         render();
         frame++;
         
-        /* Auto-screenshot: run sim for a bit first so tenants wake up */
-        if (auto_screenshot && frame == 200) {
+        /* Auto-screenshot: run sim for a bit first so tenants wake up.
+         * SHOT_FRAME=N overrides how long the sim runs before the capture. */
+        static int shot_frame = 0;
+        if (!shot_frame)
+            shot_frame = getenv("SHOT_FRAME") ? atoi(getenv("SHOT_FRAME")) : 200;
+        if (auto_screenshot && frame == shot_frame) {
             SDL_Surface *sshot = SDL_CreateRGBSurface(0, game.screen_w, game.screen_h, 32,
                 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
             SDL_RenderReadPixels(game.renderer, NULL, SDL_PIXELFORMAT_ARGB8888,

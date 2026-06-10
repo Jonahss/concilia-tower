@@ -55,6 +55,7 @@ void game_init(GameSim *sim)
     sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_NORMAL];
     sim->hour = 7;  /* Start at 7am */
     sim->time_of_day = TOD_MORNING;
+    people_init(&sim->people);
 }
 
 /* --- Population calculation --- */
@@ -577,6 +578,7 @@ void game_update(GameSim *sim, Tower *tower)
     static int reach_throttle = 0;
     if (reach_throttle-- <= 0) {
         game_update_reachability(sim, tower);
+        people_rebuild_transport(&sim->people, tower);
         reach_throttle = 15;
     }
 
@@ -596,6 +598,10 @@ void game_update(GameSim *sim, Tower *tower)
         sim->time_of_day = hour_to_tod(sim->hour);
     }
     
+    /* People + elevators run every tick — cars and queues are the game */
+    people_update(&sim->people, tower, sim->frame, sim->time_of_day,
+                  sim->reach_public, sim->reach_service);
+
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
         long tick_income = 0, tick_expenses = 0;
@@ -635,10 +641,12 @@ void game_update(GameSim *sim, Tower *tower)
         sim->total_income += sim->income_this_quarter;
         sim->total_expenses += sim->expenses_this_quarter;
         
-        printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d\n",
+        printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d, "
+               "Commuters %d (avg wait %d)\n",
                game_quarter_name((Quarter)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT)),
                sim->income_this_quarter, sim->expenses_this_quarter,
-               tower->money, tower->population);
+               tower->money, tower->population,
+               sim->people.population_now, people_avg_wait(&sim->people));
         
         sim->income_this_quarter = 0;
         sim->expenses_this_quarter = 0;

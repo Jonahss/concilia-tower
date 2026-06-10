@@ -13,6 +13,7 @@
 #define GAME_H
 
 #include "tower.h"
+#include "people.h"
 
 /* Time of day — affects tenant activity and sky rendering */
 typedef enum {
@@ -332,6 +333,9 @@ typedef struct {
     uint8_t       reach_service[TOWER_FLOOR_COUNT];
     int           unreachable_tenants; /* Units cut off from the entrance */
     int           dirty_rooms;         /* Hotel rooms waiting on housekeeping */
+
+    /* People + elevator simulation (people.c) */
+    PeopleSim     people;
 } GameSim;
 
 /* Initialize simulation */
