@@ -79,7 +79,10 @@ static const int ITEM_WIDTH[] = {
     [ITEM_RECYCLING] = 25,   /* 200px — sprite 200×60, GameFAQs: "Recycling 25x2" (was 6, FIXED) */
     [ITEM_STAIRS] = 8,       /* 64px — sprite 448/7 = 64px per frame ✓ */
     [ITEM_ESCALATOR] = 8,    /* 64px — sprite 512/8 = 64px per frame ✓ */
-    [ITEM_ELEVATOR_SHAFT] = 4, /* 32px (standard) */
+    /* EXE BuildRoutingSlots (11b0:0538): width = 6 if type==0 (standard),
+     * 4 for express/service. OpenSkyscraper has standard/express SWAPPED —
+     * the 48px dense-crowd car sheet (0x842B) is the 42-person standard. */
+    [ITEM_ELEVATOR_SHAFT] = 6, /* 48px (standard — the wide one) */
     [ITEM_ELEVATOR_SERVICE] = 4,
     [ITEM_ELEVATOR_EXPRESS] = 4,
     [ITEM_HOUSEKEEPING] = 4,

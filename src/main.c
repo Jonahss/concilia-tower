@@ -115,10 +115,15 @@
 #define SPR_METRO_BASE  0x8BA8
 
 /* Elevator: shaft + cars */
-#define SPR_ELEV_CAR     0x8428   /* standard car, empty (32×36) */
-#define SPR_ELEV_STD_LOADED 0x8429 /* standard car frames 1-4 + engine (×32) */
+/* Car sheets — NOTE: OpenSkyscraper labels these backwards. The EXE's
+ * routing/dirty-zone code says standard = 6 cells wide, express/service =
+ * 4 (BuildRoutingSlots 11b0:0538), and the 48px sheet's dense-crowd car +
+ * double-drum engine is the 42-person STANDARD car. */
+#define SPR_ELEV_EXP_EMPTY 0x8428 /* express car, empty (32×36) */
+#define SPR_ELEV_EXP_LOADED 0x8429 /* express frames 1-4 + narrow engine (×32) */
 #define SPR_ELEV_SERVICE 0x842a   /* service car frames 0-4 (×32) */
-#define SPR_ELEV_EXPRESS 0x842b   /* express car frames 0-4 + engine (×48) */
+#define SPR_ELEV_STANDARD 0x842b  /* standard frames 0-4 + wide engine (×48) */
+#define SPR_ELEV_EXT     0x842c   /* 2 8px shaft side extensions (wide shaft) */
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
@@ -825,14 +830,14 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx);
 
 /* Floor number on a shaft section, composed from the 0x87e9 digit glyphs
  * exactly like the original (OS Elevator::render). Serviced floors only. */
-static void draw_shaft_digits(int tx, int ty, int wf)
+static void draw_shaft_digits(int tx, int ty, int w, int wf)
 {
     Sprite *d = sprites_find(&game.sprites, SPR_ELEV_DIGITS);
     if (!d || wf < 0) return;     /* basements unlabeled (only 0-9 glyphs) */
     char buf[8];
     int n = snprintf(buf, sizeof(buf), "%d", wf);
     if (n < 1 || n > 3) return;
-    int x = tx + (32 - (n * 12 - 1)) / 2;
+    int x = tx + (w - (n * 12 - 1)) / 2;
     for (int i = 0; i < n; i++) {
         SDL_Rect src = { 1 + 16 * (buf[i] - '0'), 16, 11, 17 };
         SDL_Rect dst = { x, ty + 10, 11, 17 };
@@ -1006,16 +1011,32 @@ static void render_tower(void)
                  * floor-digit variants (1..9, 100) — wiring the real
                  * per-floor digits comes with the shaft-label pass.
                  * The 36px tile spans the FULL floor height: the shaft
-                 * overlays the ceiling strip/joists, as in the original. */
+                 * overlays the ceiling strip/joists, as in the original.
+                 * The wide (standard, 6-cell) shaft = 8px extension tiles
+                 * (0x842c) flanking the 32px shaft, as the EXE composes. */
                 SDL_Rect src = { 0, 0, 32, spr->h };
-                SDL_Rect dst = { tx, ty, tw, CELL_H };
-                SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                if (tw == 48) {
+                    Sprite *ext = sprites_find(&game.sprites, SPR_ELEV_EXT);
+                    SDL_Rect mid = { tx + 8, ty, 32, CELL_H };
+                    SDL_RenderCopy(game.renderer, spr->texture, &src, &mid);
+                    if (ext) {
+                        SDL_Rect sl = { 0, 0, 8, ext->h };
+                        SDL_Rect dl = { tx, ty, 8, CELL_H };
+                        SDL_Rect sr = { 8, 0, 8, ext->h };
+                        SDL_Rect dr = { tx + 40, ty, 8, CELL_H };
+                        SDL_RenderCopy(game.renderer, ext->texture, &sl, &dl);
+                        SDL_RenderCopy(game.renderer, ext->texture, &sr, &dr);
+                    }
+                } else {
+                    SDL_Rect dst = { tx, ty, tw, CELL_H };
+                    SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                }
                 /* floor number, on serviced stops only (as the original) */
                 ElevatorShaft *es = find_people_shaft(tenant->x, tenant->type);
                 int fi = floor_to_index(floor);
                 if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
                     elv_structural_stop(es, fi))
-                    draw_shaft_digits(tx, ty, floor);
+                    draw_shaft_digits(tx, ty, tw, floor);
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
                  * Frame selection driven by capacity byte (from TenantMake).
@@ -1798,12 +1819,12 @@ static void render_people(void)
          * (OpenSkyscraper splits them the same way: topMotor/bottomMotor;
          * the arrows are the original's extend-the-shaft handles.) */
         {
+            int is_std = (s->type == ITEM_ELEVATOR_SHAFT);
             Sprite *eng = sprites_find(&game.sprites,
-                s->type == ITEM_ELEVATOR_EXPRESS ? SPR_ELEV_EXPRESS
-                                                 : SPR_ELEV_STD_LOADED);
+                is_std ? SPR_ELEV_STANDARD : SPR_ELEV_EXP_LOADED);
             if (eng) {
-                int tile_w  = (s->type == ITEM_ELEVATOR_EXPRESS) ? 48 : 32;
-                int tail    = (s->type == ITEM_ELEVATOR_EXPRESS) ? 5 : 4;
+                int tile_w  = is_std ? 48 : 32;  /* wide engine = standard */
+                int tail    = is_std ? 5 : 4;
                 int ex, ey;
                 grid_to_screen(index_to_floor(s->hi) + 1, s->x, &ex, &ey);
                 SDL_Rect src_top = { tail * tile_w, 0, tile_w, 36 };
@@ -1876,17 +1897,18 @@ static void render_people(void)
             else                                  frame = 4;
 
             Sprite *spr; SDL_Rect src;
-            if (s->type == ITEM_ELEVATOR_EXPRESS) {
-                spr = sprites_find(&game.sprites, SPR_ELEV_EXPRESS);
+            if (s->type == ITEM_ELEVATOR_SHAFT) {
+                /* standard = the wide 48px sheet (42-person car) */
+                spr = sprites_find(&game.sprites, SPR_ELEV_STANDARD);
                 src = (SDL_Rect){ frame * 48, 0, 48, 36 };
             } else if (s->type == ITEM_ELEVATOR_SERVICE) {
                 spr = sprites_find(&game.sprites, SPR_ELEV_SERVICE);
                 src = (SDL_Rect){ frame * 32, 0, 32, 36 };
             } else if (frame == 0) {
-                spr = sprites_find(&game.sprites, SPR_ELEV_CAR);
+                spr = sprites_find(&game.sprites, SPR_ELEV_EXP_EMPTY);
                 src = (SDL_Rect){ 0, 0, 32, 36 };
             } else {
-                spr = sprites_find(&game.sprites, SPR_ELEV_STD_LOADED);
+                spr = sprites_find(&game.sprites, SPR_ELEV_EXP_LOADED);
                 src = (SDL_Rect){ (frame - 1) * 32, 0, 32, 36 };
             }
             SDL_Rect dst = { sx, sy, shaft_w, CELL_H };
@@ -4146,7 +4168,7 @@ int main(int argc, char *argv[])
     if (getenv("TUNING")) game.show_tuning = 1;
     if (getenv("ELV_DLOG")) {       /* open the dialog on the demo shaft */
         game.elv_open = 1;
-        game.elv_sx = 174;
+        game.elv_sx = 172;
         game.elv_stype = ITEM_ELEVATOR_SHAFT;
         game.elv_x = 600; game.elv_y = 160;
     }
@@ -4170,7 +4192,7 @@ int main(int argc, char *argv[])
         for (int f = 1; f <= 6; f++)
             tower_place(&game.tower, ITEM_OFFICE, f, 183);
         for (int f = 0; f <= 6; f++)
-            tower_place(&game.tower, ITEM_ELEVATOR_SHAFT, f, 174);
+            tower_place(&game.tower, ITEM_ELEVATOR_SHAFT, f, 172);
     }
     
     /* Center camera — show the tower nicely.
