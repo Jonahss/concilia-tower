@@ -47,8 +47,10 @@ void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect
 void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite, 
                          int x, int y, int w, int h, SDL_Rect *src_rect);
 
-/* Recreate a sprite's texture with white as transparent (color key).
+/* Recreate a sprite's texture with a color as transparent (color key).
  * Returns 0 on success. */
+int sprites_apply_color_key(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                            uint16_t id, uint8_t r, uint8_t g, uint8_t b);
 int sprites_apply_white_key(SpriteAtlas *atlas, SDL_Renderer *renderer,
                             uint16_t id);
 

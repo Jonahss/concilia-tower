@@ -121,6 +121,9 @@
 #define SPR_ELEV_EXPRESS 0x842b   /* express car frames 0-4 + engine (×48) */
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
+#define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
+                                   * (1+16*n, 16); bg 25,25,25 keyed out.
+                                   * 0x87ec = red variant (purpose TBD) */
 
 /* Stairs: 0x8968 (top) + 0x89A8 (bottom) */
 #define SPR_STAIRS_TOP    0x8968
@@ -807,6 +810,37 @@ static void render_sky(void)
     }
 }
 
+/* Find the people-sim shaft occupying column x with the given type */
+static ElevatorShaft *find_people_shaft(int x, ItemType ty)
+{
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++)
+        if (ps->shafts[i].active && ps->shafts[i].x == x &&
+            ps->shafts[i].type == ty)
+            return &ps->shafts[i];
+    return NULL;
+}
+
+static int elv_structural_stop(const ElevatorShaft *s, int fidx);
+
+/* Floor number on a shaft section, composed from the 0x87e9 digit glyphs
+ * exactly like the original (OS Elevator::render). Serviced floors only. */
+static void draw_shaft_digits(int tx, int ty, int wf)
+{
+    Sprite *d = sprites_find(&game.sprites, SPR_ELEV_DIGITS);
+    if (!d || wf < 0) return;     /* basements unlabeled (only 0-9 glyphs) */
+    char buf[8];
+    int n = snprintf(buf, sizeof(buf), "%d", wf);
+    if (n < 1 || n > 3) return;
+    int x = tx + (32 - (n * 12 - 1)) / 2;
+    for (int i = 0; i < n; i++) {
+        SDL_Rect src = { 1 + 16 * (buf[i] - '0'), 16, 11, 17 };
+        SDL_Rect dst = { x, ty + 10, 11, 17 };
+        SDL_RenderCopy(game.renderer, d->texture, &src, &dst);
+        x += 12;
+    }
+}
+
 static void render_tower(void)
 {
     /* Determine visible floor range */
@@ -976,6 +1010,12 @@ static void render_tower(void)
                 SDL_Rect src = { 0, 0, 32, spr->h };
                 SDL_Rect dst = { tx, ty, tw, CELL_H };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                /* floor number, on serviced stops only (as the original) */
+                ElevatorShaft *es = find_people_shaft(tenant->x, tenant->type);
+                int fi = floor_to_index(floor);
+                if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
+                    elv_structural_stop(es, fi))
+                    draw_shaft_digits(tx, ty, floor);
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
                  * Frame selection driven by capacity byte (from TenantMake).
@@ -3647,6 +3687,9 @@ int main(int argc, char *argv[])
 
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
+    /* digit sheet background is the shaft's own near-black (as in OS) */
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS,
+                            25, 25, 25);
 
     /* Build composite sprites from raw parts */
     {
