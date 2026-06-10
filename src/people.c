@@ -81,6 +81,7 @@ void people_init(PeopleSim *ps)
 static int shaft_serves(const ElevatorShaft *s, int fidx)
 {
     if (fidx < s->lo || fidx > s->hi) return 0;
+    if (!s->serviced[fidx]) return 0;    /* stop disabled in the dialog */
     if (s->type != ITEM_ELEVATOR_EXPRESS) return 1;
     int wf = index_to_floor(fidx);
     return wf <= 0 || (wf % 15) == 0;    /* basements, ground, sky lobbies */
@@ -137,6 +138,24 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
     }
     if (h == ps->layout_stamp) return;
     ps->layout_stamp = h;
+
+    /* Default all stops on, then carry dialog settings (car count,
+     * serviced flags) across the rebuild — shafts matched by column+type
+     * so extending a shaft doesn't wipe its configuration. */
+    for (int i = 0; i < count; i++) {
+        ElevatorShaft *ns = &fresh[i];
+        for (int f = ns->lo; f <= ns->hi; f++) ns->serviced[f] = 1;
+        for (int j = 0; j < ps->shaft_count; j++) {
+            ElevatorShaft *os = &ps->shafts[j];
+            if (!os->active || os->x != ns->x || os->type != ns->type)
+                continue;
+            ns->num_cars = os->num_cars;
+            int lo = os->lo > ns->lo ? os->lo : ns->lo;
+            int hi = os->hi < ns->hi ? os->hi : ns->hi;
+            for (int f = lo; f <= hi; f++) ns->serviced[f] = os->serviced[f];
+            break;
+        }
+    }
 
     memcpy(ps->gap_map, gap, sizeof(gap));
     memcpy(ps->shafts, fresh, sizeof(fresh));
@@ -379,6 +398,69 @@ int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
                       int person_idx)
 {
     return join_queue(&ps->shafts[shaft], floor, up, person_idx);
+}
+
+/* ---------- elevator dialog controls (ElvDlogT) ---------- */
+
+void people_set_num_cars(PeopleSim *ps, int shaft, int n)
+{
+    if (shaft < 0 || shaft >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (n < 1) n = 1;
+    if (n > CARS_PER_SHAFT) n = CARS_PER_SHAFT;
+
+    for (int ci = s->num_cars; ci < n; ci++) {   /* new cars park at the pit */
+        ElevatorCar *c = &s->car[ci];
+        memset(c, 0, sizeof(*c));
+        c->active = 1;
+        c->floor = c->target = s->lo;
+        c->dir = 1;
+    }
+    for (int ci = n; ci < s->num_cars; ci++) {   /* retired cars dump riders */
+        ElevatorCar *c = &s->car[ci];
+        uint8_t mine = (uint8_t)(ci + 1);
+        for (int k = 0; k < CAR_SLOTS; k++) {
+            if (!c->pax[k]) continue;
+            Person *p = &ps->people[c->pax[k] - 1];
+            p->cur_floor = c->floor;
+            p->state = PERSON_PLANNING;
+        }
+        for (int f = 0; f < TOWER_FLOOR_COUNT; f++) {
+            if (s->up_call_car[f] == mine) s->up_call_car[f] = 0;
+            if (s->down_call_car[f] == mine) s->down_call_car[f] = 0;
+        }
+        memset(c, 0, sizeof(*c));
+    }
+    s->num_cars = (uint8_t)n;
+}
+
+void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on)
+{
+    if (shaft < 0 || shaft >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (fidx < s->lo || fidx > s->hi) return;
+    s->serviced[fidx] = on ? 1 : 0;
+    if (on) return;
+
+    /* Stop disabled: flush its queues to replan; riders already aboard
+     * still get dropped here (cars honor dest_count for unloading). */
+    ElevatorStop *st = &s->stop[fidx];
+    for (int d = 0; d < 2; d++) {
+        uint8_t   cnt  = d ? st->down_count : st->up_count;
+        uint8_t   head = d ? st->down_head  : st->up_head;
+        uint16_t *ring = d ? st->down_ring  : st->up_ring;
+        for (int k = 0; k < cnt; k++) {
+            uint16_t pe = ring[(head + k) % QUEUE_CAP];
+            if (pe) ps->people[pe - 1].state = PERSON_PLANNING;
+        }
+    }
+    memset(st, 0, sizeof(*st));
+    uint8_t up_owner = s->up_call_car[fidx], dn_owner = s->down_call_car[fidx];
+    if (up_owner && s->car[up_owner - 1].assigned_calls)
+        s->car[up_owner - 1].assigned_calls--;
+    if (dn_owner && s->car[dn_owner - 1].assigned_calls)
+        s->car[dn_owner - 1].assigned_calls--;
+    s->up_call_car[fidx] = s->down_call_car[fidx] = 0;
 }
 
 static int dequeue(ElevatorShaft *s, int floor, int up)
@@ -786,6 +868,15 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
         if (cap > CAR_SLOTS) cap = CAR_SLOTS;
         if (cap < 1) cap = 1;
         s->capacity = (uint8_t)cap;
+        /* ShowElevator's re-call pass: a queued floor with no owning car
+         * gets re-called (covers calls orphaned by car-count changes). */
+        for (int f = s->lo; f <= s->hi; f++) {
+            if (!s->serviced[f]) continue;
+            if (queue_len(s, f, 1) && !s->up_call_car[f])
+                call_elevator(s, f, 1);
+            if (queue_len(s, f, 0) && !s->down_call_car[f])
+                call_elevator(s, f, 0);
+        }
         for (int ci = 0; ci < s->num_cars; ci++)
             car_tick(ps, tower, s, ci, frame);
     }

@@ -244,6 +244,10 @@ typedef struct {
     int             show_debug;   /* Toggle diagnostic labels */
     int             show_stats;   /* Analytics window (F3) */
     int             show_tuning;  /* Tuning/modding window (F4) */
+    int             elv_open;     /* Elevator dialog (double-click a shaft) */
+    int             elv_sx;       /* shaft column the dialog is bound to */
+    int             elv_stype;    /* shaft ItemType (column+type = identity) */
+    int             elv_x, elv_y; /* dialog window position (draggable) */
     
     /* Build mode */
     ItemType        build_type;
@@ -1516,6 +1520,224 @@ static void render_tuning_window(void)
                 (SDL_Color){ 0, 0, 0, 255 });
 }
 
+/* ---------- Elevator dialog (ElvDlogT, seg_1098) ----------
+ * Double-click a shaft: grid of floors x 8 cars at the EXE's 13px cell
+ * size, with per-floor stop toggles, live car positions, call markers,
+ * and the car count. The original capped stop records at 30 per group;
+ * we clamp the visible rows the same way. */
+#define ELV_CELL      13
+#define ELV_LABEL_W   34
+#define ELV_W         (8 + ELV_LABEL_W + ELV_CELL + 6 + 8 * ELV_CELL + 6 + ELV_CELL + 8)
+#define ELV_MAX_ROWS  30
+/* Cost of an extra car. NOT yet decomp-verified (OpenSkyscraper folklore
+ * says $80k; the EXE's number is a dig target — see backlog). */
+#define ELV_CAR_COST  80000
+
+/* The dialog tracks the shaft by column+type, not index: a layout rebuild
+ * reorders the shaft array, and the shaft itself may be bulldozed. */
+static int elv_dialog_shaft(void)
+{
+    if (!game.elv_open) return -1;
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++)
+        if (ps->shafts[i].active && ps->shafts[i].x == game.elv_sx &&
+            ps->shafts[i].type == (ItemType)game.elv_stype)
+            return i;
+    return -1;
+}
+
+/* Express shafts structurally skip non-lobby floors regardless of flags */
+static int elv_structural_stop(const ElevatorShaft *s, int fidx)
+{
+    if (s->type != ITEM_ELEVATOR_EXPRESS) return 1;
+    int wf = index_to_floor(fidx);
+    return wf <= 0 || (wf % 15) == 0;
+}
+
+static void elv_dialog_metrics(const ElevatorShaft *s, int *rows, int *body_h)
+{
+    int r = s->hi - s->lo + 1;
+    if (r > ELV_MAX_ROWS) r = ELV_MAX_ROWS;
+    *rows = r;
+    *body_h = 22 + 16 + r * ELV_CELL + 30 + 28;
+}
+
+static void render_elv_dialog(void)
+{
+    int si = elv_dialog_shaft();
+    if (si < 0) { game.elv_open = 0; return; }
+    PeopleSim *ps = &game.sim.people;
+    ElevatorShaft *s = &ps->shafts[si];
+
+    int rows, body_h;
+    elv_dialog_metrics(s, &rows, &body_h);
+    int wx = game.elv_x, wy = game.elv_y;
+
+    const char *title =
+        s->type == ITEM_ELEVATOR_EXPRESS ? "Express Elevator"
+      : s->type == ITEM_ELEVATOR_SERVICE ? "Service Elevator"
+                                         : "Standard Elevator";
+    draw_win31_titlebar(wx, wy, ELV_W, title);
+    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, ELV_W, body_h };
+    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    SDL_RenderFillRect(game.renderer, &body);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &body);
+
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "Floors %d to %d   stop / cars 1-8",
+             index_to_floor(s->lo), index_to_floor(s->hi));
+    stats_label(wx + 8, wy + WIN_TITLEBAR_H + 4, hdr,
+                (SDL_Color){ 70, 70, 70, 255 });
+
+    int gx = wx + 8 + ELV_LABEL_W;             /* serviced column */
+    int cx = gx + ELV_CELL + 6;                /* first car column */
+    int top = wy + WIN_TITLEBAR_H + 22 + 14;
+
+    for (int r = 0; r < rows; r++) {
+        int f = s->hi - r;
+        int ry = top + r * ELV_CELL;
+        char fl[8];
+        int wf = index_to_floor(f);
+        snprintf(fl, sizeof(fl), wf < 0 ? "B%d" : "%d", wf < 0 ? -wf : wf);
+        stats_label(wx + 8, ry, fl, (SDL_Color){ 0, 0, 0, 255 });
+
+        /* serviced toggle cell */
+        SDL_Rect sc = { gx, ry, ELV_CELL - 1, ELV_CELL - 1 };
+        if (!elv_structural_stop(s, f)) {
+            SDL_SetRenderDrawColor(game.renderer, 150, 150, 150, 255);
+            SDL_RenderFillRect(game.renderer, &sc);
+        } else if (s->serviced[f]) {
+            SDL_SetRenderDrawColor(game.renderer, 0, 150, 0, 255);
+            SDL_RenderFillRect(game.renderer, &sc);
+        } else {
+            SDL_SetRenderDrawColor(game.renderer, 120, 40, 40, 255);
+            SDL_RenderFillRect(game.renderer, &sc);
+        }
+        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(game.renderer, &sc);
+
+        /* car grid cells */
+        for (int ci = 0; ci < CARS_PER_SHAFT; ci++) {
+            SDL_Rect cc = { cx + ci * ELV_CELL, ry, ELV_CELL - 1, ELV_CELL - 1 };
+            int active = ci < s->num_cars;
+            SDL_SetRenderDrawColor(game.renderer,
+                active ? 255 : 172, active ? 255 : 172, active ? 255 : 172, 255);
+            SDL_RenderFillRect(game.renderer, &cc);
+            SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
+            SDL_RenderDrawRect(game.renderer, &cc);
+            if (active && s->car[ci].active && s->car[ci].floor == f) {
+                ElevatorCar *c = &s->car[ci];
+                if (c->passengers >= s->capacity)
+                    SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
+                else if (c->passengers > 0)
+                    SDL_SetRenderDrawColor(game.renderer, 40, 80, 220, 255);
+                else
+                    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+                SDL_Rect car = { cc.x + 2, cc.y + 2, cc.w - 4, cc.h - 4 };
+                SDL_RenderFillRect(game.renderer, &car);
+            }
+        }
+
+        /* call markers: ▲ owned up call, ▼ owned down call */
+        int mx2 = cx + CARS_PER_SHAFT * ELV_CELL + 6;
+        if (s->up_call_car[f]) {
+            SDL_SetRenderDrawColor(game.renderer, 0, 100, 0, 255);
+            for (int i = 0; i < 5; i++)
+                SDL_RenderDrawLine(game.renderer, mx2 + 5 - i, ry + 1 + i,
+                                   mx2 + 5 + i, ry + 1 + i);
+        }
+        if (s->down_call_car[f]) {
+            SDL_SetRenderDrawColor(game.renderer, 150, 60, 0, 255);
+            for (int i = 0; i < 5; i++)
+                SDL_RenderDrawLine(game.renderer, mx2 + 5 - i, ry + 11 - i,
+                                   mx2 + 5 + i, ry + 11 - i);
+        }
+    }
+
+    /* car count strip */
+    int by = top + rows * ELV_CELL + 4;
+    char cars[48];
+    snprintf(cars, sizeof(cars), "Cars: %d   (add $%dK)",
+             s->num_cars, ELV_CAR_COST / 1000);
+    stats_label(wx + 8, by + 3, cars, (SDL_Color){ 0, 0, 0, 255 });
+    SDL_Rect minus = { wx + ELV_W - 52, by, 18, 18 };
+    SDL_Rect plus  = { wx + ELV_W - 28, by, 18, 18 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &minus);
+    SDL_RenderFillRect(game.renderer, &plus);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &minus);
+    SDL_RenderDrawRect(game.renderer, &plus);
+    SDL_RenderDrawLine(game.renderer, minus.x + 5, minus.y + 9,
+                       minus.x + 13, minus.y + 9);
+    SDL_RenderDrawLine(game.renderer, plus.x + 5, plus.y + 9,
+                       plus.x + 13, plus.y + 9);
+    SDL_RenderDrawLine(game.renderer, plus.x + 9, plus.y + 5,
+                       plus.x + 9, plus.y + 13);
+
+    /* close strip */
+    int cy = by + 26;
+    SDL_Rect close = { wx + 8, cy, 64, 20 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &close);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &close);
+    stats_label(close.x + 14, close.y + 2, "Close", (SDL_Color){ 0, 0, 0, 255 });
+}
+
+/* Returns 1 if the click was consumed by the dialog */
+static int elv_dialog_click(int mx, int my)
+{
+    int si = elv_dialog_shaft();
+    if (si < 0) return 0;
+    PeopleSim *ps = &game.sim.people;
+    ElevatorShaft *s = &ps->shafts[si];
+
+    int rows, body_h;
+    elv_dialog_metrics(s, &rows, &body_h);
+    int wx = game.elv_x, wy = game.elv_y;
+    if (mx < wx || mx >= wx + ELV_W ||
+        my < wy || my >= wy + WIN_TITLEBAR_H + body_h) return 0;
+
+    int gx = wx + 8 + ELV_LABEL_W;
+    int top = wy + WIN_TITLEBAR_H + 22 + 14;
+
+    /* serviced toggles */
+    if (mx >= gx && mx < gx + ELV_CELL && my >= top &&
+        my < top + rows * ELV_CELL) {
+        int r = (my - top) / ELV_CELL;
+        int f = s->hi - r;
+        if (elv_structural_stop(s, f))
+            people_set_serviced(ps, si, f, !s->serviced[f]);
+        return 1;
+    }
+
+    /* car count */
+    int by = top + rows * ELV_CELL + 4;
+    if (my >= by && my < by + 18) {
+        if (mx >= wx + ELV_W - 52 && mx < wx + ELV_W - 34) {
+            people_set_num_cars(ps, si, s->num_cars - 1);
+        } else if (mx >= wx + ELV_W - 28 && mx < wx + ELV_W - 10 &&
+                   s->num_cars < CARS_PER_SHAFT) {
+            if (game.tower.money >= ELV_CAR_COST) {
+                game.tower.money -= ELV_CAR_COST;
+                game.tower.built_value += ELV_CAR_COST;
+                people_set_num_cars(ps, si, s->num_cars + 1);
+            }
+        }
+        return 1;
+    }
+
+    /* close button */
+    int cy = by + 26;
+    if (my >= cy && my < cy + 20 && mx >= wx + 8 && mx < wx + 72) {
+        game.elv_open = 0;
+        return 1;
+    }
+    return 1;   /* clicks inside the window never fall through */
+}
+
 /* ---------- People layer: elevator cars + waiting queues ----------
  * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
  * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
@@ -2609,6 +2831,7 @@ static void render(void)
     render_ui();
     render_stats_window();
     render_tuning_window();
+    render_elv_dialog();
     
     SDL_RenderPresent(game.renderer);
 }
@@ -2798,7 +3021,14 @@ static int titlebar_hit_test(int mx, int my)
         my >= game.tool_y && my < game.tool_y + WIN_TITLEBAR_H) {
         return 3;
     }
-    
+
+    /* Elevator dialog title bar */
+    if (game.elv_open &&
+        mx >= game.elv_x && mx < game.elv_x + ELV_W &&
+        my >= game.elv_y && my < game.elv_y + WIN_TITLEBAR_H) {
+        return 4;
+    }
+
     return 0;
 }
 
@@ -2820,6 +3050,19 @@ static int point_in_any_window(int mx, int my)
     if (mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
         my >= game.tool_y && my < game.tool_y + TOOL_WIN_H) {
         return 1;
+    }
+    /* Elevator dialog */
+    if (game.elv_open) {
+        int si = elv_dialog_shaft();
+        if (si >= 0) {
+            int rows, body_h;
+            elv_dialog_metrics(&game.sim.people.shafts[si], &rows, &body_h);
+            if (mx >= game.elv_x && mx < game.elv_x + ELV_W &&
+                my >= game.elv_y &&
+                my < game.elv_y + WIN_TITLEBAR_H + body_h) {
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -3085,6 +3328,15 @@ static void handle_event(SDL_Event *ev)
                 game.tool_x = nx;
                 game.tool_y = ny;
                 break;
+            case 4: /* Elevator dialog */
+                if (nx < 0) nx = 0;
+                if (nx + ELV_W > game.screen_w) nx = game.screen_w - ELV_W;
+                if (ny < 0) ny = 0;
+                if (ny + WIN_TITLEBAR_H > game.screen_h)
+                    ny = game.screen_h - WIN_TITLEBAR_H;
+                game.elv_x = nx;
+                game.elv_y = ny;
+                break;
             }
             break;
         }
@@ -3160,17 +3412,24 @@ static void handle_event(SDL_Event *ev)
                         game.win_drag_ox = ev->button.x - game.tool_x;
                         game.win_drag_oy = ev->button.y - game.tool_y;
                         break;
+                    case 4: /* Elevator dialog */
+                        game.win_drag_ox = ev->button.x - game.elv_x;
+                        game.win_drag_oy = ev->button.y - game.elv_y;
+                        break;
                     }
                     break;
                 }
             }
             
+            /* Elevator dialog click (body, not title bar) */
+            if (elv_dialog_click(ev->button.x, ev->button.y)) break;
+
             /* Toolbox click (body, not title bar) */
             if (toolbox_click(ev->button.x, ev->button.y)) break;
-            
+
             /* Minimap click (body, not title bar) */
             if (minimap_click(ev->button.x, ev->button.y)) break;
-            
+
             /* Block clicks that land on any window body from reaching the game */
             if (point_in_any_window(ev->button.x, ev->button.y)) break;
             
@@ -3187,6 +3446,29 @@ static void handle_event(SDL_Event *ev)
                     }
                 }
                 break;
+            }
+
+            /* Double-click on a shaft opens the elevator dialog (ElvDlogT) */
+            if (ev->button.clicks >= 2) {
+                int fidx = floor_to_index(game.mouse_floor);
+                if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
+                    game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH &&
+                    item_is_elevator(game.tower.grid[fidx][game.mouse_cell].type)) {
+                    TowerCell *cell = &game.tower.grid[fidx][game.mouse_cell];
+                    Tenant *t = tower_tenant(&game.tower, cell->tenant_id);
+                    if (t) {
+                        game.elv_open = 1;
+                        game.elv_sx = t->x;
+                        game.elv_stype = t->type;
+                        game.elv_x = ev->button.x + 24;
+                        game.elv_y = ev->button.y - 60;
+                        if (game.elv_x + ELV_W > game.screen_w)
+                            game.elv_x = game.screen_w - ELV_W - 8;
+                        if (game.elv_y < 0) game.elv_y = 8;
+                        game.dragging = 0;
+                        break;
+                    }
+                }
             }
 
             /* Normal game click */
@@ -3804,6 +4086,12 @@ int main(int argc, char *argv[])
     if (getenv("DEMOLISH")) game.demolish_mode = 1;
     if (getenv("STATS")) game.show_stats = 1;
     if (getenv("TUNING")) game.show_tuning = 1;
+    if (getenv("ELV_DLOG")) {       /* open the dialog on the demo shaft */
+        game.elv_open = 1;
+        game.elv_sx = 174;
+        game.elv_stype = ITEM_ELEVATOR_SHAFT;
+        game.elv_x = 600; game.elv_y = 160;
+    }
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");

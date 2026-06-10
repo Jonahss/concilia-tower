@@ -124,6 +124,9 @@ typedef struct {
     int      x;             /* shaft x cell */
     uint8_t  capacity;      /* 42 standard, 21 express/service (group+2) */
     uint8_t  num_cars;
+    uint8_t  serviced[TOWER_FLOOR_COUNT]; /* per-floor car-stop flags — the
+                             * dialog grid (EXE group +0x40/+0x41 + ElvDlogT);
+                             * survives layout rebuilds, matched by column */
     ElevatorCar  car[CARS_PER_SHAFT];
     ElevatorStop stop[TOWER_FLOOR_COUNT];
     uint8_t  up_call_car[TOWER_FLOOR_COUNT];   /* car index + 1; 0 = none */
@@ -173,6 +176,14 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
  * Returns 1 on success, 0 if the queue is full (cap 40/direction). */
 int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
                       int person_idx);
+
+/* Elevator dialog (ElvDlogT) controls.
+ * set_num_cars: clamps to 1..CARS_PER_SHAFT; new cars park at the bottom,
+ * retired cars dump their riders to replan from the car's floor.
+ * set_serviced: toggles a floor stop; turning it off flushes that floor's
+ * queues (riders already aboard still get dropped there). */
+void people_set_num_cars(PeopleSim *ps, int shaft, int n);
+void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on);
 
 /* Average banked wait (0 if no samples yet) */
 static inline int people_avg_wait(const PeopleSim *ps)

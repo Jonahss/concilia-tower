@@ -239,6 +239,61 @@ static void test_queue_and_stress(void)
     CHECK(s->up_call_car[g] != 0, "first joiner pressed the call button");
 }
 
+/* The elevator dialog's controls: per-floor stop toggles + car count */
+static void test_elevator_dialog(void)
+{
+    printf("elevator dialog (ElvDlogT):\n");
+    fresh();
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    ElevatorShaft *s = &sim.people.shafts[0];
+    int g = floor_to_index(0), f3 = floor_to_index(3);
+
+    /* queue someone on floor 3, then toggle the stop off */
+    sim.people.people_high = 8;
+    sim.people.people[0].home_tenant = 1;
+    sim.people.people[0].state = PERSON_QUEUED;
+    sim.people.people[0].cur_floor = (uint8_t)f3;
+    people_join_queue(&sim.people, 0, f3, 1, 0);
+    CHECK(s->up_call_car[f3] != 0, "queued person called a car");
+    people_set_serviced(&sim.people, 0, f3, 0);
+    CHECK(!s->serviced[f3], "stop toggled off");
+    CHECK(sim.people.people[0].state == PERSON_PLANNING,
+          "queued person flushed to replan");
+    CHECK(s->up_call_car[f3] == 0 && s->stop[f3].up_count == 0,
+          "call and queue cleared");
+    people_set_serviced(&sim.people, 0, f3, 1);
+    CHECK(s->serviced[f3], "stop toggled back on");
+
+    /* car count up: new car parks at the bottom */
+    people_set_num_cars(&sim.people, 0, 3);
+    CHECK(s->num_cars == 3, "car count raised to 3");
+    CHECK(s->car[2].active && s->car[2].floor == s->lo,
+          "new car parked at the pit");
+
+    /* car count down: retired car dumps its rider to replan */
+    s->car[2].passengers = 1;
+    s->car[2].pax[0] = 1;            /* person 0 aboard car 2 */
+    s->car[2].floor = (uint8_t)f3;
+    sim.people.people[0].state = PERSON_RIDING;
+    people_set_num_cars(&sim.people, 0, 2);
+    CHECK(s->num_cars == 2, "car count lowered to 2");
+    CHECK(!s->car[2].active, "retired car deactivated");
+    CHECK(sim.people.people[0].state == PERSON_PLANNING &&
+          sim.people.people[0].cur_floor == f3,
+          "rider dumped at the car's floor to replan");
+
+    /* settings survive a layout rebuild (shaft extended one floor) */
+    people_set_serviced(&sim.people, 0, f3, 0);
+    place(ITEM_ELEVATOR_SHAFT, 7, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    s = &sim.people.shafts[0];
+    CHECK(s->hi == floor_to_index(7), "shaft extended");
+    CHECK(s->num_cars == 2, "car count survived the rebuild");
+    CHECK(!s->serviced[f3] && s->serviced[g] && s->serviced[s->hi],
+          "serviced flags survived; new floor defaults on");
+}
+
 int main(void)
 {
     test_stairs();
@@ -247,6 +302,7 @@ int main(void)
     test_commute_elevator();
     test_walk_rules();
     test_queue_and_stress();
+    test_elevator_dialog();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }
