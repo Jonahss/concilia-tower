@@ -47,6 +47,11 @@ void sprites_draw(SDL_Renderer *renderer, Sprite *sprite, int x, int y, SDL_Rect
 void sprites_draw_scaled(SDL_Renderer *renderer, Sprite *sprite, 
                          int x, int y, int w, int h, SDL_Rect *src_rect);
 
+/* Recreate a sprite's texture with white as transparent (color key).
+ * Returns 0 on success. */
+int sprites_apply_white_key(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                            uint16_t id);
+
 /* Compose a new sprite by joining two existing sprites horizontally.
  * The new sprite is stored with new_id. Returns 0 on success. */
 int sprites_compose_h(SpriteAtlas *atlas, SDL_Renderer *renderer,

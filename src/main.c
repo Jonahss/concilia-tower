@@ -115,9 +115,12 @@
 #define SPR_METRO_BASE  0x8BA8
 
 /* Elevator: shaft + cars */
-#define SPR_ELEV_CAR     0x8428
-#define SPR_ELEV_SERVICE 0x842a
-#define SPR_ELEV_SHAFT   0x87e8
+#define SPR_ELEV_CAR     0x8428   /* standard car, empty (32×36) */
+#define SPR_ELEV_STD_LOADED 0x8429 /* standard car frames 1-4 + engine (×32) */
+#define SPR_ELEV_SERVICE 0x842a   /* service car frames 0-4 (×32) */
+#define SPR_ELEV_EXPRESS 0x842b   /* express car frames 0-4 + engine (×48) */
+#define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
+#define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 
 /* Stairs: 0x8968 (top) + 0x89A8 (bottom) */
 #define SPR_STAIRS_TOP    0x8968
@@ -958,6 +961,13 @@ static void render_tower(void)
                 }
                 x = tenant->x + tenant->width;
                 continue;
+            } else if (item_is_elevator(tenant->type) && spr) {
+                /* Shaft section: always tile 0 of 0x87E8. Tiles 1+ are the
+                 * floor-digit variants (1..9, 100) — wiring the real
+                 * per-floor digits comes with the shaft-label pass. */
+                SDL_Rect src = { 0, 0, 32, spr->h };
+                SDL_Rect dst = { tx, draw_y, tw, draw_h };
+                SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
                  * Frame selection driven by capacity byte (from TenantMake).
@@ -1010,8 +1020,9 @@ static void render_tower(void)
                 }
             }
             
-            /* Tenant state visual overlay */
-            {
+            /* Tenant state visual overlay (not for transports — a shaft
+             * has no vacancy/stress state to tint) */
+            if (!item_is_transport(tenant->type)) {
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_CONSTRUCTION) {
@@ -1265,50 +1276,99 @@ static void render_tower(void)
     }
 }
 
-/* ---------- People layer: elevator cars + waiting queues ---------- */
+/* ---------- People layer: elevator cars + waiting queues ----------
+ * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
+ * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
+ * tails. Frame choice = GetCarSprite (1090:221f). */
 static void render_people(void)
 {
     PeopleSim *ps = &game.sim.people;
+    Sprite *queue_spr = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
         if (!s->active) continue;
+        int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
 
-        /* Waiting queues: a line of small figures at the shaft door,
-         * growing away from the shaft (ElvPeple's queue lines) */
-        for (int f = s->lo; f <= s->hi; f++) {
-            int n = s->stop[f].up_count + s->stop[f].down_count;
-            if (!n) continue;
-            int sx, sy;
-            grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
-            int base_y = sy + CELL_H - 8;
-            SDL_SetRenderDrawColor(game.renderer, 40, 40, 80, 255);
-            int shown = n > 12 ? 12 : n;
-            for (int k = 0; k < shown; k++) {
-                SDL_Rect dot = { sx - 6 - k * 5, base_y, 3, 6 };
-                SDL_RenderFillRect(game.renderer, &dot);
+        /* Engine room above the top shaft segment (overhangs the shaft) */
+        {
+            Sprite *eng = sprites_find(&game.sprites,
+                s->type == ITEM_ELEVATOR_EXPRESS ? SPR_ELEV_EXPRESS
+                                                 : SPR_ELEV_STD_LOADED);
+            if (eng) {
+                int ex, ey;
+                grid_to_screen(index_to_floor(s->hi) + 1, s->x, &ex, &ey);
+                SDL_Rect src = (s->type == ITEM_ELEVATOR_EXPRESS)
+                    ? (SDL_Rect){ 5 * 48, 0, 96, 36 }
+                    : (SDL_Rect){ 4 * 32, 0, 64, 36 };
+                SDL_Rect dst = { ex - (src.w - shaft_w) / 2, ey, src.w, CELL_H };
+                SDL_RenderCopy(game.renderer, eng->texture, &src, &dst);
             }
         }
 
-        /* Cars: a box riding the shaft column, tinted by load,
-         * doors drawn open while the door timer runs */
+        /* Waiting queues: lines of silhouettes at the shaft door (ElvPeple).
+         * Figures picked per person id so the crowd stays varied but stable. */
+        for (int f = s->lo; f <= s->hi && queue_spr; f++) {
+            const ElevatorStop *st = &s->stop[f];
+            int n = st->up_count + st->down_count;
+            if (!n) continue;
+            int sx, sy;
+            grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
+            int shown = n > 10 ? 10 : n;
+            for (int k = 0; k < shown; k++) {
+                uint16_t pid;
+                if (k < st->up_count)
+                    pid = st->up_ring[(st->up_head + k) % QUEUE_CAP];
+                else
+                    pid = st->down_ring[(st->down_head + k - st->up_count)
+                                        % QUEUE_CAP];
+                int fig = (pid * 7) % 40;     /* 40 silhouettes of 16px */
+                SDL_Rect src = { fig * 16, 0, 16, 36 };
+                SDL_Rect dst = { sx - 16 - k * 9, sy, 16, CELL_H };
+                SDL_RenderCopy(game.renderer, queue_spr->texture, &src, &dst);
+            }
+        }
+
+        /* Cars, with smooth travel between floors */
         for (int ci = 0; ci < s->num_cars; ci++) {
             ElevatorCar *c = &s->car[ci];
             if (!c->active) continue;
             int sx, sy;
             grid_to_screen(index_to_floor(c->floor), s->x, &sx, &sy);
-            SDL_Rect car = { sx + 3, sy + CEIL_H + 1,
-                             ITEM_WIDTH[s->type] * CELL_W - 6, TENANT_H - 2 };
-            int load = s->capacity ? (c->passengers * 255) / s->capacity : 0;
-            SDL_SetRenderDrawColor(game.renderer,
-                                   (Uint8)(90 + load / 3), 90,
-                                   (Uint8)(140 - load / 3), 255);
-            SDL_RenderFillRect(game.renderer, &car);
-            SDL_SetRenderDrawColor(game.renderer, 230, 230, 240, 255);
-            SDL_RenderDrawRect(game.renderer, &car);
-            if (c->door_timer) {   /* doors open: light gap in the middle */
-                SDL_SetRenderDrawColor(game.renderer, 250, 250, 210, 255);
-                SDL_Rect gap = { car.x + car.w / 2 - 3, car.y + 2, 6, car.h - 4 };
-                SDL_RenderFillRect(game.renderer, &gap);
+            if (c->target != c->floor && c->move_total) {
+                int gone = c->move_total - c->move_timer;
+                int off = gone * CELL_H / c->move_total;
+                sy += c->dir ? -off : off;
+            }
+
+            /* GetCarSprite: 0/1 pax -> frame 0/1, 2-3 -> 2, partial -> 3,
+             * full -> 4 (red F) */
+            int frame;
+            if (c->passengers <= 1)               frame = c->passengers;
+            else if (c->passengers <= 3)          frame = 2;
+            else if (c->passengers < s->capacity) frame = 3;
+            else                                  frame = 4;
+
+            Sprite *spr; SDL_Rect src;
+            if (s->type == ITEM_ELEVATOR_EXPRESS) {
+                spr = sprites_find(&game.sprites, SPR_ELEV_EXPRESS);
+                src = (SDL_Rect){ frame * 48, 0, 48, 36 };
+            } else if (s->type == ITEM_ELEVATOR_SERVICE) {
+                spr = sprites_find(&game.sprites, SPR_ELEV_SERVICE);
+                src = (SDL_Rect){ frame * 32, 0, 32, 36 };
+            } else if (frame == 0) {
+                spr = sprites_find(&game.sprites, SPR_ELEV_CAR);
+                src = (SDL_Rect){ 0, 0, 32, 36 };
+            } else {
+                spr = sprites_find(&game.sprites, SPR_ELEV_STD_LOADED);
+                src = (SDL_Rect){ (frame - 1) * 32, 0, 32, 36 };
+            }
+            SDL_Rect dst = { sx, sy, shaft_w, CELL_H };
+            if (spr) {
+                SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+            } else {
+                SDL_SetRenderDrawColor(game.renderer, 90, 90, 140, 255);
+                SDL_RenderFillRect(game.renderer, &dst);
             }
         }
     }
@@ -2972,7 +3032,10 @@ int main(int argc, char *argv[])
     
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
-    
+
+    /* Queue silhouettes use white as transparent */
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
+
     /* Build composite sprites from raw parts */
     {
         int ok = 0, fail = 0;

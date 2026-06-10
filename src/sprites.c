@@ -224,6 +224,22 @@ static SDL_Surface *texture_to_surface(SDL_Renderer *renderer, SDL_Texture *tex,
     return surf;
 }
 
+int sprites_apply_white_key(SpriteAtlas *atlas, SDL_Renderer *renderer,
+                            uint16_t id)
+{
+    Sprite *s = sprites_find(atlas, id);
+    if (!s) return -1;
+    SDL_Surface *surf = texture_to_surface(renderer, s->texture, s->w, s->h);
+    if (!surf) return -1;
+    SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGB(surf->format, 0xFF, 0xFF, 0xFF));
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+    SDL_FreeSurface(surf);
+    if (!tex) return -1;
+    SDL_DestroyTexture(s->texture);
+    s->texture = tex;
+    return 0;
+}
+
 int sprites_compose_h(SpriteAtlas *atlas, SDL_Renderer *renderer,
                       uint16_t id_left, uint16_t id_right, uint16_t new_id)
 {

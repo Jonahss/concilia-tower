@@ -78,6 +78,8 @@ typedef struct {
     uint8_t  door_timer;    /* 5..0; 5 = just opened (unboard), odd = board 1,
                              * 1 = bulk board, 0 = closed */
     uint8_t  move_timer;    /* ticks until the next floor step */
+    uint8_t  move_total;    /* ticks this floor step started with (render lerp) */
+    uint8_t  leg_start;     /* floor this run departed from (accel curve) */
     uint8_t  passengers;    /* people on board (car+0x298D) */
     uint8_t  distinct_dests;/* distinct destination floors aboard (+0x2996) */
     uint16_t assigned_calls;/* floor calls owned by this car (+0x2994) */

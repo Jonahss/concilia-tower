@@ -37,9 +37,7 @@
 /* Ticks for a walking hop across one floor gap */
 #define WALK_TICKS_STAIR 10
 #define WALK_TICKS_ESC   8
-/* Car cruise speed (ticks per floor) and door-step pacing */
-#define CAR_TICKS_PER_FLOOR 2
-#define DOOR_OPEN_TICKS     5
+#define DOOR_OPEN_TICKS  5
 
 /* ---------- init ---------- */
 
@@ -561,6 +559,31 @@ static void clear_call(ElevatorShaft *s, ElevatorCar *c, int ci, int floor)
     }
 }
 
+/* CalcMoveSpeed (1090:209f): the accel/decel curve, as ticks per floor.
+ * The EXE's 4 levels: slow near either end of the run, full speed only in
+ * the middle of a long haul; express/service get a medium band instead of
+ * the standard's top gear. dist-from-start needs the run's departure
+ * floor (last_floor in the EXE; leg_start here). */
+static int car_move_ticks(const ElevatorShaft *s, const ElevatorCar *c)
+{
+    int dt = c->target - c->floor;   if (dt < 0) dt = -dt;
+    int ds = c->floor - c->leg_start; if (ds < 0) ds = -ds;
+    if (s->type == ITEM_ELEVATOR_SHAFT) {
+        if (dt < 2 || ds < 2) return 4;   /* speed 0: crawl at the ends */
+        if (dt > 4 && ds > 4) return 1;   /* speed 3: full tilt mid-run */
+        return 2;                         /* speed 2: cruise */
+    }
+    if (dt < 2 || ds < 2) return 4;       /* speed 0 */
+    if (dt < 4 || ds < 4) return 3;       /* speed 1: medium */
+    return 2;                             /* speed 2 */
+}
+
+static void car_start_step(ElevatorShaft *s, ElevatorCar *c)
+{
+    c->move_timer = (uint8_t)car_move_ticks(s, c);
+    c->move_total = c->move_timer;
+}
+
 /* UpdateDirection (1090:1d2f) essence: a car that stopped to answer a call
  * it owns turns to face the call's direction before boarding. */
 static void adopt_call_direction(ElevatorShaft *s, ElevatorCar *c, int ci)
@@ -584,7 +607,8 @@ static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
     if (tgt < 0) { c->target = c->floor; return; }   /* idle in place */
     c->target = (uint8_t)tgt;
     c->dir = (uint8_t)(tgt > c->floor);
-    c->move_timer = CAR_TICKS_PER_FLOOR;
+    c->leg_start = c->floor;
+    car_start_step(s, c);
     (void)ps;
 }
 
@@ -616,8 +640,9 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         if (c->floor == c->target) {
             adopt_call_direction(s, c, ci);
             c->door_timer = DOOR_OPEN_TICKS;
+            c->move_total = 0;
         } else {
-            c->move_timer = CAR_TICKS_PER_FLOOR;
+            car_start_step(s, c);
         }
         return;
     }
@@ -633,7 +658,8 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     if (tgt >= 0) {
         c->target = (uint8_t)tgt;
         c->dir = (uint8_t)(tgt > c->floor);
-        c->move_timer = CAR_TICKS_PER_FLOOR;
+        c->leg_start = c->floor;
+        car_start_step(s, c);
     }
 }
 
