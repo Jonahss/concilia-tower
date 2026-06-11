@@ -15,56 +15,79 @@ Maintained as we go. Started 2026-06-10.
 
 ---
 
-## 1. Standard and express elevators are SWAPPED
+## 0. Erratum to the errata: our retracted "swap" claim
 
-**OS** (`Item/Elevator/Standard.h`, `Express.h`): standard = 4 cells wide,
-narrow 32px shaft/car; express = 6 cells wide, the 48px "wide" art.
+For about three hours on 2026-06-10 this file's first entry claimed OS had
+standard and express elevators swapped (wide 42-person car = standard). That
+was **our** error, not theirs: we had correctly proven that *type 0* is the
+wide, 42-person, fast one — and then attached the wrong name to type 0.
+Five "independent confirmations" all inherited that one labeling assumption.
 
-**EXE**: it's the other way around.
-- `BuildRoutingSlots` (11b0:0538, dis16): shaft overlap width =
-  `type==0 ? 6 : 4` — **standard is 6 cells**, express *and* service are 4.
-- `MarkDirtyZone` (ElevatorsT 1090): standard marks ±3 cells (6 wide),
-  express/service ±1.
-- `CalcCarRect` (1090:216e): standard car sprite = 48px wide,
-  express/service = 32px.
-- The 48px sheet (0x842B) holds a dense-crowd car (~15 silhouettes when
-  full) with a **double-drum** engine — that's the 42-person standard car.
-  The 32px sheets are express (0x8428/0x8429) and service (0x842A).
+What settled it (2026-06-11, all dis16-verified):
 
-OS's own loader comment was the missed clue: *"The standard elevator seems
-to stem from an earlier phase of SimTower development, since the empty car
-is in a separate bitmap."* The asymmetry exists because those bitmaps are
-the **express** set.
+- **The sky-lobby anchor.** MakeElevator (tenant.c 11f8:0fea, at 0ff9):
+  a type-0 shaft placed above ground must sit on a floor where
+  seg21:0x12e0 returns true — and that function is literally
+  `floor > ground && (displayed_floor % 15) == 0`. Only the express
+  elevator has the every-15th-floor rule. Basements are exempt (express
+  serves B1–B10), also matching.
+- **Build prices.** The per-item cost resource (type 0x7f0b id 0x3e8,
+  BE u32, internal money ×$100): item 0x01 → type 1 costs **$200,000**,
+  item 0x2a → type 0 costs **$400,000**, item 0x2b → type 2 costs
+  **$100,000**. Those are the game's known standard/express/service
+  prices, in that order.
 
-## 2. Car capacity: standard holds 42, not 21
+So: **type 0 = express** (6 cells wide, 42 passengers, the 48px art, the
+gear-3 turbo, queue-based route scoring), type 1 = standard, type 2 =
+service. OS's wide-express labeling was right all along. The corrected
+facts below are still corrections — several of OS's *numbers* and
+*mechanisms* remain invented — but the labels now match the EXE.
+
+Lesson recorded for both projects: a label is a hypothesis too. Every
+"confirmation" was a fact about *type 0*; none of them tested the name.
+
+## 1. Car capacity: the express car holds 42, and capacities differ by type
 
 **OS** (`Elevator.cpp::init`): `maxCarCapacity = 21` for every type —
 no subtype overrides it.
 
-**EXE**: group+0x02 = capacity, **42 for standard**, 21 for
-express/service. Confirmed end to end: the build tool's creation calls
-push literal immediates — `push 0x2a; push 0` (standard), `push 0x15;
-push 1` (express), `push 0x15; push 2` (service) — into MakeElevator
-(tenant.c seg_11f8:0x0fea, which stores them at group+2), and boarding
-computes `free = group[+2] − passenger_count` (TripT 1210:03a4). The
-42-slot per-car passenger arrays (`int32[42]`, `byte[42]`) corroborate.
-Yes, exactly double — 21×2 is a design choice, in the machine code.
+**EXE**: group+0x02 = capacity, **42 for express**, 21 for
+standard/service. Confirmed end to end: the build tool's creation calls
+push literal immediates — `push 0x2a; push 0` (express, 42), `push 0x15;
+push 1` (standard, 21), `push 0x15; push 2` (service, 21) — into
+MakeElevator (tenant.c seg_11f8:0x0fea, which stores them at group+2),
+and boarding computes `free = group[+2] − passenger_count` (TripT
+1210:03a4). The 42-slot per-car passenger arrays (`int32[42]`,
+`byte[42]`) corroborate. Exactly double — 21×2 is a design choice, in
+the machine code. (And it's the giant double-width car that holds 42,
+which is why nobody's eyebrows were raised in 1994.)
 
-## 3. Express speed: it's structure, not horsepower
+## 2. Elevator speed: a 4-gear distance table, not maxSpeed/acceleration
 
 **OS** (`Express.h::init`): express gets `maxCarSpeed = 30` vs standard's
-10, and triple the acceleration. Invented.
+10, and triple the acceleration. Direction right — the express *is* the
+fast one — but the numbers and the model are invented.
 
 **EXE** (`CalcMoveSpeed` 1090:209f, dis16, exact thresholds): speed gear
 by distance-to-target and distance-from-run-start —
-- standard (type 0): ≤1 floor either → gear 0 (crawl); ≤4 either →
+- express (type 0): ≤1 floor either → gear 0 (crawl); ≤4 either →
   gear 2 (cruise); else **gear 3** (3 floors/tick).
-- express/service: ≤1 → 0; ≤3 → **gear 1** (a middle gear standard never
-  uses); else 2. Express **never reaches gear 3**.
+- standard/service: ≤1 → 0; ≤3 → **gear 1** (a middle gear express never
+  uses); else 2. Standard **never reaches gear 3**.
 
-The standard car is the fastest car in the game. The express elevator's
-advantage is that it only *stops* at lobbies/sky-lobbies — fewer stops,
-not more velocity.
+So the express wins twice: top gear on long hauls, *and* it only stops at
+lobbies/sky-lobbies. There is no per-type maxSpeed or acceleration
+constant anywhere — the whole curve is that one distance table.
+
+## 3. Build prices
+
+**OS**: standard $100k / service $80k / express $1M per shaft.
+
+**EXE** (cost resource type 0x7f0b id 0x3e8, BE u32 ×$100, indexed by
+item type): standard **$200k** (item 0x01 = 2000), express **$400k**
+(item 0x2a = 4000), service **$100k** (item 0x2b = 1000). These are also
+the values the build tool checks against your balance (MakeElevator
+10e3–113f, "error 7" if short, via DS:0xde0a/0c/0e).
 
 ## 4. The walking/transfer budgets are folklore
 
@@ -82,8 +105,8 @@ Ghidra's blind spots, which is why nobody had read them):
   field. OS's "no 2nd elevator after stairs" rule is a behavioral shadow
   of this (stairs+elevator already spends the transfer).
 - Transfers happen only at the 16 routing slots (0xdb9c): lobby tenants
-  whose x-span geometrically overlaps both shafts (using the widths from
-  item 1).
+  whose x-span geometrically overlaps both shafts (6 cells for an express
+  shaft, 4 for standard/service).
 
 ## 5. The route cost table is different
 
@@ -92,11 +115,12 @@ unit, with an "80-cell soft cap" inhibitory penalty on walking stretches.
 
 **EXE** (TransferT score table, lower wins): walking inside a lobby
 zone/chain = 0; escalator = 8×distance; stairs = 8×distance **+640**;
-standard elevator = queue length + 640 (+1000 if its 40-person queue is
-full); any transfer route = base **3000** (6000 if full). The real "80"
-is an early-accept: an escalator within 80 cells (score < 0x280) wins
-before elevators are even scored. Separately, walking ≥80/≥125 cells to
-a transport adds +30/+60 **stress** (not route cost).
+**express** elevator = queue length + 640 (+1000 if its 40-person queue
+is full); standard/service elevator = 8×distance + 640; any transfer
+route = base **3000** (6000 if full). The real "80" is an early-accept:
+an escalator within 80 cells (score < 0x280) wins before elevators are
+even scored. Separately, walking ≥80/≥125 cells to a transport adds
++30/+60 **stress** (not route cost).
 
 ## 6. Stress constants (OS can't have known — they're in a hidden resource)
 
@@ -123,6 +147,10 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
   global 0xB3E6).
 - **Per-floor serviced flags** are per *group* (+0x42+floor), edited by
   the ElvDlogT dialog grid — not just a top/bottom range.
+- **New express shafts must anchor at a lobby**: MakeElevator refuses a
+  type-0 shaft above ground unless its base floor is a sky-lobby floor
+  (every 15th); extending an existing shaft is unrestricted. OS lets you
+  start an express shaft anywhere.
 - **Engine/security/cinema animation is palette cycling**: color-table
   entries 197↔198, 199↔200, 201→202→203 rotate in place; one bitmap = 3
   frames. (OS knows this one — their loadAnimatedBitmap does the same
@@ -130,10 +158,9 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
 
 ## Open questions being dug (will confirm or add entries)
 
-- **Prices**: OS charges standard $100k / service $80k / express $1M per
-  shaft. The EXE's cost table is resource 0x3EA (type 0x7f0b looks like
-  per-item-type build costs, values ×$1000: 100/200/500/1000 present).
-  Add-a-car price: unverified everywhere (ConcilliaTower temporarily uses
-  $80k, flagged); the answer is in ELVPOPUP (1098) → MoneyT (1178).
+- **Add-a-car price**: unverified everywhere (ConcilliaTower temporarily
+  uses $80k, flagged); the answer is in ELVPOPUP (1098) → MoneyT (1178).
+  The companion cost resources 0x3e9/0x3ea (same type 0x7f0b) look like
+  per-period maintenance and a second per-item table — consumers unread.
 - **0x87EC**: the red variant of the shaft floor digits — purpose unknown
   (OS loads it but never renders row 1).
