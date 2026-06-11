@@ -46,6 +46,20 @@ typedef struct {
     int judge_moderate;      /* avg wait -> mild stress (150, probable) */
     int judge_stressed;      /* avg wait -> heavy stress (200, probable) */
     int star_pop[4];         /* population for 2..5 stars (300/1k/5k/10k) */
+    /* Money values below are dollars; the EXE stores them /100.
+     * Add-a-car prices live in the tuning resource at +0x90 (globals #54),
+     * NOT in the build-cost table — moddable like everything else here. */
+    int car_cost_std;        /* add a standard car ($80k) */
+    int car_cost_express;    /* add an express car ($150k) */
+    int car_cost_service;    /* add a service car ($50k) */
+    int maint_car_std;       /* upkeep per standard car per sweep ($10k, res 0x3ea) */
+    int maint_car_express;   /* per express car ($20k) */
+    int maint_car_service;   /* per service car ($10k) */
+    int maint_escalator;     /* per escalator ($5k); stairs are free */
+    int star_bonus[3];       /* award on promotion to star 2/3/4
+                                ($200k/$300k/$500k — tuning res +0xa8) */
+    int lobby_fee_star3;     /* lobby upkeep $/cell/sweep at 3 stars ($300) */
+    int lobby_fee_star4;     /* at 4+ stars ($1000); free below 3 stars */
 } Tuning;
 
 extern Tuning TUNING;

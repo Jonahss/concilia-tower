@@ -1493,6 +1493,13 @@ static TuneRow tune_rows[] = {
     { "Star 3 population",        &TUNING.star_pop[1],        100, 0, 100000 },
     { "Star 4 population",        &TUNING.star_pop[2],        500, 0, 100000 },
     { "Star 5 population",        &TUNING.star_pop[3],        500, 0, 100000 },
+    { "Car add $: standard",      &TUNING.car_cost_std,      5000, 0, 1000000 },
+    { "Car add $: express",       &TUNING.car_cost_express,  5000, 0, 1000000 },
+    { "Car add $: service",       &TUNING.car_cost_service,  5000, 0, 1000000 },
+    { "Upkeep $/car: standard",   &TUNING.maint_car_std,     1000, 0, 100000 },
+    { "Upkeep $/car: express",    &TUNING.maint_car_express, 1000, 0, 100000 },
+    { "Upkeep $/car: service",    &TUNING.maint_car_service, 1000, 0, 100000 },
+    { "Upkeep $: escalator",      &TUNING.maint_escalator,   1000, 0, 100000 },
 };
 #define TUNE_ROWS ((int)(sizeof(tune_rows) / sizeof(tune_rows[0])))
 #define TUNE_W      330
@@ -1598,9 +1605,16 @@ static void render_tuning_window(void)
 #define ELV_LABEL_W   34
 #define ELV_W         (8 + ELV_LABEL_W + ELV_CELL + 6 + 8 * ELV_CELL + 6 + ELV_CELL + 8)
 #define ELV_MAX_ROWS  30
-/* Cost of an extra car. NOT yet decomp-verified (OpenSkyscraper folklore
- * says $80k; the EXE's number is a dig target — see backlog). */
-#define ELV_CAR_COST  80000
+/* Cost of an extra car, per type (decomp-verified, globals.md #54):
+ * the EXE charges the tuning-resource values at +0x90 — standard $80k,
+ * express $150k, service $50k. OpenSkyscraper's flat $80k was right for
+ * standard cars only. Removing a car refunds nothing (also verified). */
+static int elv_car_cost(ItemType t)
+{
+    if (t == ITEM_ELEVATOR_EXPRESS) return TUNING.car_cost_express;
+    if (t == ITEM_ELEVATOR_SERVICE) return TUNING.car_cost_service;
+    return TUNING.car_cost_std;
+}
 
 /* The dialog tracks the shaft by column+type, not index: a layout rebuild
  * reorders the shaft array, and the shaft itself may be bulldozed. */
@@ -1738,7 +1752,7 @@ static void render_elv_dialog(void)
     int by = top + rows * ELV_CELL + 4;
     char cars[48];
     snprintf(cars, sizeof(cars), "Cars: %d   (add $%dK)",
-             s->num_cars, ELV_CAR_COST / 1000);
+             s->num_cars, elv_car_cost(s->type) / 1000);
     stats_label(wx + 8, by + 3, cars, (SDL_Color){ 0, 0, 0, 255 });
     SDL_Rect minus = { wx + ELV_W - 52, by, 18, 18 };
     SDL_Rect plus  = { wx + ELV_W - 28, by, 18, 18 };
@@ -1857,9 +1871,10 @@ static int elv_dialog_click(int mx, int my)
             people_set_num_cars(ps, si, s->num_cars - 1);
         } else if (mx >= wx + ELV_W - 28 && mx < wx + ELV_W - 10 &&
                    s->num_cars < CARS_PER_SHAFT) {
-            if (game.tower.money >= ELV_CAR_COST) {
-                game.tower.money -= ELV_CAR_COST;
-                game.tower.built_value += ELV_CAR_COST;
+            int cost = elv_car_cost(s->type);
+            if (game.tower.money >= cost) {
+                game.tower.money -= cost;
+                game.tower.built_value += cost;
                 people_set_num_cars(ps, si, s->num_cars + 1);
             }
         }

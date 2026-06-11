@@ -378,6 +378,37 @@ static void test_patrons_and_staff(void)
     CHECK(rode, "housekeeper rode the service elevator to the dirty room");
 }
 
+static void test_money(void)
+{
+    printf("money mechanics (globals.md #54):\n");
+
+    CHECK(TUNING.car_cost_std == 80000 && TUNING.car_cost_express == 150000 &&
+          TUNING.car_cost_service == 50000,
+          "add-a-car prices $80k/$150k/$50k (tuning res +0x90)");
+
+    /* Upkeep sweep at the day boundary: cars x per-type fee + escalators.
+     * No occupiable tenants -> no rent flows to muddy the delta. */
+    fresh();
+    for (int f = 0; f <= 2; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    place(ITEM_ESCALATOR, 0, BX + 20);
+    game_update_reachability(&sim, &tw);
+    people_rebuild_transport(&sim.people, &tw);
+    if (sim.people.shaft_count >= 1)
+        people_set_num_cars(&sim.people, 0, 3);
+    long before = tw.money;
+    run_days(1);
+    long upkeep = before - tw.money;
+    CHECK(upkeep == 3 * TUNING.maint_car_std + TUNING.maint_escalator,
+          "day sweep charges 3 cars x $10k + escalator $5k");
+
+    /* Lobbies are free below 3 stars (FUN_1178_0a6a: star fee table 0/30/100) */
+    tw.star_rating = 2;
+    before = tw.money;
+    run_days(1);
+    CHECK(before - tw.money == upkeep,
+          "2-star lobby adds no upkeep (folklore $100/segment retired)");
+}
+
 static void test_save_load(void)
 {
     printf("save/load round-trip:\n");
@@ -479,6 +510,7 @@ int main(void)
     test_queue_and_stress();
     test_elevator_dialog();
     test_patrons_and_staff();
+    test_money();
     test_save_load();
     test_schedules();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);

@@ -61,6 +61,16 @@ void tuning_reset(void)
         .judge_moderate = 150,
         .judge_stressed = 200,
         .star_pop = { 300, 1000, 5000, 10000 },
+        .car_cost_std = 80000,
+        .car_cost_express = 150000,
+        .car_cost_service = 50000,
+        .maint_car_std = 10000,
+        .maint_car_express = 20000,
+        .maint_car_service = 10000,
+        .maint_escalator = 5000,
+        .star_bonus = { 200000, 300000, 500000 },
+        .lobby_fee_star3 = 300,
+        .lobby_fee_star4 = 1000,
     };
 }
 

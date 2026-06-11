@@ -85,9 +85,39 @@ constant anywhere — the whole curve is that one distance table.
 
 **EXE** (cost resource type 0x7f0b id 0x3e8, BE u32 ×$100, indexed by
 item type): standard **$200k** (item 0x01 = 2000), express **$400k**
-(item 0x2a = 4000), service **$100k** (item 0x2b = 1000). These are also
-the values the build tool checks against your balance (MakeElevator
-10e3–113f, "error 7" if short, via DS:0xde0a/0c/0e).
+(item 0x2a = 4000), service **$100k** (item 0x2b = 1000). New shafts
+check and charge through MoneyT's build pair (1178:009e CanAffordBuild /
+1178:01db ChargeBuild = item cost + terrain cost; both halves of MoneyT's
+000c–07e8 range were a Ghidra blind spot, dis16-read 2026-06-11).
+
+## 3b. Add-a-car price: per type, and from the tuning resource
+
+**OS**: a flat **$80k** for any extra car, any type
+(`Game.cpp: transferFunds(-80000)`).
+
+**EXE**: clicking the build tool on an existing shaft *is* the add-car
+path — it lives inside PlaceElevator (tenant.c 11f8: CanAddCar max-8
+check via 1148:02c8, afford gate 10e3–113f "error 7", inline charge
+11b0–11ed) — and the price is **per type: standard $80k / express
+$150k / service $50k**. The values (globals 0xde0a/0c/0e) come not
+from the cost table but from the master **tuning resource** (0x7F05
+offsets +0x90/92/94), so car prices are moddable balance data. OS's
+$80k was right for exactly one of the three types. Removing a car
+refunds nothing (ElevatorUI 10a0:036e — no money touch).
+
+## 3c. Running costs: the upkeep sweep OS doesn't model
+
+The third cost resource (**0x3ea**, unread by OS) is the per-item
+maintenance table, consumed by MoneyT's sweep (1178:0b44, run once per
+3-day quarter at day-tick 0x9e5). Elevators charge **per car**:
+standard $10k/car, express $20k/car, service $10k/car; escalators $5k
+each; stairs free. Lobby upkeep (1178:0a6a) is per **cell**, star-gated
+by tuning values 0xde16/18/1a = 0/30/100: **free below 3 stars**,
+$300/cell at 3 stars, $1000/cell at 4+. And promotions to star 2/3/4
+pay a **bonus** of $200k/$300k/$500k (tuning +0xa8, LevelUp 1148:020f →
+MoneyT 1178:076f, cash capped at $99,999,999). Resource 0x3e9 rounds
+out the set: per-item income/expense rates in 4 rate classes
+(`[item*0x10 + class*4]`, e.g. office = 150/100/50/20 ×$100).
 
 ## 4. The walking/transfer budgets are folklore
 
@@ -166,9 +196,7 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
 
 ## Open questions being dug (will confirm or add entries)
 
-- **Add-a-car price**: unverified everywhere (ConcilliaTower temporarily
-  uses $80k, flagged); the answer is in ELVPOPUP (1098) → MoneyT (1178).
-  The companion cost resources 0x3e9/0x3ea (same type 0x7f0b) look like
-  per-period maintenance and a second per-item table — consumers unread.
 - **0x87EC**: the red variant of the shaft floor digits — purpose unknown
   (OS loads it but never renders row 1).
+- Tuning words 0xde10/12/14 (3000/1500/5000) and 0xde1c/1e/20
+  (2000/3000/10000): loaded but consumers not yet found.

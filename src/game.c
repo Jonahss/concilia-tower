@@ -728,11 +728,25 @@ void game_update(GameSim *sim, Tower *tower)
                 }
             }
             
-            /* Daily lobby maintenance (from MoneyT) */
-            int lobby_cost = calc_lobby_maintenance(tower);
-            if (lobby_cost > 0) {
-                tower->money -= lobby_cost;
-                sim->expenses_this_quarter += lobby_cost;
+            /* Upkeep sweep (MoneyT 1178:0b44 — the EXE runs it once per
+             * 3-day quarter; our day boundary is the same cadence).
+             * Lobbies + per-car elevator upkeep + escalators. */
+            int upkeep = calc_lobby_maintenance(tower);
+            PeopleSim *ups = &sim->people;
+            for (int i = 0; i < ups->shaft_count; i++) {
+                ElevatorShaft *sh = &ups->shafts[i];
+                if (!sh->active) continue;
+                int per = (sh->type == ITEM_ELEVATOR_EXPRESS) ? TUNING.maint_car_express
+                        : (sh->type == ITEM_ELEVATOR_SERVICE) ? TUNING.maint_car_service
+                        : TUNING.maint_car_std;
+                upkeep += sh->num_cars * per;
+            }
+            for (int i = 0; i < tower->tenant_count; i++)
+                if (tower->tenants[i].type == ITEM_ESCALATOR)
+                    upkeep += TUNING.maint_escalator;
+            if (upkeep > 0) {
+                tower->money -= upkeep;
+                sim->expenses_this_quarter += upkeep;
             }
             
             /* Santa: launch on day 25 of each "year" (every 12 game-days)
@@ -755,6 +769,15 @@ void game_update(GameSim *sim, Tower *tower)
                 } else {
                     printf("⭐ Promoted to %d star%s! Population: %d\n",
                            new_rating, new_rating > 1 ? "s" : "", tower->population);
+                }
+                /* Promotion bonus (LevelUp seg42:020f → MoneyT AwardMoney):
+                 * the EXE pays $200k/$300k/$500k on reaching star 2/3/4.
+                 * No bonus decoded for star 5 or TOWER. */
+                if (new_rating >= 2 && new_rating <= 4) {
+                    int bonus = TUNING.star_bonus[new_rating - 2];
+                    tower->money += bonus;
+                    sim->income_this_quarter += bonus;
+                    printf("💰 Promotion bonus: $%d\n", bonus);
                 }
             }
         }
@@ -895,26 +918,26 @@ void game_judge_tenants(GameSim *sim, Tower *tower)
 }
 
 /* ================================================================
- * Lobby maintenance (from MoneyT seg_1178)
+ * Lobby maintenance (MoneyT FUN_1178_0a6a, dis16-verified 2026-06-11)
  * ================================================================
- * Lobby maintenance scales with star level:
- *   Star < 3: $100/segment
- *   Star < 4: $300/segment  
- *   Star >= 4: $500/segment */
+ * charge = lobby_span_cells * fee / 10, fee by star from the tuning
+ * resource (0xde16/18/1a = 0/30/100, x$100): below 3 stars lobbies are
+ * FREE, 3 stars = $300/cell, 4+ stars = $1000/cell. The old
+ * $100/300/500-per-segment numbers were folklore. */
 
 static int calc_lobby_maintenance(Tower *tower)
 {
-    int cost_per_segment;
-    if (tower->star_rating < 3)      cost_per_segment = 100;
-    else if (tower->star_rating < 4) cost_per_segment = 300;
-    else                             cost_per_segment = 500;
-    
+    int per_cell;
+    if (tower->star_rating < 3)      return 0;
+    else if (tower->star_rating < 4) per_cell = TUNING.lobby_fee_star3;
+    else                             per_cell = TUNING.lobby_fee_star4;
+
     int lobby_segments = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
         if (tower->tenants[i].type == ITEM_LOBBY) lobby_segments++;
     }
-    
-    return lobby_segments * cost_per_segment;
+
+    return lobby_segments * ITEM_WIDTH[ITEM_LOBBY] * per_cell;
 }
 
 /* ================================================================
