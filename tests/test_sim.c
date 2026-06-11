@@ -378,6 +378,33 @@ static void test_patrons_and_staff(void)
     CHECK(rode, "housekeeper rode the service elevator to the dirty room");
 }
 
+static void test_save_load(void)
+{
+    printf("save/load round-trip:\n");
+    fresh();
+    place(ITEM_OFFICE, 1, BX);
+    for (int f = 0; f <= 1; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    game_update_reachability(&sim, &tw);
+    for (int i = 0; i < 600; i++) game_update(&sim, &tw);
+    TUNING.capacity_express = 7;   /* a mod, to prove tuning persists */
+
+    long money = tw.money;
+    int shafts = sim.people.shaft_count;
+    uint32_t tick = sim.tick;
+    CHECK(game_save(&sim, &tw, "/tmp/ct_test.sav") == 0, "save succeeds");
+
+    /* scribble over everything, then restore */
+    tower_init(&tw); game_init(&sim); tuning_reset();
+    CHECK(game_load(&sim, &tw, "/tmp/ct_test.sav") == 0, "load succeeds");
+    CHECK(tw.money == money, "money round-trips");
+    CHECK(sim.people.shaft_count == shafts, "shafts round-trip");
+    CHECK(sim.tick == tick, "sim clock round-trips");
+    CHECK(TUNING.capacity_express == 7, "tuning mods round-trip");
+    CHECK(game_load(&sim, &tw, "/no/such/file.sav") != 0,
+          "missing file fails cleanly");
+    remove("/tmp/ct_test.sav");
+}
+
 int main(void)
 {
     test_stairs();
@@ -388,6 +415,7 @@ int main(void)
     test_queue_and_stress();
     test_elevator_dialog();
     test_patrons_and_staff();
+    test_save_load();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

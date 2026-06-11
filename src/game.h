@@ -377,6 +377,11 @@ typedef struct {
 /* Initialize simulation */
 void game_init(GameSim *sim);
 
+/* Save/load the whole game state (versioned native format).
+ * Returns 0 on success. */
+int game_save(const GameSim *sim, const Tower *tower, const char *path);
+int game_load(GameSim *sim, Tower *tower, const char *path);
+
 /* Advance simulation by one frame. Call each frame (~60fps). */
 void game_update(GameSim *sim, Tower *tower);
 

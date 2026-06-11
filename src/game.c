@@ -1090,3 +1090,44 @@ void game_update_santa(GameSim *sim)
         sim->santa.active = 0;  /* Off screen */
     }
 }
+
+/* ---------- Save / load (native format) ----------
+ * Whole-state dump: Tower, GameSim, and the live tuning table are flat,
+ * pointer-free structs, so a versioned binary image round-trips the whole
+ * game — people mid-ride, queues, stats history, dialog settings, mods.
+ * Struct layout drift is caught by the size fields. (.TWR import from
+ * the original's FileT format is a separate, future milestone.) */
+#define SAVE_MAGIC   0x52575443u    /* "CTWR" */
+#define SAVE_VERSION 1u
+
+int game_save(const GameSim *sim, const Tower *tower, const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    uint32_t hdr[5] = { SAVE_MAGIC, SAVE_VERSION,
+                        (uint32_t)sizeof(Tower), (uint32_t)sizeof(GameSim),
+                        (uint32_t)sizeof(Tuning) };
+    int ok = fwrite(hdr, sizeof(hdr), 1, f) == 1 &&
+             fwrite(tower, sizeof(*tower), 1, f) == 1 &&
+             fwrite(sim, sizeof(*sim), 1, f) == 1 &&
+             fwrite(&TUNING, sizeof(TUNING), 1, f) == 1;
+    fclose(f);
+    return ok ? 0 : -1;
+}
+
+int game_load(GameSim *sim, Tower *tower, const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    uint32_t hdr[5];
+    int ok = fread(hdr, sizeof(hdr), 1, f) == 1 &&
+             hdr[0] == SAVE_MAGIC && hdr[1] == SAVE_VERSION &&
+             hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
+             hdr[4] == sizeof(Tuning);
+    if (ok)
+        ok = fread(tower, sizeof(*tower), 1, f) == 1 &&
+             fread(sim, sizeof(*sim), 1, f) == 1 &&
+             fread(&TUNING, sizeof(TUNING), 1, f) == 1;
+    fclose(f);
+    return ok ? 0 : -1;
+}

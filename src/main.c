@@ -2185,6 +2185,13 @@ static char event_messages[EVENT_MSG_COUNT][EVENT_MSG_LEN];
 static int  event_msg_head = 0;
 static int  event_msg_total = 0;
 
+/* Save file path: $CT_SAVE overrides; default lives next to the cwd */
+static const char *save_path(void)
+{
+    const char *env = getenv("CT_SAVE");
+    return env && *env ? env : "concilliatower.sav";
+}
+
 static void add_event_message(const char *msg)
 {
     strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
@@ -3323,6 +3330,22 @@ static void handle_event(SDL_Event *ev)
         /* Tuning/modding window */
         case SDLK_F4:
             game.show_tuning = !game.show_tuning;
+            break;
+
+        /* Save / load (whole state, including people mid-ride and mods) */
+        case SDLK_F5:
+            if (game_save(&game.sim, &game.tower, save_path()) == 0)
+                add_event_message("Game saved.");
+            else
+                add_event_message("Save FAILED!");
+            break;
+        case SDLK_F9:
+            if (game_load(&game.sim, &game.tower, save_path()) == 0) {
+                game.elv_open = 0;          /* dialog target may be gone */
+                add_event_message("Game loaded.");
+            } else {
+                add_event_message("Load failed (no/old save).");
+            }
             break;
         
         /* Debug toggle — F1 gets eaten by browsers, use backtick */
