@@ -38,7 +38,8 @@
 #define SPR_LOBBY_BOT0  0x89e8   /* Lobby ground level, variant 0 (raw) */
 #define SPR_LOBBY_BOT1  0x89e9
 #define SPR_LOBBY_BOT2  0x89ea
-#define SPR_LOBBY_MID0  0x8a28   /* Lobby above-ground segment (raw) */
+#define SPR_LOBBY_MID0  0x8a28   /* Grand lobby middle row (raw, chunk x=328) */
+#define SPR_LOBBY_TOP0  0x8a68   /* Grand lobby top row (raw, chunk x=0) */
 
 /* Floor/ceiling color source — 96×36, extract column at x=16 for floor color */
 #define SPR_FLOOR_SRC   0x83e8
@@ -889,33 +890,53 @@ static void render_tower(void)
     /* ====== PASS 1: Floor backgrounds ======
      * Draw ALL floor backgrounds first, so multi-floor sprites
      * can paint over them without being overwritten. */
+    /* First: solid dirt across the whole view below the surface, shaded
+     * darker with depth — built floors carve interiors out of it next.
+     * (The original fills the underground wholesale; flat brown bands
+     * only under buildings was a port artifact.) */
+    {
+        for (int floor = -1; floor >= bot_floor - 1; floor--) {
+            int sx, sy;
+            grid_to_screen(floor, 0, &sx, &sy);
+            (void)sx;
+            if (sy > game.screen_h) break;
+            if (sy + CELL_H < 0) continue;
+            int depth = -floor;
+            int r = 120 - depth * 6; if (r < 60) r = 60;
+            int g = 85 - depth * 5;  if (g < 35) g = 35;
+            int b = 50 - depth * 4;  if (b < 15) b = 15;
+            SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+            int band_h = (floor == bot_floor - 1) ? game.screen_h - sy
+                                                  : CELL_H;
+            SDL_Rect band = { 0, sy, game.screen_w, band_h };
+            SDL_RenderFillRect(game.renderer, &band);
+        }
+    }
+
+    /* Beige interior + ceiling strip behind every CONTIGUOUS run of
+     * built cells — above and below ground alike (underground floors
+     * are excavated rooms inside the dirt). Gaps between runs show
+     * sky/dirt, as in the original. */
     for (int floor = bot_floor; floor <= top_floor; floor++) {
         int fidx = floor_to_index(floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-        
+        if (floor == 0) continue;          /* the lobby row draws itself */
+
         int sx_base, sy_base;
         grid_to_screen(floor, 0, &sx_base, &sy_base);
-        
-        /* Check if this floor has ANY content */
-        int left = TOWER_WIDTH, right = 0;
-        for (int x = 0; x < TOWER_WIDTH; x++) {
-            if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                if (x < left) left = x;
-                if (x > right) right = x;
-            }
-        }
-        if (left > right) continue;  /* Empty floor */
 
-        
-        /* Floor background — different for above/below ground */
-        if (floor > 0) {
-            /* Above ground: warm beige wall */
-            int wall_x = sx_base + left * CELL_W;
-            int wall_w = (right - left + 1) * CELL_W;
+        for (int x = 0; x < TOWER_WIDTH; ) {
+            if (game.tower.grid[fidx][x].type == ITEM_NONE) { x++; continue; }
+            int run = x;
+            while (run < TOWER_WIDTH &&
+                   game.tower.grid[fidx][run].type != ITEM_NONE) run++;
+
+            int wall_x = sx_base + x * CELL_W;
+            int wall_w = (run - x) * CELL_W;
             SDL_SetRenderDrawColor(game.renderer, 198, 195, 182, 255);
             SDL_Rect wall_rect = { wall_x, sy_base, wall_w, CELL_H };
             SDL_RenderFillRect(game.renderer, &wall_rect);
-            
+
             /* Ceiling strip */
             SDL_SetRenderDrawColor(game.renderer, 178, 172, 160, 255);
             SDL_Rect ceil_rect = { wall_x, sy_base, wall_w, CEIL_H };
@@ -923,22 +944,7 @@ static void render_tower(void)
             SDL_SetRenderDrawColor(game.renderer, 140, 135, 125, 255);
             SDL_RenderDrawLine(game.renderer, wall_x, sy_base + CEIL_H - 1,
                               wall_x + wall_w, sy_base + CEIL_H - 1);
-        } else if (floor < 0) {
-            /* Underground: dark brown earth fill where buildings are */
-            int ug_x = sx_base + left * CELL_W;
-            int ug_w = (right - left + 1) * CELL_W;
-            int depth = -floor;
-            int r = 120 - depth * 6; if (r < 60) r = 60;
-            int g = 85 - depth * 5;  if (g < 35) g = 35;
-            int b = 50 - depth * 4;  if (b < 15) b = 15;
-            SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
-            SDL_Rect ug_rect = { ug_x, sy_base, ug_w, CELL_H };
-            SDL_RenderFillRect(game.renderer, &ug_rect);
-            
-            /* Thin rock layer line at ceiling */
-            SDL_SetRenderDrawColor(game.renderer, r - 15, g - 10, b - 5, 255);
-            SDL_RenderDrawLine(game.renderer, ug_x, sy_base,
-                              ug_x + ug_w, sy_base);
+            x = run;
         }
     }
     
@@ -963,7 +969,15 @@ static void render_tower(void)
             
             /* Only render from the base floor of multi-floor items */
             if (tenant->floor != floor) { x++; continue; }
-            
+
+            /* Floor strips: the beige background pass already drew them.
+             * Advance ONE cell — imported strips underlie other tenants
+             * whose cells overwrote the strip's, so a width jump would
+             * skip them. */
+            if (tenant->type == ITEM_FLOOR) { x++; continue; }
+            /* Elevators draw in their own pass, in FRONT of lobbies */
+            if (item_is_elevator(tenant->type)) { x++; continue; }
+
             int frame_w_hint = 0, item_floors = 1;
             uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
             spr_id = item_sprite_animated(tenant->type, spr_id);
@@ -980,38 +994,43 @@ static void render_tower(void)
             int draw_y = (item_floors > 1) ? ty - (item_floors - 1) * CELL_H : tenant_y;
             
             if (tenant->type == ITEM_LOBBY && lobby_spr) {
-                /* Lobby sprite 0x89E8 layout (992×36, verified by pixel inspection):
-                 *   [0-255]   Interior (256px) — brown walls, booth seating, tiled
-                 *   [256-327] Left entrance transition (72px) — plants → glass
-                 *   [328-655] Entrance facade (328px) — teal glass, sky-blue bg
-                 *   [656-911] Interior repeat (256px) — same as 0-255
-                 *   [912-983] Right entrance transition (72px) — plants → glass
-                 *   [984-991] Padding (8px)
-                 *
-                 * Rendering: [left_entrance] [interior tiled...] [right_entrance]
-                 * Left entrance = pixels 256-655 (72 + 328 = 400px transition+facade)
-                 * Right entrance = pixels 912-655 reversed? No — use endcap + flip.
-                 *
-                 * Simpler: use left_transition(72) at left edge,
-                 *          tile interior(256) in the middle,
-                 *          right_transition(72) at right edge. */
-                int interior_src = 0;       /* Interior starts at pixel 0 */
-                int interior_w = 256;       /* 256px repeating interior */
-                int left_cap_src = 256;     /* Left transition at pixel 256 */
-                int cap_w = 72;             /* Each transition is 72px */
-                int right_cap_src = 912;    /* Right transition at pixel 912 */
+                /* Lobby sheets (layout decoded via OS loadLobbies): each
+                 * 984px raw 0x89E8+v (v = star variant 1★/2★/3★+) holds
+                 * three 328px chunks: [0] ground lobby, [1] sky lobby,
+                 * [2] ground row of the grand multi-story lobby. The
+                 * grand lobby's upper rows live in 0x8A28+v (middle row,
+                 * chunk at x=328) and 0x8A68+v (top row, chunk at x=0).
+                 * Chunk carve: 256px body at +0, 56px end cap at +272. */
+                int v = game.tower.star_rating >= 3 ? 2
+                      : game.tower.star_rating == 2 ? 1 : 0;
+                int lob_below = (fidx - 1 >= 0 &&
+                    game.tower.grid[fidx - 1][tenant->x].type == ITEM_LOBBY);
+                int lob_above = (fidx + 1 < TOWER_FLOOR_COUNT &&
+                    game.tower.grid[fidx + 1][tenant->x].type == ITEM_LOBBY);
+                uint16_t sheet_id = SPR_LOBBY_BOT0 + v;
+                int chunk = 0;
+                if (floor == 0)        chunk = lob_above ? 2 : 0;
+                else if (!lob_below)   chunk = 1;   /* sky lobby */
+                else {                              /* grand lobby upper row */
+                    sheet_id = (lob_above ? SPR_LOBBY_MID0 : SPR_LOBBY_TOP0) + v;
+                    chunk = lob_above ? 1 : 0;      /* OS: middle reads x=328 */
+                }
+                Sprite *sheet = sprites_find(&game.sprites, sheet_id);
+                if (!sheet) sheet = lobby_spr;
+                int base = chunk * 328;
+                int interior_w = 256;
+                int cap_w = 56;
                 int lobby_pw = tenant->width * CELL_W;
-                
-                /* Left entrance transition */
+
+                /* Left end cap */
                 {
                     int ew = cap_w;
                     if (ew > lobby_pw) ew = lobby_pw;
-                    SDL_Rect src_ec = { left_cap_src, 0, ew, lobby_spr->h };
+                    SDL_Rect src_ec = { base + 272, 0, ew, sheet->h };
                     SDL_Rect dst_ec = { tx, ty, ew, CELL_H };
-                    SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_ec, &dst_ec);
+                    SDL_RenderCopy(game.renderer, sheet->texture, &src_ec, &dst_ec);
                 }
-                
-                /* Repeating interior section */
+                /* Repeating interior */
                 int mid_start = cap_w;
                 int mid_end = lobby_pw - cap_w;
                 for (int mx = mid_start; mx < mid_end; mx += interior_w) {
@@ -1019,51 +1038,19 @@ static void render_tower(void)
                     if (mx + mw > mid_end) mw = mid_end - mx;
                     int msx = tx + mx;
                     if (msx + mw < 0 || msx > game.screen_w) continue;
-                    SDL_Rect src_mid = { interior_src, 0, mw, lobby_spr->h };
+                    SDL_Rect src_mid = { base, 0, mw, sheet->h };
                     SDL_Rect dst_mid = { msx, ty, mw, CELL_H };
-                    SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_mid, &dst_mid);
+                    SDL_RenderCopy(game.renderer, sheet->texture, &src_mid, &dst_mid);
                 }
-                
-                /* Right entrance transition */
+                /* Right end cap */
                 if (lobby_pw > cap_w) {
                     int rx = tx + lobby_pw - cap_w;
-                    SDL_Rect src_ec = { right_cap_src, 0, cap_w, lobby_spr->h };
+                    SDL_Rect src_ec = { base + 272, 0, cap_w, sheet->h };
                     SDL_Rect dst_ec = { rx, ty, cap_w, CELL_H };
-                    SDL_RenderCopy(game.renderer, lobby_spr->texture, &src_ec, &dst_ec);
+                    SDL_RenderCopy(game.renderer, sheet->texture, &src_ec, &dst_ec);
                 }
                 x = tenant->x + tenant->width;
                 continue;
-            } else if (item_is_elevator(tenant->type) && spr) {
-                /* Shaft section: always tile 0 of 0x87E8. Tiles 1+ are the
-                 * floor-digit variants (1..9, 100) — wiring the real
-                 * per-floor digits comes with the shaft-label pass.
-                 * The 36px tile spans the FULL floor height: the shaft
-                 * overlays the ceiling strip/joists, as in the original.
-                 * The wide (express, 6-cell) shaft = 8px extension tiles
-                 * (0x842c) flanking the 32px shaft, as the EXE composes. */
-                SDL_Rect src = { 0, 0, 32, spr->h };
-                if (tw == 48) {
-                    Sprite *ext = sprites_find(&game.sprites, SPR_ELEV_EXT);
-                    SDL_Rect mid = { tx + 8, ty, 32, CELL_H };
-                    SDL_RenderCopy(game.renderer, spr->texture, &src, &mid);
-                    if (ext) {
-                        SDL_Rect sl = { 0, 0, 8, ext->h };
-                        SDL_Rect dl = { tx, ty, 8, CELL_H };
-                        SDL_Rect sr = { 8, 0, 8, ext->h };
-                        SDL_Rect dr = { tx + 40, ty, 8, CELL_H };
-                        SDL_RenderCopy(game.renderer, ext->texture, &sl, &dl);
-                        SDL_RenderCopy(game.renderer, ext->texture, &sr, &dr);
-                    }
-                } else {
-                    SDL_Rect dst = { tx, ty, tw, CELL_H };
-                    SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
-                }
-                /* floor number, on serviced stops only (as the original) */
-                ElevatorShaft *es = find_people_shaft(tenant->x, tenant->type);
-                int fi = floor_to_index(floor);
-                if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
-                    elv_structural_stop(es, fi))
-                    draw_shaft_digits(tx, ty, tw, floor);
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
                  * Frame selection driven by capacity byte (from TenantMake).
@@ -1155,6 +1142,51 @@ static void render_tower(void)
         }
     }
     
+    /* ====== PASS 2.5: Elevator shafts ======
+     * Drawn after tenants so shafts overlay lobbies the same way they
+     * overlay the ceiling joists — as in the original. */
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (!item_is_elevator(t->type)) continue;
+        if (t->floor < bot_floor || t->floor > top_floor) continue;
+
+        int frame_w_hint = 0, item_floors = 1;
+        uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
+        Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+        if (!spr) continue;
+
+        int tx, ty;
+        grid_to_screen(t->floor, t->x, &tx, &ty);
+        int tw = t->width * CELL_W;
+
+        /* Shaft section: always tile 0 of 0x87E8. The 36px tile spans
+         * the FULL floor height. The wide (express, 6-cell) shaft = 8px
+         * extension tiles (0x842c) flanking the 32px shaft. */
+        SDL_Rect src = { 0, 0, 32, spr->h };
+        if (tw == 48) {
+            Sprite *ext = sprites_find(&game.sprites, SPR_ELEV_EXT);
+            SDL_Rect mid = { tx + 8, ty, 32, CELL_H };
+            SDL_RenderCopy(game.renderer, spr->texture, &src, &mid);
+            if (ext) {
+                SDL_Rect sl = { 0, 0, 8, ext->h };
+                SDL_Rect dl = { tx, ty, 8, CELL_H };
+                SDL_Rect sr = { 8, 0, 8, ext->h };
+                SDL_Rect dr = { tx + 40, ty, 8, CELL_H };
+                SDL_RenderCopy(game.renderer, ext->texture, &sl, &dl);
+                SDL_RenderCopy(game.renderer, ext->texture, &sr, &dr);
+            }
+        } else {
+            SDL_Rect dst = { tx, ty, tw, CELL_H };
+            SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+        }
+        /* floor number, on serviced stops only (as the original) */
+        ElevatorShaft *es = find_people_shaft(t->x, t->type);
+        int fi = floor_to_index(t->floor);
+        if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
+            elv_structural_stop(es, fi))
+            draw_shaft_digits(tx, ty, tw, t->floor);
+    }
+
     /* ====== PASS 3: Transport overlays (stairs, escalators) ====== */
     for (int i = 0; i < game.tower.tenant_count; i++) {
         Tenant *t = &game.tower.tenants[i];
