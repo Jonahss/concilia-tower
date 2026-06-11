@@ -915,14 +915,17 @@ static void render_tower(void)
         }
     }
 
-    /* Beige interior + ceiling strip behind every CONTIGUOUS run of
-     * built cells — above and below ground alike (underground floors
-     * are excavated rooms inside the dirt). Gaps between runs show
-     * sky/dirt, as in the original. */
+    /* The floor strip behind every CONTIGUOUS run of built cells —
+     * above and below ground alike. The strip is the EXE's own art:
+     * bitmap 0x83E8, the 2px column at x=16 (horizontally uniform) —
+     * a 12px concrete joist band over a 24px DARK GREY empty interior.
+     * Tenants paint over the interior, leaving the joist band visible
+     * between every pair of floors, as in the original. Gaps between
+     * runs show sky/dirt. */
+    Sprite *floor_strip = sprites_find(&game.sprites, 0x83e8);
     for (int floor = bot_floor; floor <= top_floor; floor++) {
         int fidx = floor_to_index(floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-        if (floor == 0) continue;          /* the lobby row draws itself */
 
         int sx_base, sy_base;
         grid_to_screen(floor, 0, &sx_base, &sy_base);
@@ -935,17 +938,19 @@ static void render_tower(void)
 
             int wall_x = sx_base + x * CELL_W;
             int wall_w = (run - x) * CELL_W;
-            SDL_SetRenderDrawColor(game.renderer, 198, 195, 182, 255);
-            SDL_Rect wall_rect = { wall_x, sy_base, wall_w, CELL_H };
-            SDL_RenderFillRect(game.renderer, &wall_rect);
-
-            /* Ceiling strip */
-            SDL_SetRenderDrawColor(game.renderer, 178, 172, 160, 255);
-            SDL_Rect ceil_rect = { wall_x, sy_base, wall_w, CEIL_H };
-            SDL_RenderFillRect(game.renderer, &ceil_rect);
-            SDL_SetRenderDrawColor(game.renderer, 140, 135, 125, 255);
-            SDL_RenderDrawLine(game.renderer, wall_x, sy_base + CEIL_H - 1,
-                              wall_x + wall_w, sy_base + CEIL_H - 1);
+            if (floor_strip) {
+                SDL_Rect src = { 16, 0, 2, 36 };
+                SDL_Rect dst = { wall_x, sy_base, wall_w, CELL_H };
+                SDL_RenderCopy(game.renderer, floor_strip->texture, &src, &dst);
+            } else {
+                /* fallback: joist band + dark interior */
+                SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 255);
+                SDL_Rect wall_rect = { wall_x, sy_base, wall_w, CELL_H };
+                SDL_RenderFillRect(game.renderer, &wall_rect);
+                SDL_SetRenderDrawColor(game.renderer, 178, 172, 160, 255);
+                SDL_Rect ceil_rect = { wall_x, sy_base, wall_w, CEIL_H };
+                SDL_RenderFillRect(game.renderer, &ceil_rect);
+            }
             x = run;
         }
     }
