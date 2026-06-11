@@ -956,34 +956,22 @@ static void render_tower(void)
     }
     
     /* ====== PASS 2: Tenant sprites ======
-     * Now render all tenants. Multi-floor items paint over the
-     * backgrounds of upper floors without being overwritten. */
-    for (int floor = bot_floor; floor <= top_floor; floor++) {
-        int fidx = floor_to_index(floor);
-        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-        
-        int sx_base, sy_base;
-        grid_to_screen(floor, 0, &sx_base, &sy_base);
-        
-        for (int x = 0; x < TOWER_WIDTH; ) {
-            TowerCell *cell = &game.tower.grid[fidx][x];
-            
-            if (cell->type == ITEM_NONE) { x++; continue; }
-            if (cell->cell_index != 0) { x++; continue; }
-            
-            Tenant *tenant = tower_tenant(&game.tower, cell->tenant_id);
-            if (!tenant) { x++; continue; }
-            
-            /* Only render from the base floor of multi-floor items */
-            if (tenant->floor != floor) { x++; continue; }
-
-            /* Floor strips: the beige background pass already drew them.
-             * Advance ONE cell — imported strips underlie other tenants
-             * whose cells overwrote the strip's, so a width jump would
-             * skip them. */
-            if (tenant->type == ITEM_FLOOR) { x++; continue; }
-            /* Elevators draw in their own pass, in FRONT of lobbies */
-            if (item_is_elevator(tenant->type)) { x++; continue; }
+     * Iterate the TENANT ARRAY, not the grid: a shaft stamped over a
+     * tenant's leftmost cell would hide it from a grid scan (real saves
+     * legally overlap tenants and shaft columns — that "sparse tower"
+     * bug). Tenants never overlap each other, so array order is fine. */
+    for (int ti = 0; ti < game.tower.tenant_count; ti++) {
+        Tenant *tenant = &game.tower.tenants[ti];
+        if (tenant->type == ITEM_NONE) continue;
+        /* Floor strips: drawn by the background pass */
+        if (tenant->type == ITEM_FLOOR) continue;
+        /* Elevators draw in their own pass, in FRONT of lobbies;
+         * stairs/escalators in the overlay pass after that */
+        if (item_is_transport(tenant->type)) continue;
+        int floor = tenant->floor;
+        if (floor > top_floor ||
+            floor + tenant->height - 1 < bot_floor) continue;
+        {
 
             int frame_w_hint = 0, item_floors = 1;
             uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
@@ -1010,6 +998,7 @@ static void render_tower(void)
                  * Chunk carve: 256px body at +0, 56px end cap at +272. */
                 int v = game.tower.star_rating >= 3 ? 2
                       : game.tower.star_rating == 2 ? 1 : 0;
+                int fidx = floor_to_index(floor);
                 int lob_below = (fidx - 1 >= 0 &&
                     game.tower.grid[fidx - 1][tenant->x].type == ITEM_LOBBY);
                 int lob_above = (fidx + 1 < TOWER_FLOOR_COUNT &&
@@ -1056,7 +1045,6 @@ static void render_tower(void)
                     SDL_Rect dst_ec = { rx, ty, cap_w, CELL_H };
                     SDL_RenderCopy(game.renderer, sheet->texture, &src_ec, &dst_ec);
                 }
-                x = tenant->x + tenant->width;
                 continue;
             } else if (spr && frame_w_hint > 0) {
                 /* Frame-based sprite sheet.
@@ -1144,11 +1132,9 @@ static void render_tower(void)
                 
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
             }
-            
-            x += tenant->width;
         }
     }
-    
+
     /* ====== PASS 2.5: Elevator shafts ======
      * Drawn after tenants so shafts overlay lobbies the same way they
      * overlay the ceiling joists — as in the original. */
