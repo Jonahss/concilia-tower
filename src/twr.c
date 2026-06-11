@@ -140,7 +140,8 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
     memset(tower, 0, sizeof(*tower));
     tower->next_tenant_id = 1;
     tower->money = money * 100;
-    tower->built_value = constr_costs * 100;
+    /* the EXE's construction tracker (0xb3d6) counts DOWN on spends */
+    tower->built_value = (constr_costs < 0 ? -constr_costs : constr_costs) * 100;
     tower->star_rating = star < 1 ? 1 : star;
     tower->day = (int)(day < 0 ? 0 : day);
 
