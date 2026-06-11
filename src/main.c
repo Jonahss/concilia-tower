@@ -78,6 +78,7 @@
 
 /* Security: 0x8768 (animated, 3 frames via palette cycling) */
 #define SPR_SECURITY    0x8768
+#define SPR_SECURITY_F1 0xf768  /* synthetic: palette-cycle steps 1/2 */
 
 /* Medical: 0x8728+0x8729+0x872A (3 bitmaps horizontally) */
 #define SPR_MEDICAL_A   0x8728
@@ -104,9 +105,10 @@
 #define SPR_PARTYHALL_TOP 0x8B28
 #define SPR_PARTYHALL_BOT 0x8B68
 
-/* Cinema hall: 0x8868 (upper, animated) + 0x88A8 (lower) */
+/* Cinema hall: 0x8868 (upper, animated marquee) + 0x88A8 (lower) */
 #define SPR_CINEMA_UPPER 0x8868
 #define SPR_CINEMA_LOWER 0x88A8
+#define SPR_CINEMA_UPPER_F1 0xf868  /* synthetic: cycled marquee steps */
 
 /* Cinema screens: 0x8C68+0x8CA8 (screen 0), 0x8C69+0x8CA9 (screen 1) */
 #define SPR_CINEMA_SCR0_TOP 0x8C68
@@ -180,6 +182,7 @@
 #define SPR_PARTYHALL_COMP    0x0019  /* 0x8B28 + 0x8B68 vertically */
 #define SPR_CINEMA_COMP       0x001A  /* cinema hall composite */
 #define SPR_METRO_COMP        0x001B  /* metro station composite */
+#define SPR_CINEMA_COMP_F1    0x001C  /* cinema with cycled marquee */
 
 /* ---------- Sprite mapping for item types ---------- */
 static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
@@ -334,6 +337,20 @@ typedef struct {
 } Game;
 
 static Game game;
+
+/* Palette-cycle animation variants (the EXE's AnimeT cycles color-table
+ * entries continuously; the security radar and cinema marquee live on
+ * those entries, so they animate all day — same scheme as the motors).
+ * These two sheets only use the TOGGLE-PAIR entries (197/198, 199/200),
+ * not the 3-rotation, so they're 2-frame animations: cycle step 2 is
+ * pixel-identical to the base (verified by frame hashing). */
+static uint16_t item_sprite_animated(ItemType type, uint16_t base)
+{
+    if ((game.sim.frame / 6) % 2 == 0) return base;
+    if (type == ITEM_SECURITY) return SPR_SECURITY_F1;
+    if (type == ITEM_CINEMA)   return SPR_CINEMA_COMP_F1;
+    return base;
+}
 
 /* ---------- Win 3.1 style Menu system ---------- */
 /* Classic Windows 3.1 colors */
@@ -949,6 +966,7 @@ static void render_tower(void)
             
             int frame_w_hint = 0, item_floors = 1;
             uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
+            spr_id = item_sprite_animated(tenant->type, spr_id);
             Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
             
             int tx, ty;
@@ -1144,6 +1162,7 @@ static void render_tower(void)
         
         int frame_w_hint = 0, item_floors = 1;
         uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
+        spr_id = item_sprite_animated(t->type, spr_id);
         Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
         
         int tx, ty;
@@ -3900,6 +3919,9 @@ int main(int argc, char *argv[])
                                 SPR_ELEV_EXPRESS, SPR_ELEV_EXP_F1, 1);
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
                                 SPR_ELEV_EXPRESS, SPR_ELEV_EXP_F2, 2);
+    /* security monitors (same palette-cycle scheme; pair entries only) */
+    sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                SPR_SECURITY, SPR_SECURITY_F1, 1);
 
     /* Build composite sprites from raw parts */
     {
@@ -3953,6 +3975,12 @@ int main(int argc, char *argv[])
         /* Cinema hall: 0x8868 (upper) + 0x88A8 (lower) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8868, 0x88A8, SPR_CINEMA_COMP) == 0)
             ok++; else fail++;
+        /* Cinema marquee animation: cycled upper + same lower */
+        sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
+                                    SPR_CINEMA_UPPER, SPR_CINEMA_UPPER_F1, 1);
+        if (sprites_compose_v(&game.sprites, game.renderer,
+                              SPR_CINEMA_UPPER_F1, SPR_CINEMA_LOWER,
+                              SPR_CINEMA_COMP_F1) == 0) ok++; else fail++;
         /* Metro: Try 0x8BA9 + 0x8BA8 horizontally for first row, then stack */
         {
             uint16_t metro_row0 = 0x00F0, metro_row1 = 0x00F1, metro_row2 = 0x00F2;
@@ -4398,6 +4426,10 @@ int main(int argc, char *argv[])
     } else {
         game.cam_fy = -2.0f * CELL_H;  /* Show floors 0-6 */
     }
+    if (getenv("CT_CAM_FLOOR"))        /* center the view on a floor */
+        game.cam_fy = -atof(getenv("CT_CAM_FLOOR")) * CELL_H;
+    if (getenv("CT_CAM_X"))
+        game.cam_fx = atof(getenv("CT_CAM_X")) * CELL_W;
     (void)show_underground;
     game.zoom = 1.0f;
     
