@@ -1,11 +1,12 @@
 /* test_sim.c — checks for transport reachability, housekeeping, and the
  * people/elevator pipeline.
  * Build: gcc -o /tmp/test_sim tests/test_sim.c src/tower.c src/game.c \
- *            src/people.c -Isrc -lm
+ *            src/people.c src/twr.c -Isrc -lm
  * No SDL needed — pure simulation. */
 #include <stdio.h>
 #include <string.h>
 #include "game.h"
+#include "twr.h"
 
 static Tower tw;
 static GameSim sim;
@@ -409,6 +410,55 @@ static void test_money(void)
           "2-star lobby adds no upkeep (folklore $100/segment retired)");
 }
 
+static void test_twr_import(void)
+{
+    printf("original .TDT import (real 1995 save):\n");
+    const char *fx = "tests/fixtures/BARKLE4D.TDT";
+    FILE *probe = fopen(fx, "rb");
+    if (!probe) { printf("  (fixture %s missing — skipped)\n", fx); return; }
+    fclose(probe);
+
+    char err[256];
+    int rc = twr_import(fx, &tw, &sim, err, sizeof(err));
+    CHECK(rc == 0, "BARKLE4D.TDT parses end to end");
+    if (rc != 0) { printf("  (%s)\n", err); return; }
+
+    /* Ground truth read straight from the file bytes */
+    CHECK(tw.star_rating == 4, "star rating 4 imported");
+    CHECK(tw.money == 278104600L, "balance $278,104,600 (file value x100)");
+    CHECK(tw.day == 2675, "day counter 2675");
+
+    int stairs = 0, escalators = 0, lobbies = 0, offices = 0;
+    for (int i = 0; i < tw.tenant_count; i++) {
+        switch (tw.tenants[i].type) {
+        case ITEM_STAIRS: stairs++; break;
+        case ITEM_ESCALATOR: escalators++; break;
+        case ITEM_LOBBY: lobbies++; break;
+        case ITEM_OFFICE: offices++; break;
+        default: break;
+        }
+    }
+    CHECK(stairs == 30 && escalators == 34,
+          "all 64 stair/escalator records imported (30 + 34)");
+    CHECK(lobbies >= 2, "ground + sky lobbies present");
+    CHECK(offices > 100, "office tower imported (>100 offices)");
+    CHECK(sim.people.shaft_count == 24, "all 24 elevator groups imported");
+
+    /* Settings made it onto the rebuilt shafts: this tower's 6th shaft
+     * carries a tuned response/wait schedule (threshold 2, patience 1). */
+    int tuned = 0;
+    for (int i = 0; i < sim.people.shaft_count; i++) {
+        ElevatorShaft *s = &sim.people.shafts[i];
+        if (s->sched_threshold[0][0] == 2 && s->sched_patience[0][0] == 1)
+            tuned = 1;
+    }
+    CHECK(tuned, "per-group schedule tables imported from the file");
+
+    /* The imported tower must actually RUN */
+    run_days(1);
+    CHECK(tw.population > 0, "imported tower simulates (population > 0)");
+}
+
 static void test_save_load(void)
 {
     printf("save/load round-trip:\n");
@@ -511,6 +561,7 @@ int main(void)
     test_elevator_dialog();
     test_patrons_and_staff();
     test_money();
+    test_twr_import();
     test_save_load();
     test_schedules();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);

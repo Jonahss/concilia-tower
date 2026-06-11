@@ -73,7 +73,8 @@ static const int ITEM_WIDTH[] = {
     [ITEM_PARTY_HALL] = 24,  /* 192px — sprite 576/3 = 192px per frame ✓ */
     [ITEM_METRO] = 30,       /* 240px — OpenSkyscraper: int2(30,3) ✓ */
     [ITEM_PARKING] = 4,      /* 32px — GameFAQs: "Parking 4" (was 8, FIXED) */
-    [ITEM_CATHEDRAL] = 16,   /* 128px — only 1 allowed, floor 100 only */
+    [ITEM_CATHEDRAL] = 28,   /* 224px — real .TDT saves store width 28
+                                (was 16; fixed against SCHMITT/THEECSTA) */
     [ITEM_MEDICAL] = 26,     /* 208px — sprite 208px each, GameFAQs: "Medical 26" (was 6, FIXED) */
     [ITEM_SECURITY] = 16,    /* 128px — sprite 128px, GameFAQs: "Security 16" (was 6, FIXED) */
     [ITEM_RECYCLING] = 25,   /* 200px — sprite 200×60, GameFAQs: "Recycling 25x2" (was 6, FIXED) */
@@ -87,7 +88,8 @@ static const int ITEM_WIDTH[] = {
     [ITEM_ELEVATOR_SHAFT] = 4, /* 32px */
     [ITEM_ELEVATOR_SERVICE] = 4,
     [ITEM_ELEVATOR_EXPRESS] = 6, /* 48px — the wide 42-person one */
-    [ITEM_HOUSEKEEPING] = 4,
+    [ITEM_HOUSEKEEPING] = 15, /* 120px — real .TDT saves store width 15
+                                 consistently (was 4; fixed 2026-06-11) */
 };
 
 /* Item heights in floors */
@@ -201,7 +203,9 @@ typedef struct {
     uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
 } Tenant;
 
-#define MAX_TENANTS 4096
+/* Big imported towers (THEECSTA.TDT) carry ~4100 tenant strips plus one
+ * tenant per shaft-floor segment — 4096 overflowed on real saves. */
+#define MAX_TENANTS 8192
 
 /* The tower */
 typedef struct {
@@ -258,6 +262,11 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x);
 
 /* Remove a tenant. Returns 1 on success. */
 int tower_remove(Tower *tower, uint16_t tenant_id);
+
+/* Place with explicit width, no cost, no validation beyond bounds — for
+ * .TDT import (file strips like floor/lobby have arbitrary widths). */
+uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
+                           int width);
 
 /* Check if placement is valid (no overlap, valid floor, etc.) */
 int tower_can_place(Tower *tower, ItemType type, int floor, int x);

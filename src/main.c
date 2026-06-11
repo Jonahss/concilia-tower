@@ -18,6 +18,7 @@
 #include "sprites.h"
 #include "tower.h"
 #include "game.h"
+#include "twr.h"
 
 /* ---------- Window / display ---------- */
 #define WINDOW_W    960
@@ -3835,6 +3836,10 @@ int main(int argc, char *argv[])
                 screenshot_path = argv[++i];
             }
         } else if (argv[i][0] != '-') {
+            size_t n = strlen(argv[i]);
+            if (n > 4 && (!strcasecmp(argv[i] + n - 4, ".tdt") ||
+                          !strcasecmp(argv[i] + n - 4, ".twr")))
+                continue;   /* SimTower save — handled after init */
             exe_path = argv[i];
         }
     }
@@ -4351,6 +4356,26 @@ int main(int argc, char *argv[])
     }
     if (demo_mode) {
         tower_build_demo(&game.tower);
+    }
+
+    /* Import an original SimTower save: any .tdt/.twr argument, or
+     * CT_TWR=path. Replaces the fresh tower wholesale. */
+    const char *twr_path = getenv("CT_TWR");
+    for (int i = 1; i < argc; i++) {
+        size_t n = strlen(argv[i]);
+        if (n > 4 && (!strcasecmp(argv[i] + n - 4, ".tdt") ||
+                      !strcasecmp(argv[i] + n - 4, ".twr")))
+            twr_path = argv[i];
+    }
+    if (twr_path) {
+        char err[256];
+        if (twr_import(twr_path, &game.tower, &game.sim, err, sizeof(err)) == 0) {
+            add_event_message("Imported original SimTower save!");
+        } else {
+            fprintf(stderr, "TWR import failed: %s\n", err);
+            tower_init(&game.tower);
+            game_init(&game.sim);
+        }
     }
 
     /* Screenshot affordance: a small commuting scene — an office stack over

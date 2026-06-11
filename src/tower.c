@@ -472,6 +472,50 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
     return id;
 }
 
+/* Import placement: explicit width, no money, bounds-check only.
+ * Same cell stamping as tower_force_place; .TDT floor/lobby strips have
+ * file-defined widths that don't match ITEM_WIDTH. */
+uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
+                           int width)
+{
+    if (tower->tenant_count >= MAX_TENANTS) return 0;
+    int height = ITEM_HEIGHT[type];
+    if (width <= 0) width = ITEM_WIDTH[type];
+    if (x < 0 || x + width > TOWER_WIDTH) return 0;
+    if (floor < TOWER_MIN_FLOOR || floor + height - 1 > TOWER_MAX_FLOOR) return 0;
+
+    uint16_t id = tower->next_tenant_id++;
+    Tenant *t = &tower->tenants[tower->tenant_count++];
+    memset(t, 0, sizeof(*t));
+    t->id = id;
+    t->type = type;
+    t->floor = floor;
+    t->x = x;
+    t->width = width;
+    t->height = height;
+    t->state = TENANT_OCCUPIED;
+    t->capacity = CAP_MIN;
+    t->zone = (floor >= 0) ? floor / 15 : 0;
+
+    int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
+    for (int f = floor; f < floor + height; f++) {
+        int fidx = floor_to_index(f);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+        for (int cx = x; cx < x + width; cx++) {
+            TowerCell *cell = &tower->grid[fidx][cx];
+            if (is_transport) {
+                cell->flags |= 2;
+            } else {
+                cell->type = type;
+                cell->tenant_id = id;
+                cell->cell_index = cx - x;
+                cell->flags = 1;
+            }
+        }
+    }
+    return id;
+}
+
 void tower_build_demo(Tower *tower)
 {
     printf("\n=== Building diagnostic demo tower ===\n");

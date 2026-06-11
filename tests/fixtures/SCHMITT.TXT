@@ -1,0 +1,36 @@
+SCHMITT TOWER NOTES:
+====================
+
+A SimTower created by Dave and Doug Schmitt (dschmitt@gate.net) July, 1996
+
+A five star office building ready to turn into a TOWER the next morning.
+Efficient transportation system, very high evaluation by tennants, 
+and CREATED WITHOUT CHEATS.  
+
+Now that it is complete, a few thoughts on how it might be done better
+next time (these may or may not work, but might fix several annoying
+messages:
+
+	1. Since sims seem to insist on going to fast food, security 
+	   and medical locations on floors below (not above), put these
+	   items at the lowest escalator accessed floor below each
+	   skylobby.
+	2. Instead of escalators on both sides of the sky lobbies,
+	   just put six floors with escalators below the sky lobbies
+	   and none above.  That would allow elevators to travel
+	   shorter distances, and work with #1.
+	3. Start with the upper tower sections the correct width,
+	   instead of layering on the outside as happened with this
+	   tower.
+	4. Don't make sky lobbies cross the entire floor.  Limit it
+	   to the distance between the local elevators and the
+	   two express elevators offering service.
+	5. Adjust those express elevators a little.  While they seem
+	   to work o.k. now, there is doubtless a little tweaking
+	   possible to avoid the few last hot-head sims waiting
+	   forever on lobby floors.
+	6. Plan the sub-levels.  This basement was overextended 
+	   unintentionally.
+	7. Drop the rent to very-low on those lowest couple of 
+	   escalator accessed floors to get "excellent" ratings
+	   by the entire building.
