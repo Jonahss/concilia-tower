@@ -2570,61 +2570,68 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &sky);
     }
     
-    /* Floor positioning for minimap overlay */
-    int total_floors = TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1;  /* 110 */
-    int ground_offset = -TOWER_MIN_FLOOR;  /* 9 (floors below ground) */
-    
-    /* Earth below ground (on top of map bg) */
-    int ground_map_y = map_y + map_h - (ground_offset * map_h / total_floors);
+    /* Vertical mapping anchored to the background art's ground line
+     * (0x8160 is 288px tall with the ground strip starting at 264 —
+     * conveniently 110 floors * 288/110 px ≈ that exact split, so one
+     * uniform floor scale lines the lobby up with the painted ground). */
+    float pf = (float)map_h / (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1);
+    float ground_line = map_y + map_h * 264.0f / 288.0f;
+    int row_h = (int)pf + 1;               /* contiguous rows, no gaps */
+
     if (!game.ui_map) {
         SDL_SetRenderDrawColor(game.renderer, 140, 120, 90, 255);
-        SDL_Rect earth = { map_x, ground_map_y, map_w, map_y + map_h - ground_map_y };
+        SDL_Rect earth = { map_x, (int)ground_line, map_w,
+                           map_y + map_h - (int)ground_line };
         SDL_RenderFillRect(game.renderer, &earth);
     }
-    
-    /* Draw each tenant as a colored pixel/line */
+
+    /* Tenants as colored rows; floor strips as the dark shell so the
+     * silhouette includes empty floors (skipped before = invisible) */
+    for (int pass = 0; pass < 2; pass++)
     for (int i = 0; i < game.tower.tenant_count; i++) {
         Tenant *t = &game.tower.tenants[i];
-        if (t->type == ITEM_NONE || t->type == ITEM_FLOOR) continue;
-        
-        /* Map tenant position to minimap coordinates */
-        int floor_from_bottom = t->floor - TOWER_MIN_FLOOR;
-        int ty = map_y + map_h - (floor_from_bottom * map_h / total_floors) - 1;
+        if (t->type == ITEM_NONE) continue;
+        if ((t->type == ITEM_FLOOR) != (pass == 0)) continue;
+
+        int ty = (int)(ground_line - (t->floor + t->height) * pf);
         int tx = map_x + (t->x * map_w / TOWER_WIDTH);
         int tw = (t->width * map_w / TOWER_WIDTH);
         if (tw < 1) tw = 1;
-        
-        /* Color by type */
+
         uint8_t r, g, b;
-        item_fallback_color(t->type, &r, &g, &b);
-        
-        /* Darken stressed/abandoned */
+        if (t->type == ITEM_FLOOR) { r = 70; g = 70; b = 70; }
+        else item_fallback_color(t->type, &r, &g, &b);
+
         if (t->state == TENANT_STRESSED) { r = 255; g = 50; b = 50; }
         else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
         else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
-        
+
         SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
-        SDL_Rect dot = { tx, ty, tw, 1 };
+        SDL_Rect dot = { tx, ty, tw, row_h * t->height };
         SDL_RenderFillRect(game.renderer, &dot);
     }
     
-    /* Camera viewport indicator */
+    /* Camera viewport indicator — tracks BOTH axes of the view */
     {
-        int cam_floor_top, cam_floor_bot, dummy;
-        screen_to_grid(0, HUD_HEIGHT + MENU_BAR_H, &cam_floor_top, &dummy);
-        screen_to_grid(0, game.screen_h, &cam_floor_bot, &dummy);
-        
-        int vt = map_y + map_h - ((cam_floor_top - TOWER_MIN_FLOOR) * map_h / total_floors);
-        int vb = map_y + map_h - ((cam_floor_bot - TOWER_MIN_FLOOR) * map_h / total_floors);
+        int cam_floor_top, cam_floor_bot, cam_xl, cam_xr;
+        screen_to_grid(0, HUD_HEIGHT + MENU_BAR_H, &cam_floor_top, &cam_xl);
+        screen_to_grid(game.screen_w, game.screen_h, &cam_floor_bot, &cam_xr);
+
+        int vt = (int)(ground_line - (cam_floor_top + 1) * pf);
+        int vb = (int)(ground_line - cam_floor_bot * pf);
+        int vl = map_x + (cam_xl * map_w / TOWER_WIDTH);
+        int vr = map_x + (cam_xr * map_w / TOWER_WIDTH);
         if (vt < map_y) vt = map_y;
         if (vb > map_y + map_h) vb = map_y + map_h;
-        
-        /* Double-thick white rectangle with red inner for visibility */
+        if (vl < map_x) vl = map_x;
+        if (vr > map_x + map_w) vr = map_x + map_w;
+
+        /* Red rectangle with white inner for visibility */
         SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, 255);
-        SDL_Rect vp = { map_x + 1, vt, map_w - 2, vb - vt };
+        SDL_Rect vp = { vl, vt, vr - vl, vb - vt };
         SDL_RenderDrawRect(game.renderer, &vp);
         SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-        SDL_Rect vp2 = { map_x + 2, vt + 1, map_w - 4, vb - vt - 2 };
+        SDL_Rect vp2 = { vl + 1, vt + 1, vr - vl - 2, vb - vt - 2 };
         SDL_RenderDrawRect(game.renderer, &vp2);
     }
 }
@@ -3390,11 +3397,13 @@ static int minimap_click(int mx, int my)
     
     if (mx >= map_x && mx < map_x + map_w &&
         my >= map_y && my < map_y + map_h) {
-        /* Click in minimap: jump camera to that floor */
-        int total_floors = TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1;
-        int clicked_floor = TOWER_MIN_FLOOR + 
-            ((map_y + map_h - my) * total_floors / map_h);
+        /* Click in minimap: jump camera there (same ground-anchored
+         * mapping as render_minimap) */
+        float pf = (float)map_h / (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1);
+        float ground_line = map_y + map_h * 264.0f / 288.0f;
+        int clicked_floor = (int)((ground_line - my) / pf);
         game.cam_fy = -clicked_floor * CELL_H;
+        game.cam_fx = (float)(mx - map_x) * TOWER_WIDTH / map_w * CELL_W;
         return 1;
     }
     return 0;
