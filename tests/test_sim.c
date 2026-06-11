@@ -405,6 +405,70 @@ static void test_save_load(void)
     remove("/tmp/ct_test.sav");
 }
 
+static void test_schedules(void)
+{
+    printf("car schedules:\n");
+    fresh();
+    /* office at f5, shaft f0..f6 — the proven commute fixture */
+    for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    force_occupied(office);
+    people_rebuild_transport(&sim.people, &tw);
+    ElevatorShaft *s = &sim.people.shafts[0];
+    CHECK(sim.people.shaft_count == 1, "one shaft");
+    CHECK(s->sched_threshold[0][0] == 5 && s->sched_mode[1][6] == 0 &&
+          s->sched_patience[0][3] == 0,
+          "EXE defaults: threshold 5, mode 0, patience 0");
+
+    /* threshold: idle car wins unless a working car is threshold-better.
+     * car0 idle at home (lo); car1 at lo+1 already working upward. */
+    people_set_num_cars(&sim.people, 0, 2);
+    s->car[1].floor = (uint8_t)(s->lo + 1);
+    s->car[1].target = (uint8_t)(s->lo + 5);
+    s->car[1].dir = 1;
+    s->car[1].assigned_calls = 1;       /* mark it busy */
+    people_join_queue(&sim.people, 0, s->lo + 3, 1, 0);
+    CHECK(s->up_call_car[s->lo + 3] == 1,
+          "threshold 5: the idle car answers (working car only 1 closer)");
+    s->up_call_car[s->lo + 3] = 0; s->car[0].assigned_calls = 0;
+    s->stop[s->lo + 3].up_count = 0;
+    s->sched_threshold[0][0] = 1;
+    people_join_queue(&sim.people, 0, s->lo + 3, 1, 0);
+    CHECK(s->up_call_car[s->lo + 3] == 2,
+          "threshold 1: the approaching car answers");
+    s->stop[s->lo + 3].up_count = 0;
+    s->down_call_car[s->lo + 3] = 0;
+    people_set_num_cars(&sim.people, 0, 1);
+
+    /* shuttle mode: an idle car with no work runs to the shaft's far end
+     * instead of its home floor */
+    s->sched_mode[0][0] = 1;
+    s->car[0].floor = s->car[0].target = s->lo;
+    s->car[0].dir = 1;
+    for (int i = 0; i < 400; i++)
+        people_update(&sim.people, &tw, i, TOD_MORNING,
+                      sim.reach_public, sim.reach_service);
+    CHECK(s->car[0].floor == s->hi,
+          "shuttle mode: idle car ran to the top of the shaft");
+    s->sched_mode[0][0] = 0;
+
+    /* patience: workers still arrive, but cars dwell (hold_timer engages) */
+    s->sched_patience[0][0] = 2;
+    sim.time_of_day = TOD_MORNING;
+    int held = 0, arrived = 0;
+    int f5 = floor_to_index(5);
+    for (int frame = 0; frame < 4000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING,
+                      sim.reach_public, sim.reach_service);
+        if (s->car[0].hold_timer) held = 1;
+        arrived = people_at(office, f5, PERSON_AT_DEST);
+        if (arrived == 6) break;
+    }
+    CHECK(held, "patience 2: car dwells at floors (hold timer engaged)");
+    CHECK(arrived == 6, "all 6 workers still arrive with patient cars");
+}
+
 int main(void)
 {
     test_stairs();
@@ -416,6 +480,7 @@ int main(void)
     test_elevator_dialog();
     test_patrons_and_staff();
     test_save_load();
+    test_schedules();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

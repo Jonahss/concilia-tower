@@ -147,6 +147,14 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
   global 0xB3E6).
 - **Per-floor serviced flags** are per *group* (+0x42+floor), edited by
   the ElvDlogT dialog grid — not just a top/bottom range.
+- **Per-period car schedules**: each elevator group carries three
+  [weekday/weekend][7-period] tables (threshold +0x12: how much closer a
+  busy car must be to beat sending an idle one, default 5; mode +0x20:
+  normal vs shuttle, plus both-direction pickup when nonzero; patience
+  +0x2e: door dwell ×30 ticks, 0–3). The clock: 0xB3A1 = period =
+  frame/400 (7 per day), 0xB3A0 = weekend flag from the 3-day quarter
+  (WD1/WD2/WE). The dialog edits all three (the mode write hides behind
+  a +9/+23 offset split at 1098:25d8). OS models none of this.
 - **New express shafts must anchor at a lobby**: MakeElevator refuses a
   type-0 shaft above ground unless its base floor is a sky-lobby floor
   (every 15th); extending an existing shaft is unrestricted. OS lets you

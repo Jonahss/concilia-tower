@@ -261,6 +261,8 @@ typedef struct {
     int             elv_open;     /* Elevator dialog (double-click a shaft) */
     int             elv_sx;       /* shaft column the dialog is bound to */
     int             elv_stype;    /* shaft ItemType (column+type = identity) */
+    int             elv_day;      /* schedule editor: 0 weekday / 1 weekend */
+    int             elv_period;   /* schedule editor: selected period 0..6 */
     int             elv_x, elv_y; /* dialog window position (draggable) */
     
     /* Build mode */
@@ -1626,7 +1628,7 @@ static void elv_dialog_metrics(const ElevatorShaft *s, int *rows, int *body_h)
     int r = s->hi - s->lo + 1;
     if (r > ELV_MAX_ROWS) r = ELV_MAX_ROWS;
     *rows = r;
-    *body_h = 22 + 16 + r * ELV_CELL + 30 + 28;
+    *body_h = 22 + 16 + r * ELV_CELL + 30 + 44 + 28;
 }
 
 static void render_elv_dialog(void)
@@ -1753,8 +1755,56 @@ static void render_elv_dialog(void)
     SDL_RenderDrawLine(game.renderer, plus.x + 9, plus.y + 5,
                        plus.x + 9, plus.y + 13);
 
+    /* schedule strip (EXE group +0x12/+0x20/+0x2e — globals.md #53) */
+    int sy = by + 22;
+    stats_label(wx + 8, sy + 2, "Sched", (SDL_Color){ 0, 0, 0, 255 });
+    SDL_Rect dayb = { wx + 52, sy, 26, 16 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &dayb);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &dayb);
+    stats_label(dayb.x + 4, dayb.y + 1, game.elv_day ? "WE" : "WD",
+                (SDL_Color){ 0, 0, 0, 255 });
+    int px0 = wx + 86;
+    for (int pd = 0; pd < 7; pd++) {
+        SDL_Rect pc = { px0 + pd * 17, sy, 16, 16 };
+        int live = (game.elv_day == ps->sched_day && pd == ps->sched_period);
+        SDL_SetRenderDrawColor(game.renderer,
+            live ? 255 : 224, live ? 250 : 224, live ? 180 : 224, 255);
+        SDL_RenderFillRect(game.renderer, &pc);
+        SDL_SetRenderDrawColor(game.renderer,
+            pd == game.elv_period ? 200 : 110,
+            pd == game.elv_period ? 30 : 110, 30, 255);
+        SDL_RenderDrawRect(game.renderer, &pc);
+        char md[2] = { (char)('0' + s->sched_mode[game.elv_day][pd]), 0 };
+        stats_label(pc.x + 5, pc.y + 1, md, (SDL_Color){ 0, 0, 0, 255 });
+    }
+    /* threshold + patience spinners for the selected period:
+     * Resp [-]N[+]   Wait [-]N[+]  (button x: 40/84 and 140/168) */
+    int ry2 = sy + 20;
+    char sched[8];
+    stats_label(wx + 8, ry2 + 2, "Resp", (SDL_Color){ 0, 0, 0, 255 });
+    snprintf(sched, sizeof(sched), "%d",
+             s->sched_threshold[game.elv_day][game.elv_period]);
+    stats_label(wx + 60, ry2 + 2, sched, (SDL_Color){ 0, 0, 0, 255 });
+    stats_label(wx + 106, ry2 + 2, "Wait", (SDL_Color){ 0, 0, 0, 255 });
+    snprintf(sched, sizeof(sched), "%d",
+             s->sched_patience[game.elv_day][game.elv_period]);
+    stats_label(wx + 159, ry2 + 2, sched, (SDL_Color){ 0, 0, 0, 255 });
+    static const int spin_x[4] = { 40, 84, 140, 168 };
+    for (int b = 0; b < 4; b++) {
+        SDL_Rect sb = { wx + spin_x[b], ry2, 16, 16 };
+        SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+        SDL_RenderFillRect(game.renderer, &sb);
+        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(game.renderer, &sb);
+        SDL_RenderDrawLine(game.renderer, sb.x + 4, sb.y + 8, sb.x + 12, sb.y + 8);
+        if (b == 1 || b == 3)
+            SDL_RenderDrawLine(game.renderer, sb.x + 8, sb.y + 4, sb.x + 8, sb.y + 12);
+    }
+
     /* close strip */
-    int cy = by + 26;
+    int cy = sy + 44;
     SDL_Rect close = { wx + 8, cy, 64, 20 };
     SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
     SDL_RenderFillRect(game.renderer, &close);
@@ -1816,8 +1866,43 @@ static int elv_dialog_click(int mx, int my)
         return 1;
     }
 
+    /* schedule strip */
+    int sy = by + 22;
+    if (my >= sy && my < sy + 16) {
+        if (mx >= wx + 52 && mx < wx + 78) {            /* day toggle */
+            game.elv_day = !game.elv_day;
+            return 1;
+        }
+        int px0 = wx + 86;
+        if (mx >= px0 && mx < px0 + 7 * 17) {           /* period cells */
+            int pd = (mx - px0) / 17;
+            if (pd == game.elv_period) {                /* re-click cycles */
+                uint8_t *m = &s->sched_mode[game.elv_day][pd];
+                *m = (uint8_t)((*m + 1) % 3);
+            }
+            game.elv_period = pd;
+            return 1;
+        }
+        return 1;
+    }
+    int ry2 = sy + 20;
+    if (my >= ry2 && my < ry2 + 16) {
+        uint8_t *th = &s->sched_threshold[game.elv_day][game.elv_period];
+        uint8_t *pa = &s->sched_patience[game.elv_day][game.elv_period];
+        if (mx >= wx + 40 && mx < wx + 56) {            /* threshold - */
+            if (*th > 1) (*th)--;                       /* EXE clamp 1..100 */
+        } else if (mx >= wx + 84 && mx < wx + 100) {    /* threshold + */
+            if (*th < 100) (*th)++;
+        } else if (mx >= wx + 140 && mx < wx + 156) {   /* patience - */
+            if (*pa > 0) (*pa)--;                       /* EXE clamp 0..3 */
+        } else if (mx >= wx + 168 && mx < wx + 184) {   /* patience + */
+            if (*pa < 3) (*pa)++;
+        }
+        return 1;
+    }
+
     /* close button */
-    int cy = by + 26;
+    int cy = sy + 44;
     if (my >= cy && my < cy + 20 && mx >= wx + 8 && mx < wx + 72) {
         game.elv_open = 0;
         return 1;

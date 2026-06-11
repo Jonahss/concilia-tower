@@ -32,6 +32,8 @@
 #include "people.h"
 #include "game.h"
 
+static uint8_t sched_mode_now(const PeopleSim *ps, const ElevatorShaft *s);
+
 #define GROUND_IDX  (TOWER_LOBBY_FLOOR - TOWER_MIN_FLOOR)
 
 /* The live tuning table — defaults are the EXE's own values (res 0x7F05) */
@@ -124,6 +126,10 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
              * (refreshed from TUNING every tick; clamped to slots) */
             s->capacity = (ty == ITEM_ELEVATOR_EXPRESS) ? 42 : 21;
             s->num_cars = 1;          /* TODO: car count upgrades */
+            /* schedule defaults from MakeElevator (11f8:12ff loop) */
+            memset(s->sched_mode, 0, sizeof(s->sched_mode));
+            memset(s->sched_threshold, 5, sizeof(s->sched_threshold));
+            memset(s->sched_patience, 0, sizeof(s->sched_patience));
             if (count >= MAX_SHAFTS) break;
         }
     }
@@ -159,6 +165,11 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
                 ns->home[k] = (uint8_t)(h < ns->lo ? ns->lo
                                       : h > ns->hi ? ns->hi : h);
             }
+            memcpy(ns->sched_mode, os->sched_mode, sizeof(ns->sched_mode));
+            memcpy(ns->sched_threshold, os->sched_threshold,
+                   sizeof(ns->sched_threshold));
+            memcpy(ns->sched_patience, os->sched_patience,
+                   sizeof(ns->sched_patience));
             break;
         }
     }
@@ -173,6 +184,7 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             s->car[c].floor = s->lo;
             s->car[c].target = s->lo;
             s->car[c].dir = 1;
+            s->car[c].schedule_index = sched_mode_now(ps, s);
         }
     }
     /* Anyone queued or riding lost their shaft — replan from where they are */
@@ -352,34 +364,57 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
 
 /* ---------- calls + car selection (ElevatorsT 0a4c/0dfc) ---------- */
 
+/* Live schedule entries for this shaft (clock = EXE 0xB3A0/0xB3A1) */
+static uint8_t sched_mode_now(const PeopleSim *ps, const ElevatorShaft *s)
+{ return s->sched_mode[ps->sched_day][ps->sched_period]; }
+
+static uint8_t sched_threshold_now(const PeopleSim *ps,
+                                   const ElevatorShaft *s)
+{ return s->sched_threshold[ps->sched_day][ps->sched_period]; }
+static uint8_t sched_patience_now(const PeopleSim *ps,
+                                  const ElevatorShaft *s)
+{ return s->sched_patience[ps->sched_day][ps->sched_period]; }
+
 /* SelectElevator, condensed to its three categories: a car already moving
- * the right way beats an idle car beats a car that must turn around. */
-static int select_car(ElevatorShaft *s, int floor, int up)
+ * the right way beats an idle car beats a car that must turn around —
+ * except that an idle car wins unless the working car beats it by the
+ * schedule's threshold (the EXE's final pick, 1090:1053-10cb). */
+static int select_car(const PeopleSim *ps, ElevatorShaft *s, int floor,
+                      int up)
 {
-    int best = -1, best_cost = 0x7fff;
+    int best_work = -1, work_cost = 0x7fff;
+    int best_idle = -1, idle_cost = 0x7fff;
     for (int ci = 0; ci < s->num_cars; ci++) {
         ElevatorCar *c = &s->car[ci];
         if (!c->active) continue;
         int d = floor - c->floor;
         int toward = up ? d : -d;
         int busy = c->assigned_calls || c->distinct_dests;
+        if (!busy) {
+            int cost = (d < 0 ? -d : d);                   /* idle: distance */
+            if (cost < idle_cost) { idle_cost = cost; best_idle = ci; }
+            continue;
+        }
         int cost;
-        if (!busy)
-            cost = (d < 0 ? -d : d);                       /* idle: distance */
-        else if ((int)c->dir == up && toward >= 0)
+        if ((int)c->dir == up && toward >= 0)
             cost = toward;                                  /* approaching */
         else
             cost = (d < 0 ? -d : d) + (s->hi - s->lo) + 8;  /* must reverse */
-        if (cost < best_cost) { best_cost = cost; best = ci; }
+        if (cost < work_cost) { work_cost = cost; best_work = ci; }
     }
-    return best;
+    if (best_idle < 0) return best_work;
+    if (best_work < 0) return best_idle;
+    /* prefer the idle car unless the working car is threshold-better */
+    int th = sched_threshold_now(ps, s);
+    return (idle_cost - work_cost >= th) ? best_work : best_idle;
 }
 
-static void call_elevator(ElevatorShaft *s, int floor, int up)
+static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
+                          int up)
 {
     uint8_t *slot = up ? &s->up_call_car[floor] : &s->down_call_car[floor];
     if (*slot) return;                       /* already assigned */
-    int ci = select_car(s, floor, up);
+    int ci = select_car(ps, s, floor, up);
     if (ci < 0) return;
     *slot = (uint8_t)(ci + 1);
     s->car[ci].assigned_calls++;
@@ -387,7 +422,8 @@ static void call_elevator(ElevatorShaft *s, int floor, int up)
 
 /* ---------- queue ops (TripT 11c2/1332) ---------- */
 
-static int join_queue(ElevatorShaft *s, int floor, int up, int person_idx)
+static int join_queue(const PeopleSim *ps, ElevatorShaft *s, int floor,
+                      int up, int person_idx)
 {
     ElevatorStop *st = &s->stop[floor];
     uint8_t *count = up ? &st->up_count : &st->down_count;
@@ -395,7 +431,7 @@ static int join_queue(ElevatorShaft *s, int floor, int up, int person_idx)
     uint16_t *ring = up ? st->up_ring   : st->down_ring;
     if (*count >= QUEUE_CAP) return 0;
     ring[(*head + *count) % QUEUE_CAP] = (uint16_t)(person_idx + 1);
-    if (*count == 0) call_elevator(s, floor, up);  /* the call button */
+    if (*count == 0) call_elevator(ps, s, floor, up); /* the call button */
     (*count)++;
     return 1;
 }
@@ -403,7 +439,7 @@ static int join_queue(ElevatorShaft *s, int floor, int up, int person_idx)
 int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
                       int person_idx)
 {
-    return join_queue(&ps->shafts[shaft], floor, up, person_idx);
+    return join_queue(ps, &ps->shafts[shaft], floor, up, person_idx);
 }
 
 /* ---------- elevator dialog controls (ElvDlogT) ---------- */
@@ -554,7 +590,7 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
     case ROUTE_ELEVATOR: {
         ElevatorShaft *s = &ps->shafts[r.shaft];
         int up = r.ride_to > p->cur_floor;
-        if (!join_queue(s, p->cur_floor, up, pi)) {
+        if (!join_queue(ps, s, p->cur_floor, up, pi)) {
             add_penalty(p, PENALTY_QUEUE_FULL);
             break;                       /* stays PLANNING, retries */
         }
@@ -656,10 +692,14 @@ static int board_one(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     if (c->passengers >= s->capacity) return 0;
     int up = c->dir;
     if (queue_len(s, c->floor, up) == 0) {
-        if (c->assigned_calls || c->distinct_dests) return 0;
         if (queue_len(s, c->floor, !up) == 0) return 0;
-        c->dir = (uint8_t)!up;          /* adopt the waiting direction */
-        up = c->dir;
+        if (c->schedule_index) {
+            up = !up;       /* both-direction pickup (TripT, sched != 0) */
+        } else {
+            if (c->assigned_calls || c->distinct_dests) return 0;
+            c->dir = (uint8_t)!up;      /* adopt the waiting direction */
+            up = c->dir;
+        }
     }
     int pi = dequeue(s, c->floor, up);
     if (pi < 0) return 0;
@@ -727,27 +767,48 @@ static void adopt_call_direction(ElevatorShaft *s, ElevatorCar *c, int ci)
     else if (s->down_call_car[c->floor] == mine) c->dir = 0;
 }
 
+/* highest/lowest serviced floor — the shuttle mode's loop ends */
+static int shaft_extreme(const ElevatorShaft *s, int top)
+{
+    if (top) { for (int f = s->hi; f >= s->lo; f--)
+                   if (s->serviced[f]) return f; }
+    else     { for (int f = s->lo; f <= s->hi; f++)
+                   if (s->serviced[f]) return f; }
+    return s->lo;
+}
+
 static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
                                ElevatorCar *c, int ci)
 {
+    /* turnaround = where the EXE refreshes schedule_index (1090:08e7) */
+    c->schedule_index = sched_mode_now(ps, s);
     clear_call(s, c, ci, c->floor);
     /* people still queued here with no assigned car press the button again */
     if (queue_len(s, c->floor, 1) && !s->up_call_car[c->floor])
-        call_elevator(s, c->floor, 1);
+        call_elevator(ps, s, c->floor, 1);
     if (queue_len(s, c->floor, 0) && !s->down_call_car[c->floor])
-        call_elevator(s, c->floor, 0);
+        call_elevator(ps, s, c->floor, 0);
 
     int tgt = find_target_floor(s, c, ci);
     /* FindTargetFloor (1090:1553): a car with no work returns to its
-     * home floor (group +0xBA[8]) instead of idling where it stopped. */
-    if (tgt < 0 && c->floor != s->home[ci] && !c->passengers)
-        tgt = s->home[ci];
+     * home floor (group +0xBA[8]); in shuttle mode (schedule 1, 1090:15c0)
+     * it runs to the far end of the shaft instead. */
+    if (tgt < 0 && !c->passengers) {
+        int rest = (c->schedule_index == 1)
+                       ? shaft_extreme(s, c->dir)
+                       : s->home[ci];
+        if (c->floor != rest) tgt = rest;
+    }
     if (tgt < 0) { c->target = c->floor; return; }   /* idle in place */
     c->target = (uint8_t)tgt;
     c->dir = (uint8_t)(tgt > c->floor);
     c->leg_start = c->floor;
-    car_start_step(s, c);
-    (void)ps;
+    /* ShouldTimeout (1090:23a5): the schedule's patience holds the car at
+     * the floor before it departs — unless it's full. */
+    if (c->passengers < s->capacity)
+        c->hold_timer = (uint8_t)(sched_patience_now(ps, s) * 30);
+    if (!c->hold_timer)
+        car_start_step(s, c);
 }
 
 static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
@@ -772,6 +833,21 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         return;
     }
 
+    if (c->hold_timer) {
+        /* patience dwell: linger for stragglers; new activity at this
+         * floor reopens the doors, otherwise depart when it runs out */
+        if (queue_len(s, c->floor, 1) || queue_len(s, c->floor, 0) ||
+            c->dest_count[c->floor]) {
+            c->hold_timer = 0;
+            adopt_call_direction(s, c, ci);
+            c->door_timer = DOOR_OPEN_TICKS;
+            return;
+        }
+        if (--c->hold_timer == 0 && c->target != c->floor)
+            car_start_step(s, c);
+        return;
+    }
+
     if (c->target != c->floor) {
         if (c->move_timer) { c->move_timer--; return; }
         c->floor += (c->dir ? 1 : -1);
@@ -792,13 +868,7 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         c->door_timer = DOOR_OPEN_TICKS;
         return;
     }
-    int tgt = find_target_floor(s, c, ci);
-    if (tgt >= 0) {
-        c->target = (uint8_t)tgt;
-        c->dir = (uint8_t)(tgt > c->floor);
-        c->leg_start = c->floor;
-        car_start_step(s, c);
-    }
+    car_depart_or_idle(ps, s, c, ci);   /* schedule-aware idle targeting */
 }
 
 /* ---------- spawning (UniPeple-lite: commuters only) ---------- */
@@ -940,9 +1010,9 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
         for (int f = s->lo; f <= s->hi; f++) {
             if (!s->serviced[f]) continue;
             if (queue_len(s, f, 1) && !s->up_call_car[f])
-                call_elevator(s, f, 1);
+                call_elevator(ps, s, f, 1);
             if (queue_len(s, f, 0) && !s->down_call_car[f])
-                call_elevator(s, f, 0);
+                call_elevator(ps, s, f, 0);
         }
         for (int ci = 0; ci < s->num_cars; ci++)
             car_tick(ps, tower, s, ci, frame);

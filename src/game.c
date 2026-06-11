@@ -602,6 +602,14 @@ void game_update(GameSim *sim, Tower *tower)
         sim->time_of_day = hour_to_tod(sim->hour);
     }
     
+    /* Schedule clock for the elevator tables (EXE 0xB3A0/0xB3A1: the
+     * weekend day-type + the 7 periods that slice the day) */
+    sim->people.sched_day = (sim->quarter == QUARTER_WEEKEND);
+    if (day_ticks > 0) {
+        int per = (int)((long)tick_in_day * 7 / day_ticks);
+        sim->people.sched_period = (uint8_t)(per < 0 ? 0 : per > 6 ? 6 : per);
+    }
+
     /* People + elevators run every tick — cars and queues are the game */
     people_update(&sim->people, tower, sim->frame, sim->time_of_day,
                   sim->reach_public, sim->reach_service);

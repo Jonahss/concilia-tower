@@ -115,6 +115,11 @@ typedef struct {
     uint8_t  passengers;    /* people on board (car+0x298D) */
     uint8_t  distinct_dests;/* distinct destination floors aboard (+0x2996) */
     uint16_t assigned_calls;/* floor calls owned by this car (+0x2994) */
+    uint8_t  schedule_index;/* mode for the current period (car+0x2998):
+                             * copied from sched_mode at resets/turnarounds.
+                             * 0 normal; 1 shuttle (idle to shaft extremes);
+                             * nonzero also = both-direction pickup */
+    uint8_t  hold_timer;    /* patience dwell before departing (x30 ticks) */
     uint16_t pax[CAR_SLOTS];        /* person index + 1; 0 = empty */
     uint8_t  pax_dest[CAR_SLOTS];   /* destination floor per slot (+0x2A42) */
     uint8_t  dest_count[TOWER_FLOOR_COUNT]; /* requested stops (+0x2A6C) */
@@ -133,6 +138,15 @@ typedef struct {
     uint8_t  home[CARS_PER_SHAFT]; /* car home floors (EXE group +0xBA[8]):
                              * an idle car with no work returns here — the
                              * dialog's red diamond markers */
+    /* Car schedules (EXE group +0x12/+0x20/+0x2e — globals.md #53), all
+     * indexed [is_weekend][period 0..6]; survive rebuilds like serviced[]:
+     * mode: 0 normal SCAN, 1 shuttle, nonzero = both-direction pickup
+     * threshold: prefer an idle/home car over an approaching one unless
+     *            the approaching car is this much closer (default 5)
+     * patience: door dwell before departing = value*30 ticks (0..3) */
+    uint8_t  sched_mode[2][7];
+    uint8_t  sched_threshold[2][7];
+    uint8_t  sched_patience[2][7];
     ElevatorCar  car[CARS_PER_SHAFT];
     ElevatorStop stop[TOWER_FLOOR_COUNT];
     uint8_t  up_call_car[TOWER_FLOOR_COUNT];   /* car index + 1; 0 = none */
@@ -151,6 +165,11 @@ typedef struct {
     uint8_t  gap_map[TOWER_FLOOR_COUNT];
 
     uint32_t layout_stamp;      /* transport layout change detection */
+
+    /* Schedule clock, set by game_update each tick (EXE 0xB3A0/0xB3A1):
+     * sched_day 0 weekday / 1 weekend; sched_period 0..6 across the day */
+    uint8_t  sched_day;
+    uint8_t  sched_period;
 
     /* Day-phase spawn bookkeeping (one byte per tenant slot) */
     uint8_t  spawned[MAX_TENANTS];
