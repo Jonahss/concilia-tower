@@ -54,8 +54,8 @@ void tuning_reset(void)
         .cost_transfer_full = 6000,
         .walk_floors_esc = 6,
         .walk_floors_stair = 3,
-        .capacity_standard = 42,
-        .capacity_service = 21,
+        .capacity_express = 42,
+        .capacity_standard = 21,
         .judge_moderate = 150,
         .judge_stressed = 200,
         .star_pop = { 300, 1000, 5000, 10000 },
@@ -122,7 +122,7 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             s->x = x;
             /* group+2 from the EXE: 42 standard, 21 express/service
              * (refreshed from TUNING every tick; clamped to slots) */
-            s->capacity = (ty == ITEM_ELEVATOR_SHAFT) ? 42 : 21;
+            s->capacity = (ty == ITEM_ELEVATOR_EXPRESS) ? 42 : 21;
             s->num_cars = 1;          /* TODO: car count upgrades */
             if (count >= MAX_SHAFTS) break;
         }
@@ -287,7 +287,7 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
         int full = queue_len(s, from, up) >= QUEUE_CAP;
         if (shaft_serves(s, to)) {
             int sc;
-            if (s->type == ITEM_ELEVATOR_SHAFT)
+            if (s->type == ITEM_ELEVATOR_EXPRESS)
                 sc = queue_len(s, from, up) + COST_ELEV_BASE;
             else
                 sc = 8 * xd + (full ? COST_ELEV_FULL : COST_ELEV_BASE);
@@ -694,14 +694,15 @@ static void clear_call(ElevatorShaft *s, ElevatorCar *c, int ci, int floor)
 
 /* CalcMoveSpeed (1090:209f): the accel/decel curve, as ticks per floor.
  * The EXE's 4 levels: slow near either end of the run, full speed only in
- * the middle of a long haul; express/service get a medium band instead of
- * the standard's top gear. dist-from-start needs the run's departure
- * floor (last_floor in the EXE; leg_start here). */
+ * the middle of a long haul. The gear-3 turbo belongs to the EXPRESS
+ * (type 0 — globals.md #52); standard/service get a medium band instead.
+ * dist-from-start needs the run's departure floor (last_floor in the
+ * EXE; leg_start here). */
 static int car_move_ticks(const ElevatorShaft *s, const ElevatorCar *c)
 {
     int dt = c->target - c->floor;   if (dt < 0) dt = -dt;
     int ds = c->floor - c->leg_start; if (ds < 0) ds = -ds;
-    if (s->type == ITEM_ELEVATOR_SHAFT) {
+    if (s->type == ITEM_ELEVATOR_EXPRESS) {
         if (dt < 2 || ds < 2) return 4;   /* speed 0: crawl at the ends */
         if (dt > 4 && ds > 4) return 1;   /* speed 3: full tilt mid-run */
         return 2;                         /* speed 2: cruise */
@@ -929,8 +930,8 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
         ElevatorShaft *s = &ps->shafts[i];
         if (!s->active) continue;
         /* capacity tracks the live tuning table (clamped to slot count) */
-        int cap = (s->type == ITEM_ELEVATOR_SHAFT) ? TUNING.capacity_standard
-                                                   : TUNING.capacity_service;
+        int cap = (s->type == ITEM_ELEVATOR_EXPRESS) ? TUNING.capacity_express
+                                                     : TUNING.capacity_standard;
         if (cap > CAR_SLOTS) cap = CAR_SLOTS;
         if (cap < 1) cap = 1;
         s->capacity = (uint8_t)cap;

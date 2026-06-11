@@ -79,12 +79,14 @@ static const int ITEM_WIDTH[] = {
     [ITEM_RECYCLING] = 25,   /* 200px — sprite 200×60, GameFAQs: "Recycling 25x2" (was 6, FIXED) */
     [ITEM_STAIRS] = 8,       /* 64px — sprite 448/7 = 64px per frame ✓ */
     [ITEM_ESCALATOR] = 8,    /* 64px — sprite 512/8 = 64px per frame ✓ */
-    /* EXE BuildRoutingSlots (11b0:0538): width = 6 if type==0 (standard),
-     * 4 for express/service. OpenSkyscraper has standard/express SWAPPED —
-     * the 48px dense-crowd car sheet (0x842B) is the 42-person standard. */
-    [ITEM_ELEVATOR_SHAFT] = 6, /* 48px (standard — the wide one) */
+    /* EXE group type byte: 0=EXPRESS, 1=standard, 2=service (MakeElevator
+     * jump table: item 1->type 1, item 42->type 0 cap 42 lobby-anchored,
+     * item 43->type 2; the type-0-on-lobby-floors placement rule is the
+     * express anchor). Widths from BuildRoutingSlots 11b0:0538:
+     * type==0 (express) = 6 cells, others 4. */
+    [ITEM_ELEVATOR_SHAFT] = 4, /* 32px */
     [ITEM_ELEVATOR_SERVICE] = 4,
-    [ITEM_ELEVATOR_EXPRESS] = 4,
+    [ITEM_ELEVATOR_EXPRESS] = 6, /* 48px — the wide 42-person one */
     [ITEM_HOUSEKEEPING] = 4,
 };
 
@@ -140,8 +142,10 @@ static const int ITEM_COST[] = {
     [ITEM_RECYCLING] = 500000,
     [ITEM_STAIRS] = 5000,
     [ITEM_ESCALATOR] = 20000,
+    /* Elevator prices EXE-verified: cost resource 0x7f0b id 0x3e8,
+     * BE u32 per item id, x$100: item 0x01=2000, 0x2a=4000, 0x2b=1000. */
     [ITEM_ELEVATOR_SHAFT] = 200000,   /* Standard elevator */
-    [ITEM_ELEVATOR_SERVICE] = 80000,  /* Service elevator */
+    [ITEM_ELEVATOR_SERVICE] = 100000, /* Service elevator (was 80k folklore) */
     [ITEM_ELEVATOR_EXPRESS] = 400000, /* Express elevator */
     [ITEM_HOUSEKEEPING] = 100000,
 };

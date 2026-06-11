@@ -73,6 +73,18 @@ static void test_elevators(void)
     CHECK(sim.reach_service[floor_to_index(14)], "service elevator extends service net to f14");
     CHECK(sim.reach_public[floor_to_index(15)], "express stops at sky lobby f15");
     CHECK(!sim.reach_public[floor_to_index(20)], "express does NOT stop at f20");
+
+    /* Express anchor rule (MakeElevator 11f8:0ff9): a NEW express shaft
+     * must start at ground/basement/sky-lobby; extending an existing
+     * column is free. f7 atop the service column: supported, mid-tower,
+     * not an extension -> refused. f15 same spot: sky lobby -> allowed.
+     * f21 on the express column: extension -> allowed. */
+    CHECK(!tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 7, 196),
+          "new express shaft can't start mid-tower (f7)");
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 15, 202),
+          "new express shaft CAN start at sky-lobby f15");
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 21, 208),
+          "extending the existing express column past f20 is allowed");
 }
 
 static void run_days(int days)
@@ -153,7 +165,8 @@ static void test_commute_elevator(void)
     sim.time_of_day = TOD_MORNING;
     people_rebuild_transport(&sim.people, &tw);
     CHECK(sim.people.shaft_count == 1, "one shaft detected");
-    CHECK(sim.people.shafts[0].capacity == 42, "standard car capacity 42");
+    CHECK(sim.people.shafts[0].capacity == 21,
+          "standard car capacity 21 (the 42-person car is the EXPRESS)");
 
     int f5 = floor_to_index(5);
     int arrived = 0;

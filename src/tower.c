@@ -141,6 +141,27 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         return 0;
     }
 
+    /* Express shafts anchor at lobby levels: a NEW express shaft must
+     * start on the ground floor, a basement floor, or a sky-lobby floor
+     * (every 15th) — MakeElevator (11f8:0ff9) gates type 0 above ground
+     * on IsSkyLobbyFloor (10a0:12e0, (displayed%15)==0). Segments that
+     * touch an existing express column are extensions, which the EXE
+     * allows at any floor (that's the arrow/drag path, not MakeElevator). */
+    if (type == ITEM_ELEVATOR_EXPRESS && floor > 0 && floor % 15 != 0) {
+        int touches = 0;
+        for (int df = -1; df <= 1 && !touches; df += 2) {
+            int fidx2 = floor_to_index(floor + df);
+            if (fidx2 < 0 || fidx2 >= TOWER_FLOOR_COUNT) continue;
+            if (tower->grid[fidx2][x].type == ITEM_ELEVATOR_EXPRESS)
+                touches = 1;
+        }
+        if (!touches) {
+            printf("  [reject] Express at F%d: new express shafts anchor at "
+                   "lobby floors (ground/basement/every 15th)\n", floor);
+            return 0;
+        }
+    }
+
     /* Underground-only items must be below floor 0 */
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
     if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&

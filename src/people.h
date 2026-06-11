@@ -40,8 +40,9 @@ typedef struct {
     int cost_transfer_full;  /* (6000) */
     int walk_floors_esc;     /* walk budget, all-escalator (6) */
     int walk_floors_stair;   /* walk budget once stairs involved (3) */
-    int capacity_standard;   /* people per standard car (42) */
-    int capacity_service;    /* people per express/service car (21) */
+    int capacity_express;    /* people per express car (42 — MakeElevator
+                                literal, the wide 48px car) */
+    int capacity_standard;   /* people per standard/service car (21) */
     int judge_moderate;      /* avg wait -> mild stress (150, probable) */
     int judge_stressed;      /* avg wait -> heavy stress (200, probable) */
     int star_pop[4];         /* population for 2..5 stars (300/1k/5k/10k) */
@@ -124,7 +125,7 @@ typedef struct {
     ItemType type;          /* ITEM_ELEVATOR_SHAFT / _SERVICE / _EXPRESS */
     uint8_t  lo, hi;        /* shaft floor range (grid indices) */
     int      x;             /* shaft x cell */
-    uint8_t  capacity;      /* 42 standard, 21 express/service (group+2) */
+    uint8_t  capacity;      /* 42 express, 21 standard/service (group+2) */
     uint8_t  num_cars;
     uint8_t  serviced[TOWER_FLOOR_COUNT]; /* per-floor car-stop flags — the
                              * dialog grid (EXE group +0x40/+0x41 + ElvDlogT);

@@ -115,20 +115,21 @@
 #define SPR_METRO_BASE  0x8BA8
 
 /* Elevator: shaft + cars */
-/* Car sheets — NOTE: OpenSkyscraper labels these backwards. The EXE's
- * routing/dirty-zone code says standard = 6 cells wide, express/service =
- * 4 (BuildRoutingSlots 11b0:0538), and the 48px sheet's dense-crowd car +
- * double-drum engine is the 42-person STANDARD car. */
-#define SPR_ELEV_EXP_EMPTY 0x8428 /* express car, empty (32×36) */
-#define SPR_ELEV_EXP_LOADED 0x8429 /* express frames 1-4 + narrow engine (×32) */
+/* Car sheets — labels per decomp globals.md #52: type 0 = EXPRESS (the
+ * sky-lobby placement anchor at 11f8:0ff9 plus the $400k price in cost
+ * resource 0x7f0b:0x3e8 settle it). The wide 6-cell shaft, the 48px
+ * dense-crowd 42-person car and the double-drum engine all belong to the
+ * EXPRESS; OpenSkyscraper's wide-express labeling was right all along. */
+#define SPR_ELEV_STD_EMPTY 0x8428 /* standard car, empty (32×36) */
+#define SPR_ELEV_STD_LOADED 0x8429 /* standard frames 1-4 + narrow engine (×32) */
 #define SPR_ELEV_SERVICE 0x842a   /* service car frames 0-4 (×32) */
-#define SPR_ELEV_STANDARD 0x842b  /* standard frames 0-4 + wide engine (×48) */
+#define SPR_ELEV_EXPRESS 0x842b  /* express frames 0-4 + wide engine (×48) */
 #define SPR_ELEV_EXT     0x842c   /* 2 8px shaft side extensions (wide shaft) */
 /* Synthetic ids: palette-cycle animation frames of the engine sheets */
-#define SPR_ELEV_EXP_F1  0xf829
-#define SPR_ELEV_EXP_F2  0xf929
-#define SPR_ELEV_STD_F1  0xf82b
-#define SPR_ELEV_STD_F2  0xf92b
+#define SPR_ELEV_STD_F1  0xf829
+#define SPR_ELEV_STD_F2  0xf929
+#define SPR_ELEV_EXP_F1  0xf82b
+#define SPR_ELEV_EXP_F2  0xf92b
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
@@ -1017,7 +1018,7 @@ static void render_tower(void)
                  * per-floor digits comes with the shaft-label pass.
                  * The 36px tile spans the FULL floor height: the shaft
                  * overlays the ceiling strip/joists, as in the original.
-                 * The wide (standard, 6-cell) shaft = 8px extension tiles
+                 * The wide (express, 6-cell) shaft = 8px extension tiles
                  * (0x842c) flanking the 32px shaft, as the EXE composes. */
                 SDL_Rect src = { 0, 0, 32, spr->h };
                 if (tw == 48) {
@@ -1482,8 +1483,8 @@ static TuneRow tune_rows[] = {
     { "Cost: transfer full",      &TUNING.cost_transfer_full, 100, 0, 16000 },
     { "Walk floors: escalator",   &TUNING.walk_floors_esc,      1, 0, 20 },
     { "Walk floors: with stairs", &TUNING.walk_floors_stair,    1, 0, 20 },
-    { "Car capacity: standard",   &TUNING.capacity_standard,    1, 1, 42 },
-    { "Car capacity: exp/svc",    &TUNING.capacity_service,     1, 1, 42 },
+    { "Car capacity: express",    &TUNING.capacity_express,     1, 1, 42 },
+    { "Car capacity: std/svc",    &TUNING.capacity_standard,    1, 1, 42 },
     { "Judge: moderate wait",     &TUNING.judge_moderate,       5, 0, 2000 },
     { "Judge: stressed wait",     &TUNING.judge_stressed,       5, 0, 2000 },
     { "Star 2 population",        &TUNING.star_pop[0],         50, 0, 100000 },
@@ -1844,22 +1845,22 @@ static void render_people(void)
          * (OpenSkyscraper splits them the same way: topMotor/bottomMotor;
          * the arrows are the original's extend-the-shaft handles.) */
         {
-            int is_std = (s->type == ITEM_ELEVATOR_SHAFT);
+            int is_exp = (s->type == ITEM_ELEVATOR_EXPRESS);
             /* The motors animate (palette cycle) while any car is moving */
             int moving = 0;
             for (int ci = 0; ci < s->num_cars && !moving; ci++)
                 if (s->car[ci].active && s->car[ci].target != s->car[ci].floor)
                     moving = 1;
             int ef = moving ? (game.sim.frame / 6) % 3 : 0;
-            uint16_t eng_id = is_std
-                ? (ef == 0 ? SPR_ELEV_STANDARD
-                 : ef == 1 ? SPR_ELEV_STD_F1 : SPR_ELEV_STD_F2)
-                : (ef == 0 ? SPR_ELEV_EXP_LOADED
-                 : ef == 1 ? SPR_ELEV_EXP_F1 : SPR_ELEV_EXP_F2);
+            uint16_t eng_id = is_exp
+                ? (ef == 0 ? SPR_ELEV_EXPRESS
+                 : ef == 1 ? SPR_ELEV_EXP_F1 : SPR_ELEV_EXP_F2)
+                : (ef == 0 ? SPR_ELEV_STD_LOADED
+                 : ef == 1 ? SPR_ELEV_STD_F1 : SPR_ELEV_STD_F2);
             Sprite *eng = sprites_find(&game.sprites, eng_id);
             if (eng) {
-                int tile_w  = is_std ? 48 : 32;  /* wide engine = standard */
-                int tail    = is_std ? 5 : 4;
+                int tile_w  = is_exp ? 48 : 32;  /* wide double-drum = express */
+                int tail    = is_exp ? 5 : 4;
                 int ex, ey;
                 grid_to_screen(index_to_floor(s->hi) + 1, s->x, &ex, &ey);
                 SDL_Rect src_top = { tail * tile_w, 0, tile_w, 36 };
@@ -1932,18 +1933,18 @@ static void render_people(void)
             else                                  frame = 4;
 
             Sprite *spr; SDL_Rect src;
-            if (s->type == ITEM_ELEVATOR_SHAFT) {
-                /* standard = the wide 48px sheet (42-person car) */
-                spr = sprites_find(&game.sprites, SPR_ELEV_STANDARD);
+            if (s->type == ITEM_ELEVATOR_EXPRESS) {
+                /* express = the wide 48px sheet (42-person car) */
+                spr = sprites_find(&game.sprites, SPR_ELEV_EXPRESS);
                 src = (SDL_Rect){ frame * 48, 0, 48, 36 };
             } else if (s->type == ITEM_ELEVATOR_SERVICE) {
                 spr = sprites_find(&game.sprites, SPR_ELEV_SERVICE);
                 src = (SDL_Rect){ frame * 32, 0, 32, 36 };
             } else if (frame == 0) {
-                spr = sprites_find(&game.sprites, SPR_ELEV_EXP_EMPTY);
+                spr = sprites_find(&game.sprites, SPR_ELEV_STD_EMPTY);
                 src = (SDL_Rect){ 0, 0, 32, 36 };
             } else {
-                spr = sprites_find(&game.sprites, SPR_ELEV_EXP_LOADED);
+                spr = sprites_find(&game.sprites, SPR_ELEV_STD_LOADED);
                 src = (SDL_Rect){ (frame - 1) * 32, 0, 32, 36 };
             }
             SDL_Rect dst = { sx, sy, shaft_w, CELL_H };
@@ -3764,13 +3765,13 @@ int main(int argc, char *argv[])
                             25, 25, 25);
     /* engine animation frames (palette-cycled 'animated bitmaps') */
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
-                                SPR_ELEV_EXP_LOADED, SPR_ELEV_EXP_F1, 1);
+                                SPR_ELEV_STD_LOADED, SPR_ELEV_STD_F1, 1);
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
-                                SPR_ELEV_EXP_LOADED, SPR_ELEV_EXP_F2, 2);
+                                SPR_ELEV_STD_LOADED, SPR_ELEV_STD_F2, 2);
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
-                                SPR_ELEV_STANDARD, SPR_ELEV_STD_F1, 1);
+                                SPR_ELEV_EXPRESS, SPR_ELEV_EXP_F1, 1);
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
-                                SPR_ELEV_STANDARD, SPR_ELEV_STD_F2, 2);
+                                SPR_ELEV_EXPRESS, SPR_ELEV_EXP_F2, 2);
 
     /* Build composite sprites from raw parts */
     {
