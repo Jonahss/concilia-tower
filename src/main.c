@@ -263,6 +263,8 @@ typedef struct {
     int             show_debug;   /* Toggle diagnostic labels */
     int             show_stats;   /* Analytics window (F3) */
     int             show_tuning;  /* Tuning/modding window (F4) */
+    int             stats_x, stats_y; /* window positions (draggable; */
+    int             tune_x, tune_y;   /*  -1,-1 = default placement) */
     int             elv_open;     /* Elevator dialog (double-click a shaft) */
     int             elv_sx;       /* shaft column the dialog is bound to */
     int             elv_stype;    /* shaft ItemType (column+type = identity) */
@@ -1435,11 +1437,22 @@ static void stats_label(int x, int y, const char *text, SDL_Color col)
     SDL_DestroyTexture(t);
 }
 
+#define STATS_W 470
+#define STATS_H 330
+
+static void stats_window_origin(int *x, int *y)
+{
+    if (game.stats_x >= 0) { *x = game.stats_x; *y = game.stats_y; return; }
+    *x = game.screen_w - STATS_W - 12;
+    *y = 64;
+}
+
 static void render_stats_window(void)
 {
     if (!game.show_stats) return;
-    const int W = 470, H = 330;
-    int wx = game.screen_w - W - 12, wy = 64;
+    const int W = STATS_W, H = STATS_H;
+    int wx, wy;
+    stats_window_origin(&wx, &wy);
 
     draw_win31_titlebar(wx, wy, W, "Analytics");
     SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, W, H };
@@ -1559,6 +1572,7 @@ static TuneRow tune_rows[] = {
 
 static void tune_window_origin(int *x, int *y)
 {
+    if (game.tune_x >= 0) { *x = game.tune_x; *y = game.tune_y; return; }
     *x = game.screen_w / 2 - TUNE_W / 2;
     *y = 56;
 }
@@ -3301,6 +3315,24 @@ static int titlebar_hit_test(int mx, int my)
         return 4;
     }
 
+    /* Analytics (F3) title bar */
+    if (game.show_stats) {
+        int wx, wy;
+        stats_window_origin(&wx, &wy);
+        if (mx >= wx && mx < wx + STATS_W &&
+            my >= wy && my < wy + WIN_TITLEBAR_H)
+            return 5;
+    }
+
+    /* Tuning (F4) title bar */
+    if (game.show_tuning) {
+        int wx, wy;
+        tune_window_origin(&wx, &wy);
+        if (mx >= wx && mx < wx + TUNE_W &&
+            my >= wy && my < wy + WIN_TITLEBAR_H)
+            return 6;
+    }
+
     return 0;
 }
 
@@ -3335,6 +3367,22 @@ static int point_in_any_window(int mx, int my)
                 return 1;
             }
         }
+    }
+    /* Analytics window */
+    if (game.show_stats) {
+        int wx, wy;
+        stats_window_origin(&wx, &wy);
+        if (mx >= wx && mx < wx + STATS_W &&
+            my >= wy && my < wy + WIN_TITLEBAR_H + STATS_H)
+            return 1;
+    }
+    /* Tuning window */
+    if (game.show_tuning) {
+        int wx, wy;
+        tune_window_origin(&wx, &wy);
+        if (mx >= wx && mx < wx + TUNE_W &&
+            my >= wy && my < wy + WIN_TITLEBAR_H + 26 + TUNE_ROWS * TUNE_ROW_H + 30)
+            return 1;
     }
     return 0;
 }
@@ -3625,6 +3673,24 @@ static void handle_event(SDL_Event *ev)
                 game.elv_x = nx;
                 game.elv_y = ny;
                 break;
+            case 5: /* Analytics */
+                if (nx < 0) nx = 0;
+                if (nx + STATS_W > game.screen_w) nx = game.screen_w - STATS_W;
+                if (ny < 0) ny = 0;
+                if (ny + WIN_TITLEBAR_H > game.screen_h)
+                    ny = game.screen_h - WIN_TITLEBAR_H;
+                game.stats_x = nx;
+                game.stats_y = ny;
+                break;
+            case 6: /* Tuning */
+                if (nx < 0) nx = 0;
+                if (nx + TUNE_W > game.screen_w) nx = game.screen_w - TUNE_W;
+                if (ny < 0) ny = 0;
+                if (ny + WIN_TITLEBAR_H > game.screen_h)
+                    ny = game.screen_h - WIN_TITLEBAR_H;
+                game.tune_x = nx;
+                game.tune_y = ny;
+                break;
             }
             break;
         }
@@ -3704,6 +3770,22 @@ static void handle_event(SDL_Event *ev)
                         game.win_drag_ox = ev->button.x - game.elv_x;
                         game.win_drag_oy = ev->button.y - game.elv_y;
                         break;
+                    case 5: { /* Analytics */
+                        int wx, wy;
+                        stats_window_origin(&wx, &wy);
+                        game.stats_x = wx; game.stats_y = wy;
+                        game.win_drag_ox = ev->button.x - wx;
+                        game.win_drag_oy = ev->button.y - wy;
+                        break;
+                    }
+                    case 6: { /* Tuning */
+                        int wx, wy;
+                        tune_window_origin(&wx, &wy);
+                        game.tune_x = wx; game.tune_y = wy;
+                        game.win_drag_ox = ev->button.x - wx;
+                        game.win_drag_oy = ev->button.y - wy;
+                        break;
+                    }
                     }
                     break;
                 }
@@ -4377,6 +4459,8 @@ int main(int argc, char *argv[])
     tower_init(&game.tower);
     game_init(&game.sim);
     game.show_debug = 0;  /* Start with debug off, F1 to toggle */
+    game.stats_x = game.stats_y = -1;   /* default placements until dragged */
+    game.tune_x = game.tune_y = -1;
     game.menu_open = -1;
     game.menu_hover = -1;
     game.menu_bar_hover = -1;
