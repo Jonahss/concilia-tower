@@ -201,6 +201,9 @@ typedef struct {
     uint8_t  hosted;       /* Hotel room: guests stayed overnight */
     uint8_t  dirty;        /* Hotel room: needs housekeeping before it can re-rent */
     uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
+    uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —
+                              the map's Rent overlay (file tenant +0x0F;
+                              JudgeT adjusts it in the EXE) */
 } Tenant;
 
 /* Big imported towers (THEECSTA.TDT) carry ~4100 tenant strips plus one

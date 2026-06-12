@@ -179,6 +179,7 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
             if (id) {
                 placed++;
                 Tenant *ten = &tower->tenants[tower->tenant_count - 1];
+                ten->rent_class = t[0x0f] <= 3 ? t[0x0f] : 1;
                 if (under_construction) {
                     ten->state = TENANT_CONSTRUCTION;
                     ten->construction = 8;

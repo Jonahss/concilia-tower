@@ -265,6 +265,8 @@ typedef struct {
     int             show_tuning;  /* Tuning/modding window (F4) */
     int             stats_x, stats_y; /* window positions (draggable; */
     int             tune_x, tune_y;   /*  -1,-1 = default placement) */
+    int             map_mode;     /* 0 map / 1 eval / 2 rent / 3 hotel
+                                     (EXE global 0x7840; legends 0x139..) */
     int             elv_open;     /* Elevator dialog (double-click a shaft) */
     int             elv_sx;       /* shaft column the dialog is bound to */
     int             elv_stype;    /* shaft ItemType (column+type = identity) */
@@ -2586,7 +2588,12 @@ static void render_minimap(void)
     }
 
     /* Tenants as colored rows; floor strips as the dark shell so the
-     * silhouette includes empty floors (skipped before = invisible) */
+     * silhouette includes empty floors (skipped before = invisible).
+     * Overlay modes recolor tenants per the EXE's map views (seg59
+     * GetTenantOverlayColor + legend bitmaps 0x139-0x13B):
+     *   1 Eval: Excellent cyan / Good yellow / Terrible red
+     *   2 Rent: High red / Average yellow / Low green / Very Low cyan
+     *   3 Hotel: Dirty Rooms red */
     for (int pass = 0; pass < 2; pass++)
     for (int i = 0; i < game.tower.tenant_count; i++) {
         Tenant *t = &game.tower.tenants[i];
@@ -2599,16 +2606,65 @@ static void render_minimap(void)
         if (tw < 1) tw = 1;
 
         uint8_t r, g, b;
-        if (t->type == ITEM_FLOOR) { r = 70; g = 70; b = 70; }
-        else item_fallback_color(t->type, &r, &g, &b);
-
-        if (t->state == TENANT_STRESSED) { r = 255; g = 50; b = 50; }
-        else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
-        else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
+        int is_shell = (t->type == ITEM_FLOOR) || item_is_transport(t->type);
+        if (game.map_mode == 0) {
+            if (t->type == ITEM_FLOOR) { r = 70; g = 70; b = 70; }
+            else item_fallback_color(t->type, &r, &g, &b);
+            if (t->state == TENANT_STRESSED) { r = 255; g = 50; b = 50; }
+            else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
+            else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
+        } else if (is_shell) {
+            r = 70; g = 70; b = 70;        /* shell only in overlay modes */
+        } else if (game.map_mode == 1) {
+            if (t->state == TENANT_VACANT || t->state == TENANT_EMPTY ||
+                t->state == TENANT_CONSTRUCTION) { r = g = b = 200; }
+            else if (t->stress >= 67 || t->state == TENANT_STRESSED ||
+                     t->state == TENANT_ABANDONED) { r = 230; g = 40; b = 40; }
+            else if (t->stress >= 34) { r = 220; g = 210; b = 40; }
+            else { r = 60; g = 220; b = 230; }
+        } else if (game.map_mode == 2) {
+            switch (t->rent_class) {
+            case 0:  r = 230; g = 40;  b = 40;  break;   /* High */
+            default: r = 220; g = 210; b = 40;  break;   /* Average */
+            case 2:  r = 60;  g = 210; b = 60;  break;   /* Low */
+            case 3:  r = 60;  g = 220; b = 230; break;   /* Very Low */
+            }
+        } else { /* mode 3: dirty hotel rooms */
+            int is_hotel = (t->type == ITEM_HOTEL_SINGLE ||
+                            t->type == ITEM_HOTEL_TWIN ||
+                            t->type == ITEM_HOTEL_SUITE);
+            if (is_hotel && t->dirty) { r = 230; g = 40; b = 40; }
+            else { r = 70; g = 70; b = 70; }
+        }
 
         SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
         SDL_Rect dot = { tx, ty, tw, row_h * t->height };
         SDL_RenderFillRect(game.renderer, &dot);
+    }
+
+    /* Legend strip (the EXE blits bitmap 0x138+mode over the map) */
+    if (game.map_mode > 0) {
+        Sprite *lg = sprites_find(&game.sprites, (uint16_t)(0x8138 + game.map_mode));
+        if (lg) {
+            int lw = lg->w * map_w / 200;       /* legends drawn for a 200px map */
+            int lh = lg->h;
+            SDL_Rect dst = { map_x + (map_w - lw) / 2,
+                             map_y + map_h - lh - 2, lw, lh };
+            SDL_RenderCopy(game.renderer, lg->texture, NULL, &dst);
+        }
+    }
+
+    /* Mode buttons in the strip below the map content */
+    {
+        static const char *mode_label[4] = { "Map", "Eval", "Rent", "Hotel" };
+        int bw = map_w / 4;
+        for (int m = 0; m < 4; m++) {
+            int bx = map_x + m * bw;
+            int by = map_y + map_h + 2;
+            draw_win31_rect(bx, by, bw - 2, 16, game.map_mode == m ? 0 : 1);
+            stats_label(bx + 6, by + 2, mode_label[m],
+                        (SDL_Color){ 0, 0, 0, 255 });
+        }
     }
     
     /* Camera viewport indicator — tracks BOTH axes of the view */
@@ -3404,6 +3460,13 @@ static int minimap_click(int mx, int my)
         int clicked_floor = (int)((ground_line - my) / pf);
         game.cam_fy = -clicked_floor * CELL_H;
         game.cam_fx = (float)(mx - map_x) * TOWER_WIDTH / map_w * CELL_W;
+        return 1;
+    }
+    /* Mode button strip (Map/Eval/Rent/Hotel — EXE global 0x7840) */
+    if (mx >= map_x && mx < map_x + map_w &&
+        my >= map_y + map_h + 2 && my < map_y + map_h + 18) {
+        int m = (mx - map_x) / (map_w / 4);
+        if (m >= 0 && m <= 3) game.map_mode = m;
         return 1;
     }
     return 0;
@@ -4546,6 +4609,8 @@ int main(int argc, char *argv[])
         game.cam_fy = -atof(getenv("CT_CAM_FLOOR")) * CELL_H;
     if (getenv("CT_CAM_X"))
         game.cam_fx = atof(getenv("CT_CAM_X")) * CELL_W;
+    if (getenv("CT_MAP_MODE"))
+        game.map_mode = atoi(getenv("CT_MAP_MODE")) & 3;
     (void)show_underground;
     game.zoom = 1.0f;
     
