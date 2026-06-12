@@ -459,6 +459,121 @@ static void test_twr_import(void)
     CHECK(tw.population > 0, "imported tower simulates (population > 0)");
 }
 
+/* Snapshot of everything .TDT export is supposed to carry */
+typedef struct {
+    int star, day, tenants, shafts, stairs, escalators;
+    long money;
+    int type_counts[ITEM_TYPE_COUNT];
+    int rent_hist[4];
+} TowerDigest;
+
+static TowerDigest digest(const Tower *t, const GameSim *s)
+{
+    TowerDigest d = {0};
+    d.star = t->star_rating;
+    d.day = t->day;
+    d.money = t->money;
+    d.tenants = t->tenant_count;
+    d.shafts = s->people.shaft_count;
+    for (int i = 0; i < t->tenant_count; i++) {
+        const Tenant *ten = &t->tenants[i];
+        d.type_counts[ten->type]++;
+        if (ten->type == ITEM_STAIRS) d.stairs++;
+        if (ten->type == ITEM_ESCALATOR) d.escalators++;
+        if (ten->rent_class <= 3 && ten->type != ITEM_LOBBY &&
+            ten->type != ITEM_FLOOR)
+            d.rent_hist[ten->rent_class]++;
+    }
+    return d;
+}
+
+static void test_twr_export(void)
+{
+    printf("original .TDT export (round-trip through the file format):\n");
+    const char *fx = "tests/fixtures/SCHMITT.TDT";
+    const char *tmp = "/tmp/ct_export.tdt";
+    FILE *probe = fopen(fx, "rb");
+    if (!probe) { printf("  (fixture %s missing — skipped)\n", fx); return; }
+    fclose(probe);
+
+    char err[256];
+    if (twr_import(fx, &tw, &sim, err, sizeof(err)) != 0) {
+        printf("  FAIL import of fixture (%s)\n", err); fails++; return;
+    }
+    TowerDigest before = digest(&tw, &sim);
+    /* remember one shaft's tuning to verify it survives the file */
+    int sx = sim.people.shafts[0].x;
+    ItemType sty = sim.people.shafts[0].type;
+    uint8_t scars = sim.people.shafts[0].num_cars;
+    uint8_t sthr = sim.people.shafts[0].sched_threshold[1][3];
+    uint8_t spat = sim.people.shafts[0].sched_patience[0][6];
+    uint8_t shome = sim.people.shafts[0].home[5];
+
+    int rc = twr_export(tmp, &tw, &sim, err, sizeof(err));
+    CHECK(rc == 0, "SCHMITT exports without error");
+    if (rc != 0) { printf("  (%s)\n", err); return; }
+
+    rc = twr_import(tmp, &tw, &sim, err, sizeof(err));
+    CHECK(rc == 0, "exported file re-imports cleanly");
+    if (rc != 0) { printf("  (%s)\n", err); return; }
+
+    TowerDigest after = digest(&tw, &sim);
+    CHECK(after.star == before.star && after.day == before.day &&
+          after.money == before.money, "star/day/money round-trip");
+    CHECK(after.tenants == before.tenants,
+          "tenant count round-trips exactly");
+    int types_ok = 1;
+    for (int i = 0; i < ITEM_TYPE_COUNT; i++)
+        if (after.type_counts[i] != before.type_counts[i]) {
+            printf("  (type %d: %d -> %d)\n", i,
+                   before.type_counts[i], after.type_counts[i]);
+            types_ok = 0;
+        }
+    CHECK(types_ok, "per-type tenant counts round-trip");
+    CHECK(after.shafts == before.shafts, "all elevator groups round-trip");
+    CHECK(after.stairs == before.stairs &&
+          after.escalators == before.escalators,
+          "stairs/escalators round-trip");
+    CHECK(memcmp(after.rent_hist, before.rent_hist,
+                 sizeof after.rent_hist) == 0,
+          "rent classes round-trip");
+
+    int found = 0;
+    for (int i = 0; i < sim.people.shaft_count; i++) {
+        ElevatorShaft *s = &sim.people.shafts[i];
+        if (s->x != sx || s->type != sty) continue;
+        found = s->num_cars == scars &&
+                s->sched_threshold[1][3] == sthr &&
+                s->sched_patience[0][6] == spat &&
+                s->home[5] == shome;
+        break;
+    }
+    CHECK(found, "car count, schedules and home floors survive the file");
+
+    run_days(1);
+    CHECK(tw.population > 0, "re-imported tower simulates");
+
+    /* A tower born in the port (never imported) must also export */
+    fresh();
+    place(ITEM_OFFICE, 1, BX);
+    place(ITEM_FAST_FOOD, 1, BX + 9);   /* needs support: lobby is below */
+    place(ITEM_STAIRS, 0, BX);
+    for (int f = 0; f <= 1; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    game_update_reachability(&sim, &tw);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(twr_export(tmp, &tw, &sim, err, sizeof(err)) == 0,
+          "fresh port tower exports");
+    rc = twr_import(tmp, &tw, &sim, err, sizeof(err));
+    CHECK(rc == 0, "fresh export re-imports");
+    if (rc == 0) {
+        TowerDigest d = digest(&tw, &sim);
+        CHECK(d.type_counts[ITEM_OFFICE] == 1 &&
+              d.type_counts[ITEM_FAST_FOOD] == 1 &&
+              d.stairs == 1 && d.shafts == 1,
+              "fresh tower contents survive the format");
+    }
+}
+
 static void test_save_load(void)
 {
     printf("save/load round-trip:\n");
@@ -562,6 +677,7 @@ int main(void)
     test_patrons_and_staff();
     test_money();
     test_twr_import();
+    test_twr_export();
     test_save_load();
     test_schedules();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);

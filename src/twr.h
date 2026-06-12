@@ -15,4 +15,13 @@
 int twr_import(const char *path, Tower *tower, GameSim *sim,
                char *err, int errlen);
 
+/* Write the tower + sim as a v0x2400 .TDT. Towers that came from
+ * twr_import keep the raw header/retail blocks they arrived with;
+ * fresh towers get defaults observed in real saves. May assign retail
+ * table slots to port-built retail tenants (hence non-const tower).
+ * People are not exported; the game repopulates through the daily
+ * cycle. Returns 0 on success, else -1 with a message in err. */
+int twr_export(const char *path, Tower *tower, const GameSim *sim,
+               char *err, int errlen);
+
 #endif

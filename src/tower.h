@@ -15,8 +15,11 @@
 /* Grid dimensions */
 #define TOWER_WIDTH       375   /* Cells wide (375 from decompiled 0x177 lobby constant + online sources) */
 #define TOWER_MIN_FLOOR   -9    /* B9 (deepest basement) */
-#define TOWER_MAX_FLOOR   100   /* Maximum height at 5 stars */
-#define TOWER_FLOOR_COUNT (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1)  /* 110 */
+#define TOWER_MAX_FLOOR   100   /* Build ceiling at 5 stars */
+#define TOWER_TOP_FLOOR   105   /* Storage top: the cathedral stands ABOVE
+                                   the ceiling (real saves keep it at file
+                                   floors 109-113 = port floors 99-103) */
+#define TOWER_FLOOR_COUNT (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1)  /* 115 */
 #define TOWER_LOBBY_FLOOR 0
 
 /* Pixel dimensions per cell */
@@ -52,6 +55,9 @@ typedef enum {
     ITEM_ELEVATOR_SERVICE, /* Service elevator: freight/staff transport */
     ITEM_ELEVATOR_EXPRESS, /* Express elevator: stops only on lobby/sky-lobby floors */
     ITEM_HOUSEKEEPING,  /* Housekeeping: services hotel rooms */
+    ITEM_RAMP,          /* Parking ramp: 16 cells, one strip per basement
+                           floor (file type 44) — kept for .TDT round-trip;
+                           not yet buildable in the port */
     ITEM_TYPE_COUNT
 } ItemType;
 
@@ -90,6 +96,7 @@ static const int ITEM_WIDTH[] = {
     [ITEM_ELEVATOR_EXPRESS] = 6, /* 48px — the wide 42-person one */
     [ITEM_HOUSEKEEPING] = 15, /* 120px — real .TDT saves store width 15
                                  consistently (was 4; fixed 2026-06-11) */
+    [ITEM_RAMP] = 16,        /* real .TDT saves: 16-cell strips */
 };
 
 /* Item heights in floors */
@@ -119,6 +126,7 @@ static const int ITEM_HEIGHT[] = {
     [ITEM_ELEVATOR_SERVICE] = 1,
     [ITEM_ELEVATOR_EXPRESS] = 1,
     [ITEM_HOUSEKEEPING] = 1,
+    [ITEM_RAMP] = 1,
 };
 
 /* Item costs — CANONICAL from SimTower (GameFAQs BStuart guide) */
@@ -150,6 +158,7 @@ static const int ITEM_COST[] = {
     [ITEM_ELEVATOR_SERVICE] = 100000, /* Service elevator (was 80k folklore) */
     [ITEM_ELEVATOR_EXPRESS] = 400000, /* Express elevator */
     [ITEM_HOUSEKEEPING] = 100000,
+    [ITEM_RAMP] = 50000,
 };
 
 /* Which items are underground-only */
@@ -166,6 +175,7 @@ static const int ITEM_UNDERGROUND_ONLY[] = {
     [ITEM_RECYCLING] = 1,   /* Underground only */
     [ITEM_STAIRS] = 0, [ITEM_ESCALATOR] = 0, [ITEM_ELEVATOR_SHAFT] = 0,
     [ITEM_ELEVATOR_SERVICE] = 0, [ITEM_ELEVATOR_EXPRESS] = 0, [ITEM_HOUSEKEEPING] = 0,
+    [ITEM_RAMP] = 1,    /* Underground only */
 };
 
 /* A single cell in the tower grid */
@@ -204,6 +214,15 @@ typedef struct {
     uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —
                               the map's Rent overlay (file tenant +0x0F;
                               JudgeT adjusts it in the EXE) */
+
+    /* .TDT round-trip (twr.c): slot in the file's 512-entry retail
+     * subtype table, stored +1 so 0 = none. Set on import from tenant
+     * byte +0x06; allocated at export for retail built in the port. */
+    uint16_t retail_ref;
+    /* Raw file-tenant bytes +0x0C,+0x0D,+0x0E,+0x10,+0x11 — meaning
+     * unknown, preserved verbatim so exports of imported towers keep
+     * them. All-zero means "no file origin" and export uses defaults. */
+    uint8_t  twr_unk[5];
 } Tenant;
 
 /* Big imported towers (THEECSTA.TDT) carry ~4100 tenant strips plus one
@@ -231,6 +250,19 @@ typedef struct {
     /* Camera position (pixel coordinates of top-left corner) */
     int       cam_x;
     int       cam_y;
+
+    /* .TDT round-trip side data (set by twr_import, written back by
+     * twr_export): raw file blocks the port doesn't model. The header
+     * is the full 0x230-byte serialized header (version word through
+     * the 0x1EA remainder); modeled fields are overridden at export.
+     * The retail table is the 512 x 18-byte subtype/state block. */
+    uint8_t   twr_header[0x230];
+    uint8_t   twr_header_valid;
+    uint8_t   twr_retail[0x2400];
+    /* Named tenants ("Office Girl", ...): 16-byte C strings appended
+     * after the serializer proper; preserved for round-trip. */
+    char      twr_names[20][16];
+    int       twr_name_count;
 } Tower;
 
 /* Vertical transport categories */

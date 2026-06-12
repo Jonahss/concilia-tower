@@ -413,7 +413,7 @@ const char *tower_item_name(ItemType type)
         "Hotel(Suite)", "Restaurant", "Fast Food", "Shop", "Cinema", "Party Hall",
         "Metro", "Parking", "Cathedral", "Medical", "Security", "Recycling",
         "Stairs", "Escalator", "Elevator",
-        "Service Elev", "Express Elev", "Housekeeping"
+        "Service Elev", "Express Elev", "Housekeeping", "Ramp"
     };
     if (type >= 0 && type < ITEM_TYPE_COUNT) return names[type];
     return "Unknown";
@@ -483,7 +483,8 @@ uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
     int height = ITEM_HEIGHT[type];
     if (width <= 0) width = ITEM_WIDTH[type];
     if (x < 0 || x + width > TOWER_WIDTH) return 0;
-    if (floor < TOWER_MIN_FLOOR || floor + height - 1 > TOWER_MAX_FLOOR) return 0;
+    /* imports go to the storage top: the cathedral lives above the ceiling */
+    if (floor < TOWER_MIN_FLOOR || floor + height - 1 > TOWER_TOP_FLOOR) return 0;
 
     uint16_t id = tower->next_tenant_id++;
     Tenant *t = &tower->tenants[tower->tenant_count++];

@@ -3612,6 +3612,18 @@ static void handle_event(SDL_Event *ev)
             else
                 add_event_message("Save FAILED!");
             break;
+        /* Export as an original-format save (SimTower 1.1 .TDT) */
+        case SDLK_F6: {
+            char terr[128];
+            if (twr_export("ct_export.tdt", &game.tower, &game.sim,
+                           terr, sizeof terr) == 0)
+                add_event_message("Exported ct_export.tdt (original format).");
+            else {
+                add_event_message("TDT export FAILED!");
+                printf("TDT export: %s\n", terr);
+            }
+            break;
+        }
         case SDLK_F9:
             if (game_load(&game.sim, &game.tower, save_path()) == 0) {
                 game.elv_open = 0;          /* dialog target may be gone */
