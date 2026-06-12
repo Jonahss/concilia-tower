@@ -2602,7 +2602,10 @@ static void render_minimap(void)
 
         int ty = (int)(ground_line - (t->floor + t->height) * pf);
         int tx = map_x + (t->x * map_w / TOWER_WIDTH);
-        int tw = (t->width * map_w / TOWER_WIDTH);
+        /* Right edge from x+width so adjacent tenants tile exactly —
+         * flooring width separately leaves 1px sky gaps that stack into
+         * vertical lines wherever room edges align up the tower. */
+        int tw = map_x + ((t->x + t->width) * map_w / TOWER_WIDTH) - tx;
         if (tw < 1) tw = 1;
 
         uint8_t r, g, b;
