@@ -8,8 +8,11 @@
  *
  * Coordinate notes:
  *   - file floors are 0..119 with 10 = ground (F1); EXE internal floor
- *     index = file floor. Port floor = file_floor - 10. File floor 0
- *     (B10) is below the port's range and is skipped.
+ *     index = file floor. Port floor = file_floor - 10; file floor 0
+ *     is B10, the port's deepest floor.
+ *   - multi-floor items keep their BASE record on the TOP floor with
+ *     continuation ids on the floors below; the port anchors tenants
+ *     on the BOTTOM floor, so both directions convert by height-1.
  *   - x positions are in 8px cells, same space as the port grid.
  *   - money is stored /100 ("the UI lies to you" — TDT_format.txt);
  *     the port stores display dollars, so values scale by 100.
@@ -167,7 +170,9 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
 
             int cont = 0;
             ItemType it = map_type(ttype, &cont);
-            int pfloor = ff - 10;
+            /* base record sits on the item's top floor; the port tenant
+             * anchors at the bottom */
+            int pfloor = ff - 10 - (it == ITEM_NONE ? 0 : ITEM_HEIGHT[it] - 1);
             if (it == ITEM_NONE || pfloor < TOWER_MIN_FLOOR ||
                 pfloor > TOWER_TOP_FLOOR) {
                 if (!cont && it == ITEM_NONE) skipped++;
@@ -333,13 +338,13 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
             people_set_num_cars(&sim->people, si,
                                 cars < 1 ? 1 : cars > 8 ? 8 : cars);
             for (int ff = 0; ff < 120; ff++) {
-                int fidx = ff - 10 + 9;          /* port floor index */
+                int fidx = floor_to_index(ff - 10);
                 if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
                 if (fidx >= sh->lo && fidx <= sh->hi)
                     sh->serviced[fidx] = h[0x42 + ff] ? 1 : 0;
             }
             for (int car = 0; car < CARS_PER_SHAFT; car++) {
-                int hf = h[0xba + car] - 10 + 9;
+                int hf = floor_to_index(h[0xba + car] - 10);
                 if (hf >= sh->lo && hf <= sh->hi) sh->home[car] = hf;
             }
             for (int d = 0; d < 2; d++)
@@ -555,7 +560,7 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             int cont[4], ncont;
             int base = file_type(t, cont, &ncont);
             if (base < 0) continue;
-            int tff = t->floor + 10;            /* base sits on the top */
+            int tff = t->floor + ncont + 10;    /* base sits on the top */
             int ty = -1;
             if (tff == ff) ty = base;
             else if (ff < tff && tff - ff <= ncont) ty = cont[tff - ff - 1];
@@ -640,7 +645,8 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
         ngroups++;
         int ftype = sh->type == ITEM_ELEVATOR_EXPRESS ? 0
                   : sh->type == ITEM_ELEVATOR_SERVICE ? 2 : 1;
-        int bottom = sh->lo + 1, top = sh->hi + 1;   /* fidx -> file floor */
+        int bottom = index_to_floor(sh->lo) + 10;    /* fidx -> file floor */
+        int top    = index_to_floor(sh->hi) + 10;
         uint8_t *g = emit(&out, 0xc2);
         g[0] = 1;
         g[1] = (uint8_t)ftype;
@@ -657,12 +663,12 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
         g[0x40] = (uint8_t)top;
         g[0x41] = (uint8_t)bottom;
         for (int ff = 0; ff < 120; ff++) {
-            int fidx = ff - 1;
+            int fidx = floor_to_index(ff - 10);
             if (fidx >= sh->lo && fidx <= sh->hi && fidx < TOWER_FLOOR_COUNT)
                 g[0x42 + ff] = sh->serviced[fidx] ? 1 : 0;
         }
         for (int c = 0; c < CARS_PER_SHAFT; c++)
-            g[0xba + c] = (uint8_t)(sh->home[c] + 1);
+            g[0xba + c] = (uint8_t)(index_to_floor(sh->home[c]) + 10);
 
         emit(&out, 0x1e0);           /* per-stop timing scratch */
         emit(&out, 0x78);            /* up-call owners (zeros in the wild) */
@@ -672,7 +678,7 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
                 emit(&out, 0x144);   /* stop record: queues empty */
         for (int c = 0; c < 8; c++) {
             uint8_t *car = emit(&out, 0x15a);
-            uint8_t home_ff = (uint8_t)(sh->home[c] + 1);
+            uint8_t home_ff = (uint8_t)(index_to_floor(sh->home[c]) + 10);
             car[0] = car[5] = car[6] = car[0x0d] = home_ff;
             car[7] = 1;              /* parked-at-destination flag */
             car[0x0f] = 1;

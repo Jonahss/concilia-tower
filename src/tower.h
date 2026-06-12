@@ -14,12 +14,14 @@
 
 /* Grid dimensions */
 #define TOWER_WIDTH       375   /* Cells wide (375 from decompiled 0x177 lobby constant + online sources) */
-#define TOWER_MIN_FLOOR   -9    /* B9 (deepest basement) */
+#define TOWER_MIN_FLOOR   -10   /* B10 (deepest basement — the file has
+                                   ten: the metro platform bottoms out
+                                   at B10, .TDT file floor 0) */
 #define TOWER_MAX_FLOOR   100   /* Build ceiling at 5 stars */
 #define TOWER_TOP_FLOOR   105   /* Storage top: the cathedral stands ABOVE
                                    the ceiling (real saves keep it at file
                                    floors 109-113 = port floors 99-103) */
-#define TOWER_FLOOR_COUNT (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1)  /* 115 */
+#define TOWER_FLOOR_COUNT (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1)  /* 116 */
 #define TOWER_LOBBY_FLOOR 0
 
 /* Pixel dimensions per cell */
@@ -116,7 +118,9 @@ static const int ITEM_HEIGHT[] = {
     [ITEM_PARTY_HALL] = 2,   /* OpenSkyscraper: int2(24,2) */
     [ITEM_METRO] = 3,        /* OpenSkyscraper: int2(30,3) */
     [ITEM_PARKING] = 1,
-    [ITEM_CATHEDRAL] = 1,    /* Single floor (placed on floor 100 for TOWER promotion) */
+    [ITEM_CATHEDRAL] = 5,    /* Real saves: five records (types 36-40),
+                                file floors 109-113 — the dome spans five
+                                floors above the build ceiling */
     [ITEM_MEDICAL] = 1,
     [ITEM_SECURITY] = 1,
     [ITEM_RECYCLING] = 2,

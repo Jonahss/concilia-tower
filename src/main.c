@@ -86,14 +86,18 @@
 #define SPR_MEDICAL_B   0x8729
 #define SPR_MEDICAL_C   0x872A
 
-/* Cathedral: NO exterior building sprite exists!
- * 0x8828 (128×36) is the WEDDING PROCESSION ANIMATION — brides in white,
- * grooms in top hats, couples walking. Used during the CheckMarry event.
- * The building itself is rendered as a plain floor with fallback color.
- * ChurchT.c: OpenChurch, CloseChurch, StartMarry, CheckMarry
- * Wedding event required for ★★★★★→TOWER transition.
- * Cathedral can ONLY be placed on floor 100. */
-#define SPR_WEDDING_ANIM  0x8828  /* NOT a building sprite — event animation */
+/* Cathedral exterior: five 448x36 strips (2 frames of 224px: day|night),
+ * top dome 0x8CE8 down to entrance 0x8DE8 (step 0x40). The 224x36
+ * singles next to them (0x8CE9..0x8DE9 + 0x8DEA) are the TOWER CEREMONY
+ * state: cherubs, "Welcome to Tower" banner, priest and congregation —
+ * six strips, one floor taller than the building. (An earlier note here
+ * claimed no exterior sprite exists — wrong: it hid as per-floor strips.)
+ * 0x8828 (128x36) is the WEDDING PROCESSION ANIMATION — brides in white,
+ * grooms in top hats — used during the CheckMarry event.
+ * ChurchT.c: OpenChurch, CloseChurch, StartMarry, CheckMarry.
+ * Wedding event required for the 5-star -> TOWER transition. */
+#define SPR_CATH_STRIP_TOP 0x8CE8  /* +0x40 per floor going down, 5 strips */
+#define SPR_WEDDING_ANIM   0x8828  /* event animation, not a building */
 
 /* Recycling: 0x88E8 (empty state, single DIB) */
 #define SPR_RECYCLING_EMPTY 0x88e8
@@ -184,6 +188,7 @@
 #define SPR_CINEMA_COMP       0x001A  /* cinema hall composite */
 #define SPR_METRO_COMP        0x001B  /* metro station composite */
 #define SPR_CINEMA_COMP_F1    0x001C  /* cinema with cycled marquee */
+#define SPR_CATHEDRAL_COMP    0x001D  /* 5 strips stacked: 448x180, day|night */
 
 /* ---------- Sprite mapping for item types ---------- */
 static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
@@ -203,10 +208,8 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_PARTY_HALL:    *frame_w = 192; return SPR_PARTYHALL_COMP; /* 576/3=192 per frame */
     case ITEM_METRO:         *frame_w = 240; return SPR_METRO_COMP;  /* 720/3=240 per frame */
     case ITEM_PARKING:       *frame_w = 32;  return SPR_PARKING_COMP;
-    case ITEM_CATHEDRAL:     *frame_w = 0;   return 0; /* No building exterior sprite exists!
-        * 0x8828 is the wedding procession animation (brides+grooms).
-        * Original game renders cathedral as a plain floor with the wedding
-        * event animation overlaid. Use fallback color for now. */
+    case ITEM_CATHEDRAL:     *frame_w = 224; return SPR_CATHEDRAL_COMP; /* 448/2:
+        * day|night frames, 5 floors tall (composited at init) */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
     case ITEM_SECURITY:      *frame_w = 128; return SPR_SECURITY;     /* 128px, palette animated */
     case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
@@ -885,7 +888,7 @@ static void render_tower(void)
     screen_to_grid(0, game.screen_h, &bot_floor, &dummy);
     top_floor += 2;
     bot_floor -= 2;
-    if (top_floor > TOWER_MAX_FLOOR) top_floor = TOWER_MAX_FLOOR;
+    if (top_floor > TOWER_TOP_FLOOR) top_floor = TOWER_TOP_FLOOR;
     if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
     
     /* Lobby sprite (raw bitmap, 992×36) */
@@ -933,10 +936,14 @@ static void render_tower(void)
         grid_to_screen(floor, 0, &sx_base, &sy_base);
 
         for (int x = 0; x < TOWER_WIDTH; ) {
-            if (game.tower.grid[fidx][x].type == ITEM_NONE) { x++; continue; }
+            /* The cathedral brings its own complete art (dome against
+             * sky) — no shell/joist backdrop behind it */
+            ItemType ct = game.tower.grid[fidx][x].type;
+            if (ct == ITEM_NONE || ct == ITEM_CATHEDRAL) { x++; continue; }
             int run = x;
             while (run < TOWER_WIDTH &&
-                   game.tower.grid[fidx][run].type != ITEM_NONE) run++;
+                   game.tower.grid[fidx][run].type != ITEM_NONE &&
+                   game.tower.grid[fidx][run].type != ITEM_CATHEDRAL) run++;
 
             int wall_x = sx_base + x * CELL_W;
             int wall_w = (run - x) * CELL_W;
@@ -1074,6 +1081,11 @@ static void render_tower(void)
                 if (frame_idx >= nframes) frame_idx = nframes - 1;
                 if (frame_idx < 0) frame_idx = 0;
                 
+                /* Cathedral: frame 1 is the lit night version */
+                if (tenant->type == ITEM_CATHEDRAL)
+                    frame_idx = (game.sim.time_of_day == TOD_NIGHT ||
+                                 game.sim.time_of_day == TOD_EVENING) ? 1 : 0;
+
                 /* Construction: show first frame with overlay */
                 if (tenant->state == TENANT_CONSTRUCTION) frame_idx = 0;
                 
@@ -1101,8 +1113,10 @@ static void render_tower(void)
             }
             
             /* Tenant state visual overlay (not for transports — a shaft
-             * has no vacancy/stress state to tint) */
-            if (!item_is_transport(tenant->type)) {
+             * has no vacancy/stress state to tint — nor the cathedral,
+             * which is never rented) */
+            if (!item_is_transport(tenant->type) &&
+                tenant->type != ITEM_CATHEDRAL) {
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_CONSTRUCTION) {
@@ -2576,7 +2590,7 @@ static void render_minimap(void)
      * (0x8160 is 288px tall with the ground strip starting at 264 —
      * conveniently 110 floors * 288/110 px ≈ that exact split, so one
      * uniform floor scale lines the lobby up with the painted ground). */
-    float pf = (float)map_h / (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1);
+    float pf = (float)map_h / (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1);
     float ground_line = map_y + map_h * 264.0f / 288.0f;
     int row_h = (int)pf + 1;               /* contiguous rows, no gaps */
 
@@ -3465,7 +3479,7 @@ static int minimap_click(int mx, int my)
         my >= map_y && my < map_y + map_h) {
         /* Click in minimap: jump camera there (same ground-anchored
          * mapping as render_minimap) */
-        float pf = (float)map_h / (TOWER_MAX_FLOOR - TOWER_MIN_FLOOR + 1);
+        float pf = (float)map_h / (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1);
         float ground_line = map_y + map_h * 264.0f / 288.0f;
         int clicked_floor = (int)((ground_line - my) / pf);
         game.cam_fy = -clicked_floor * CELL_H;
@@ -4147,6 +4161,17 @@ int main(int argc, char *argv[])
         /* Escalator: 0x8AA8 (top) + 0x8AE8 (bottom) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8AA8, 0x8AE8, SPR_ESCALATOR_COMP) == 0)
             ok++; else fail++;
+        /* Cathedral: five 448x36 strips stacked (dome 0x8CE8 ... entrance
+         * 0x8DE8), then the sky backdrop keyed out so the dome silhouette
+         * sits against the live sky. */
+        if (sprites_compose_v(&game.sprites, game.renderer, 0x8CE8, 0x8D28, 0x00FC) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00FC, 0x8D68, 0x00FD) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00FD, 0x8DA8, 0x00FE) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00FE, 0x8DE8, SPR_CATHEDRAL_COMP) == 0) {
+            sprites_apply_color_key(&game.sprites, game.renderer,
+                                    SPR_CATHEDRAL_COMP, 74, 180, 255);
+            ok++;
+        } else fail++;
         /* Medical: 0x8728 + 0x8729 horizontally (+ 0x872A via triple) */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8728, 0x8729, SPR_MEDICAL_COMP) == 0) {
             /* Try adding 0x872A if present */
