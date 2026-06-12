@@ -2607,6 +2607,13 @@ static void render_minimap(void)
          * vertical lines wherever room edges align up the tower. */
         int tw = map_x + ((t->x + t->width) * map_w / TOWER_WIDTH) - tx;
         if (tw < 1) tw = 1;
+        /* The original's map paints each elevator group as a 1px line
+         * (seg19:0b10), not a scaled box — center it in the shaft span. */
+        if (t->type == ITEM_ELEVATOR_SHAFT || t->type == ITEM_ELEVATOR_SERVICE ||
+            t->type == ITEM_ELEVATOR_EXPRESS) {
+            tx += tw / 2;
+            tw = 1;
+        }
 
         uint8_t r, g, b;
         int is_shell = (t->type == ITEM_FLOOR) || item_is_transport(t->type);
