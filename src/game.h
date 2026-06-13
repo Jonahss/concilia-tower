@@ -107,6 +107,7 @@ typedef struct {
     int has_medical;        /* 0xB3E8 >= 0 — medical center built */
     int hotel_quarters;     /* 0xB3A1 — number of hotel quarters (suite count?) */
     int vip_visited;        /* 0xB92D — VIP has visited */
+    int has_cathedral;      /* cathedral built (the TOWER wedding venue) */
 } PromotionFlags;
 
 /* Star rating thresholds — from decompiled seg_1140 (LevelT)
@@ -320,6 +321,20 @@ typedef struct {
     
     /* Star rating */
     PromotionFlags promo;
+
+    /* --- TOWER wedding ceremony (ChurchT: OpenChurch/StartMarry/
+     * CheckMarry) --- The 5-star -> TOWER promotion is a special event,
+     * not the daily star check (LevelUp 5->T always returns 0): once a
+     * 5-star tower reaches 15,000 population with a cathedral built and
+     * a satisfied VIP visit, the wedding is held the next day. While
+     * active the cathedral shows the ceremony art (cherubs + "Welcome
+     * to Tower" banner) and the procession walks the entrance floor;
+     * at the following dawn the tower is crowned TOWER (star 6). */
+    struct {
+        int active;          /* ceremony running today */
+        int done;            /* TOWER awarded, never repeats */
+        int day;             /* day the ceremony ran */
+    } wedding;
     int           pending_star_up;  /* Star level pending promotion animation */
     
     /* Finance */
@@ -388,6 +403,9 @@ void game_update(GameSim *sim, Tower *tower);
 /* Check star rating based on population + requirements.
  * Ported from seg_1140 FUN_1140_0411 (star calculator). */
 int game_check_star_rating(GameSim *sim, Tower *tower);
+
+/* TOWER wedding daily step: run at each dawn (see GameSim.wedding) */
+void game_wedding_daily(GameSim *sim, Tower *tower);
 
 /* Check if promotion requirements are met for next star level.
  * Ported from seg_1148 FUN_1148_0000. */

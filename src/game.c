@@ -156,6 +156,7 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
         case ITEM_RECYCLING: sim->promo.has_recycling = 1; break;
         case ITEM_METRO:     sim->promo.has_metro = 1;     break;
         case ITEM_MEDICAL:   sim->promo.has_medical = 1;   break;
+        case ITEM_CATHEDRAL: sim->promo.has_cathedral = 1; break;
         case ITEM_HOTEL_SUITE:
             sim->promo.hotel_quarters++;
             break;
@@ -204,6 +205,28 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
  * ★★★→★★★★: recycling + metro + facility_3 + quarters≥4 + VIP
  * ★★★★→★★★★★: medical + metro + quarters≥4 + VIP
  * ★★★★★→TOWER: always returns 0 (special event trigger) */
+
+/* TOWER wedding — the special event LevelUp defers to (its 5->T check
+ * always returns 0). Called at each dawn: yesterday's ceremony crowns
+ * the tower; a newly-eligible tower holds its wedding today. */
+void game_wedding_daily(GameSim *sim, Tower *tower)
+{
+    if (sim->wedding.active) {
+        sim->wedding.active = 0;
+        sim->wedding.done = 1;
+        tower->star_rating = 6;
+        sim->pending_star_up = 6;
+        printf("\xf0\x9f\x92\x92 The wedding is over — "
+               "WELCOME TO TOWER! \xf0\x9f\x8f\x86\n");
+    } else if (!sim->wedding.done && tower->star_rating == 5 &&
+               tower->population >= STAR_POP_THRESHOLD[5] &&
+               sim->promo.has_cathedral && sim->promo.vip_visited) {
+        sim->wedding.active = 1;
+        sim->wedding.day = tower->day;
+        printf("\xf0\x9f\x92\x92 A wedding is being held at the "
+               "cathedral today! (Day %d)\n", tower->day);
+    }
+}
 
 int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
 {
@@ -760,6 +783,9 @@ void game_update(GameSim *sim, Tower *tower)
             
             /* Check star rating once per day */
             scan_promotion_flags(sim, tower);
+
+            game_wedding_daily(sim, tower);
+
             int new_rating = game_check_star_rating(sim, tower);
             if (new_rating > tower->star_rating) {
                 tower->star_rating = new_rating;

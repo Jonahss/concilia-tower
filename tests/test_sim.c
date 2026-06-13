@@ -665,6 +665,42 @@ static void test_schedules(void)
     CHECK(arrived == 6, "all 6 workers still arrive with patient cars");
 }
 
+static void test_wedding(void)
+{
+    printf("TOWER wedding (5-star -> TOWER special event):\n");
+    fresh();
+    tw.star_rating = 5;
+    tw.population = 15000;
+    sim.promo.has_cathedral = 1;
+    sim.promo.vip_visited = 1;
+
+    game_wedding_daily(&sim, &tw);
+    CHECK(sim.wedding.active == 1, "eligible tower holds its wedding");
+    CHECK(tw.star_rating == 5, "still 5 stars during the ceremony");
+
+    game_wedding_daily(&sim, &tw);
+    CHECK(sim.wedding.active == 0 && sim.wedding.done == 1,
+          "ceremony ends the next dawn");
+    CHECK(tw.star_rating == 6, "tower crowned TOWER (star 6)");
+
+    game_wedding_daily(&sim, &tw);
+    CHECK(tw.star_rating == 6 && !sim.wedding.active,
+          "wedding never repeats");
+
+    /* requirements are real requirements */
+    fresh();
+    tw.star_rating = 5;
+    tw.population = 15000;
+    sim.promo.has_cathedral = 0;           /* no venue */
+    sim.promo.vip_visited = 1;
+    game_wedding_daily(&sim, &tw);
+    CHECK(!sim.wedding.active, "no cathedral, no wedding");
+    sim.promo.has_cathedral = 1;
+    tw.population = 14999;
+    game_wedding_daily(&sim, &tw);
+    CHECK(!sim.wedding.active, "below 15,000 population, no wedding");
+}
+
 int main(void)
 {
     test_stairs();
@@ -678,6 +714,7 @@ int main(void)
     test_money();
     test_twr_import();
     test_twr_export();
+    test_wedding();
     test_save_load();
     test_schedules();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);

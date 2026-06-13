@@ -190,6 +190,9 @@
 #define SPR_METRO_COMP        0x001B  /* metro station composite */
 #define SPR_CINEMA_COMP_F1    0x001C  /* cinema with cycled marquee */
 #define SPR_CATHEDRAL_COMP    0x001D  /* 5 strips stacked: 448x180, day|night */
+#define SPR_CATH_CEREMONY     0x001E  /* TOWER wedding: 6 strips, 224x216 —
+                                         cherubs + banner row floats one floor
+                                         ABOVE the dome (0x8CE9..0x8DEA) */
 /* Retail storefront variants (retail table byte +0x0B picks one).
  * Restaurants 0x8568+2v paired with 0x8569+2v (frames: empty, busy,
  * packed, closed), fast food likewise from 0x86E8; shops are single
@@ -1019,6 +1022,12 @@ static void render_tower(void)
             int frame_w_hint = 0, item_floors = 1;
             uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
             spr_id = item_sprite_animated(tenant->type, spr_id);
+            /* TOWER wedding: the cathedral wears the ceremony art —
+             * six strips, the cherub banner floating above the dome */
+            if (tenant->type == ITEM_CATHEDRAL && game.sim.wedding.active) {
+                spr_id = SPR_CATH_CEREMONY;
+                item_floors = 6;
+            }
             /* Retail: swap in this tenant's storefront variant */
             if (tenant->type == ITEM_RESTAURANT || tenant->type == ITEM_SHOP ||
                 tenant->type == ITEM_FAST_FOOD) {
@@ -2430,7 +2439,18 @@ static void render_info_window(void)
      * cream, never white) — the real cell is 21px, so crop and pitch at 21. */
     #define STAR_CELL_W 21
     int star_x = wx + 42;
-    if (game.ui_star[0] && game.ui_star[1]) {
+    if (game.tower.star_rating >= 6 && game.font_small) {
+        /* TOWER status: the original replaces the stars entirely */
+        SDL_Color gold = {220, 180, 0, 255};
+        SDL_Surface *ts = TTF_RenderUTF8_Blended(game.font_small, "T O W E R", gold);
+        if (ts) {
+            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+            SDL_Rect dst = { star_x, wy + 4, ts->w, ts->h };
+            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+            SDL_DestroyTexture(tt);
+            SDL_FreeSurface(ts);
+        }
+    } else if (game.ui_star[0] && game.ui_star[1]) {
         int shown = game.tower.star_rating < 5 ? game.tower.star_rating + 1 : 5;
         for (int i = 0; i < shown; i++) {
             int filled = (i < game.tower.star_rating) ? 1 : 0;
@@ -3206,6 +3226,31 @@ static void render_crane(void)
         grid_to_screen(game.crane_floor + 1, game.crane_x, &tx, &ty);
         SDL_Rect crane_dst = { tx, ty, game.crane->w, game.crane->h };
         SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
+    }
+
+    /* Wedding procession: bride, groom and guests walk the cathedral's
+     * entrance floor through the morning and stand for the ceremony. */
+    if (game.sim.wedding.active) {
+        Sprite *proc = sprites_find(&game.sprites, 0x8828);
+        const Tenant *cath = NULL;
+        for (int i = 0; i < game.tower.tenant_count; i++)
+            if (game.tower.tenants[i].type == ITEM_CATHEDRAL) {
+                cath = &game.tower.tenants[i];
+                break;
+            }
+        if (proc && cath) {
+            int minutes = (game.sim.hour - 7) * 60 + game.sim.minute;
+            float walk = minutes / 240.0f;          /* arrive by 11am */
+            if (walk < 0.0f) walk = 0.0f;
+            if (walk > 1.0f) walk = 1.0f;
+            int door_x = cath->x * CELL_W + (cath->width * CELL_W - proc->w) / 2;
+            int start_x = cath->x * CELL_W - proc->w - 80;
+            int wx = start_x + (int)((door_x - start_x) * walk);
+            int tx, ty;
+            grid_to_screen(cath->floor, 0, &tx, &ty);
+            SDL_Rect dst = { tx + wx, ty, proc->w, CELL_H };
+            SDL_RenderCopy(game.renderer, proc->texture, NULL, &dst);
+        }
     }
 }
 
@@ -4210,6 +4255,21 @@ int main(int argc, char *argv[])
                                     SPR_CATHEDRAL_COMP, 74, 180, 255);
             ok++;
         } else fail++;
+        /* TOWER ceremony: the six single-frame strips next to the normal
+         * pairs — cherubs and "Welcome to Tower" banner on top, priest
+         * and congregation below. Shown while the wedding runs. */
+        if (sprites_compose_v(&game.sprites, game.renderer, 0x8CE9, 0x8D29, 0x00F8) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00F8, 0x8D69, 0x00F9) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00F9, 0x8DA9, 0x00FA) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00FA, 0x8DE9, 0x00FB) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x00FB, 0x8DEA, SPR_CATH_CEREMONY) == 0) {
+            sprites_apply_color_key(&game.sprites, game.renderer,
+                                    SPR_CATH_CEREMONY, 74, 180, 255);
+            ok++;
+        } else fail++;
+        /* Wedding procession (0x8828): bride, groom and guests on a
+         * white background — keyed like the other deco sprites. */
+        sprites_apply_white_key(&game.sprites, game.renderer, 0x8828);
         /* Medical: 0x8728 + 0x8729 horizontally (+ 0x872A via triple) */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8728, 0x8729, SPR_MEDICAL_COMP) == 0) {
             /* Try adding 0x872A if present */
@@ -4698,6 +4758,8 @@ int main(int argc, char *argv[])
         game.cam_fx = atof(getenv("CT_CAM_X")) * CELL_W;
     if (getenv("CT_MAP_MODE"))
         game.map_mode = atoi(getenv("CT_MAP_MODE")) & 3;
+    if (getenv("CT_WEDDING"))          /* demo: run the TOWER ceremony */
+        game.sim.wedding.active = 1;
     (void)show_underground;
     game.zoom = 1.0f;
     
