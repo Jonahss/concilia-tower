@@ -166,6 +166,7 @@
 #define SPR_SKYLINE      0x8389   /* Background city skyline */
 #define SPR_ENTRANCES    0x83E9   /* Entrance awning — the iconic red awning! */
 #define SPR_CRANE        0x83EA   /* Construction crane — appears during building */
+#define CRANE_NONE       -1000    /* crane_floor sentinel (B-floors are negative) */
 #define SPR_FIRELADDER   0x842D   /* Fire escape stairs — zigzag up the side */
 #define SPR_CONST_GRID   0x8E28   /* Construction grid placeholder */
 #define SPR_CONST_SOLID  0x8E29   /* Construction solid fill */
@@ -305,6 +306,9 @@ typedef struct {
     Sprite         *santa;       /* 0x8388 — Santa helicopter */
     Sprite         *entrances;   /* 0x83E9 — entrance awning */
     Sprite         *crane;       /* 0x83EA — construction crane */
+    int             crane_floor; /* OverlayT state: top floor when last
+                                    re-evaluated; CRANE_NONE = no crane */
+    int             crane_x;     /* left edge captured at that moment */
     Sprite         *fireladder;  /* 0x842D — fire escape stairs */
     Sprite         *skyline;     /* 0x8389 — city skyline background */
     int             cloud_count;
@@ -1277,37 +1281,6 @@ static void render_tower(void)
             SDL_Rect src_r = { half_w, 0, half_w, game.entrances->h };
             SDL_Rect awning_r = { tx + tw, ty, half_w, game.entrances->h };
             SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
-        }
-    }
-    
-    /* Construction crane — drawn at the TOP of the tower only (from Decorations.cpp).
-     * The crane sits above the highest occupied floor, not on every construction site. */
-    if (game.crane) {
-        int max_floor = 0;
-        int max_floor_minx = TOWER_WIDTH, max_floor_maxx = 0;
-        for (int f = TOWER_MAX_FLOOR; f >= 1; f--) {
-            int fidx = floor_to_index(f);
-            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-            int found = 0;
-            for (int x = 0; x < TOWER_WIDTH; x++) {
-                if (game.tower.grid[fidx][x].type != ITEM_NONE) {
-                    if (!found) { max_floor = f; found = 1; }
-                    if (x < max_floor_minx) max_floor_minx = x;
-                    if (x > max_floor_maxx) max_floor_maxx = x;
-                }
-            }
-            if (found) break;
-        }
-        if (max_floor > 0) {
-            int cx = (max_floor_minx + max_floor_maxx + 1) / 2;
-            int tx, ty;
-            grid_to_screen(max_floor, cx, &tx, &ty);
-            SDL_Rect crane_dst = {
-                tx - game.crane->w / 2,
-                ty - game.crane->h - 2,
-                game.crane->w, game.crane->h
-            };
-            SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
         }
     }
     
@@ -3197,6 +3170,51 @@ static void render_ui(void)
     render_info_window();  /* Top right, horizontal strip */
 }
 
+/* Construction crane — the EXE's real rule (OverlayT seg_11c0).
+ * UpdateCrane (11c0:024a): scan floors top-down for the highest one
+ * with floor-map records (transports live in separate file blocks and
+ * do NOT count). Only when that floor CHANGES is the crane
+ * re-evaluated: a top floor narrower than 7 cells gets no crane;
+ * otherwise the crane parks at the extent's LEFT edge and stays there
+ * even if the floor later grows sideways — the original's famous
+ * stuck crane. Draw gate (11c0:0000): crane floor must be below floor
+ * 100 (file floor 0x6E), so a topped-out tower or the cathedral crown
+ * hides it. 36x36, one row above, no centering. Drawn after the
+ * people/elevator pass so it tops the machinery caps. */
+static void render_crane(void)
+{
+    int top = -1000, left = TOWER_WIDTH, right = 0;
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        const Tenant *t = &game.tower.tenants[i];
+        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+        int tf = t->floor + t->height - 1;
+        if (tf > top) top = tf;
+    }
+    if (top > -1000) {
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            const Tenant *t = &game.tower.tenants[i];
+            if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+            if (t->floor > top || t->floor + t->height - 1 < top) continue;
+            if (t->x < left) left = t->x;
+            if (t->x + t->width > right) right = t->x + t->width;
+        }
+    }
+    if (top == -1000) {
+        game.crane_floor = CRANE_NONE;
+    } else if (game.crane_floor != top) {
+        if (right - left < 7) game.crane_floor = CRANE_NONE;
+        else { game.crane_floor = top; game.crane_x = left; }
+    }
+
+    if (game.crane && game.crane_floor != CRANE_NONE &&
+        game.crane_floor < TOWER_MAX_FLOOR) {
+        int tx, ty;
+        grid_to_screen(game.crane_floor + 1, game.crane_x, &tx, &ty);
+        SDL_Rect crane_dst = { tx, ty, game.crane->w, game.crane->h };
+        SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
+    }
+}
+
 static void render(void)
 {
     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
@@ -3205,6 +3223,7 @@ static void render(void)
     render_sky();
     render_tower();
     render_people();
+    render_crane();
     render_build_ghost();
     render_ui();
     render_stats_window();
@@ -4323,6 +4342,8 @@ int main(int argc, char *argv[])
     }
     
     /* Load decorative sprites with white transparency */
+    game.crane_floor = CRANE_NONE;  /* no crane until the tower has a top */
+    game.crane_x = 0;
     {
         struct { uint16_t id; Sprite **target; const char *name; } decos[] = {
             { SPR_ENTRANCES,   &game.entrances,  "Entrance awning" },

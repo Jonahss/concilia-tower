@@ -200,3 +200,24 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
   (OS loads it but never renders row 1).
 - Tuning words 0xde10/12/14 (3000/1500/5000) and 0xde1c/1e/20
   (2000/3000/10000): loaded but consumers not yet found.
+
+## The construction crane: left-parked, 7-cell minimum, hidden at the top
+
+OpenSkyscraper (`Decorations.cpp updateCrane`) centers the crane over
+the top floor, shows it whenever that floor is >= 4 cells wide, and
+never hides it. The EXE (OverlayT seg_11c0, `024a` update + `0000`
+draw gate) disagrees on every count:
+
+- **Position**: the crane parks at the top floor's **left edge**
+  (`crane_x = floor_hdr.left`), not the center — and the x is captured
+  only when the top floor *number* changes, so widening the top floor
+  leaves the crane where it was (the original's famous stuck crane).
+- **Width gate**: extent must be >= **7** cells, not 4.
+- **Visibility**: drawn only while `crane_floor < 0x6E` (file floor
+  110 = displayed floor 100). A tower built to the ceiling — or
+  crowned by the cathedral, whose records occupy file floors 109-113 —
+  shows no crane at all.
+
+Evidence: seg_11c0 raw (`FUN_11c0_024a` scan/assign, `FUN_11c0_0428`
+36x36 rect one row above at `crane_x*8 - scroll`, gate in
+`FUN_11c0_0000`).
