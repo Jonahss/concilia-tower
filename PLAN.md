@@ -74,7 +74,7 @@ YootTower code map  ──→ Function names/structure       │
 ### Phase 6: Full Simulation
 - [ ] All tenant types (office, condo, hotel, restaurant, shop, cinema, etc.)
 - [ ] Hotel housekeeping (MainteT.c / seg 1130)
-- [ ] Fire/terrorist events (FireT.c, EventT.c)
+- [~] Fire/terrorist events (FireT.c, EventT.c) — visual presentation DONE 2026-06-13 (real flame anim + alert icons + banner + feed); interactive accept/reject modal + chopper/rubble still open
 - [ ] Sound effects (SoundT.c / seg 11c8)
 - [ ] VIP visits
 - [ ] Parking, metro, cathedral, medical
@@ -124,6 +124,11 @@ YootTower code map  ──→ Function names/structure       │
 
 ### Raw bitmap resource IDs (type 0xFF02)
 - `0x89e8-0x89ea` — People walking sprites (124 cells each!)
+- `0x8F68-0x8F6B` — **Fire/large** flame animation (4 frames, 96x36 = 12-cell front; white-keyed)
+- `0x8F6C` fire/small · `0x8F6D` fire/chopper · `0x8FA8` fire/destroyed (burnt cell)
+- `0xA710` alert/terrorist (76x67) · `0xA714` alert/fire (76x60) — white-keyed alert icons
+- Fire is an 8-frame cycle in the EXE (frame=b3de%4, +4 when extinguishing), 12 cells wide per front, drawn from the master tile-sheet; the port tiles the 4 standalone DIB frames across [fire_left,fire_right]
+- Event dialogs (string res): fire start 0xBC2/0xBC3, caught 0xBCF, exploded 0xBD0; sounds 0x2714 bomb / 0x2716 fire alarm (deferred)
 - `0x8a28-0x8a2a` — More people sprites
 - `0x8a68-0x8a6a` — Even more people sprites
 - `0x8fe9` — Large sprite sheet (552 cells)

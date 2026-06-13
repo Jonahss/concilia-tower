@@ -168,6 +168,15 @@
 #define SPR_CRANE        0x83EA   /* Construction crane — appears during building */
 #define CRANE_NONE       -1000    /* crane_floor sentinel (B-floors are negative) */
 #define SPR_FIRELADDER   0x842D   /* Fire escape stairs — zigzag up the side */
+/* Disaster event art (IDs confirmed via OpenSkyscraper + decomp FireT/EventT) */
+#define SPR_FIRE_0       0x8F68   /* flame frame 0 — 96x36 = 12 cells x 1 floor */
+#define SPR_FIRE_1       0x8F69   /* flame frame 1 */
+#define SPR_FIRE_2       0x8F6A   /* flame frame 2 */
+#define SPR_FIRE_3       0x8F6B   /* flame frame 3 (FireT animates frame = b3de%4) */
+#define SPR_FIRE_CHOPPER 0x8F6D   /* firefighting helicopter */
+#define SPR_FIRE_DESTROY 0x8FA8   /* burnt-out cell (fire aftermath) */
+#define SPR_ALERT_TERROR 0xA710   /* terrorist/bomb alert icon, 76x67 */
+#define SPR_ALERT_FIRE   0xA714   /* fire alert icon, 76x60 */
 #define SPR_CONST_GRID   0x8E28   /* Construction grid placeholder */
 #define SPR_CONST_SOLID  0x8E29   /* Construction solid fill */
 #define SPR_CONST_WORKER 0x85EA   /* Construction worker sprite */
@@ -315,6 +324,13 @@ typedef struct {
     Sprite         *fireladder;  /* 0x842D — fire escape stairs */
     Sprite         *skyline;     /* 0x8389 — city skyline background */
     int             cloud_count;
+
+    /* Disaster event art (real EXE sprites, replacing colored rectangles) */
+    Sprite         *fire_frames[4]; /* 0x8F68-0x8F6B — flame, 96x36 (12 cells), 4-frame anim */
+    Sprite         *fire_chopper;   /* 0x8F6D — firefighting helicopter */
+    Sprite         *fire_destroyed; /* 0x8FA8 — burnt-out cell (fire aftermath) */
+    Sprite         *alert_terror;   /* 0xA710 — terrorist/bomb alert icon (76x67) */
+    Sprite         *alert_fire;     /* 0xA714 — fire alert icon (76x60) */
     
     /* UI bitmaps from EXE */
     SDL_Texture    *ui_items;    /* Toolbox item icons: 32 icons × 32px each, 3 rows (normal+pressed) */
@@ -676,48 +692,6 @@ static void render_sky(void)
                 SDL_RenderCopy(game.renderer, cs->texture, &src, &dst);
             }
             SDL_SetTextureAlphaMod(cs->texture, 255);
-        }
-    }
-    
-    /* Render active fire/bomb event visual effects */
-    if (game.sim.event.active) {
-        int evt_floor = game.sim.event.target_floor;
-        int floor_y = lobby_sy - (evt_floor * CELL_H);
-        
-        if (game.sim.event.type == EVENT_FIRE) {
-            /* Fire: orange/red flickering across burning slots */
-            int fl = game.sim.event.fire_left;
-            int fr = game.sim.event.fire_right;
-            int fx = lobby_sx + fl * CELL_W;
-            int fw = (fr - fl + 1) * CELL_W;
-            
-            /* Flickering fire overlay — alternates orange/red */
-            int flicker = (game.sim.frame % 6 < 3) ? 200 : 255;
-            SDL_SetRenderDrawColor(game.renderer, flicker, flicker/4, 0, 120);
-            SDL_Rect fire_rect = { fx, floor_y, fw, CELL_H };
-            SDL_RenderFillRect(game.renderer, &fire_rect);
-            
-            /* Fire "embers" — small bright spots */
-            SDL_SetRenderDrawColor(game.renderer, 255, 255, 0, 180);
-            for (int e = 0; e < 8; e++) {
-                int ex = fx + (rand() % fw);
-                int ey = floor_y + (rand() % CELL_H);
-                SDL_Rect ember = { ex, ey, 3, 3 };
-                SDL_RenderFillRect(game.renderer, &ember);
-            }
-        } else if (game.sim.event.type == EVENT_BOMB) {
-            /* Bomb: pulsing red circle on target location */
-            int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
-            int pulse = 60 + (game.sim.frame % 20) * 4;
-            if (pulse > 120) pulse = 180 - pulse;
-            SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
-            SDL_Rect bomb_rect = { bx - 16, floor_y - 8, 32, CELL_H + 16 };
-            SDL_RenderFillRect(game.renderer, &bomb_rect);
-            
-            /* Bomb icon — small bright spot */
-            SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
-            SDL_Rect icon = { bx - 2, floor_y + CELL_H/2 - 2, 4, 4 };
-            SDL_RenderFillRect(game.renderer, &icon);
         }
     }
     
@@ -3254,21 +3228,115 @@ static void render_crane(void)
     }
 }
 
+/* Fire/bomb visual effects drawn IN the tower (on top of the burning floors,
+ * so they aren't painted over by building facades). Real EXE art: animated
+ * flame (0x8F68-0x8F6B) tiled across the burning span; terror-alert icon over
+ * a bomb target. Falls back to the old colored shapes if a sprite is missing. */
+static void render_events(void)
+{
+    if (!game.sim.event.active) return;
+
+    int lobby_sx, lobby_sy;
+    grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
+    int evt_floor = game.sim.event.target_floor;
+    int floor_y = lobby_sy - (evt_floor * CELL_H);
+
+    if (game.sim.event.type == EVENT_FIRE) {
+        int fl = game.sim.event.fire_left;
+        int fr = game.sim.event.fire_right;
+        int fx = lobby_sx + fl * CELL_W;
+        int fw = (fr - fl + 1) * CELL_W;
+
+        /* 4-frame flame animation (FireT animates frame = b3de%4); each frame
+         * is 96x36 = a 12-cell front. Tile across [fl,fr], clip the last. */
+        Sprite *flame = game.fire_frames[(game.sim.frame / 3) % 4];
+        if (flame && flame->texture) {
+            for (int x = fx; x < fx + fw; x += flame->w) {
+                int seg_w = (x + flame->w <= fx + fw) ? flame->w : (fx + fw - x);
+                SDL_Rect src = { 0, 0, seg_w, flame->h };
+                SDL_Rect dst = { x, floor_y + CELL_H - flame->h, seg_w, flame->h };
+                SDL_RenderCopy(game.renderer, flame->texture, &src, &dst);
+            }
+        } else {
+            int flicker = (game.sim.frame % 6 < 3) ? 200 : 255;
+            SDL_SetRenderDrawColor(game.renderer, flicker, flicker/4, 0, 120);
+            SDL_Rect fire_rect = { fx, floor_y, fw, CELL_H };
+            SDL_RenderFillRect(game.renderer, &fire_rect);
+        }
+    } else if (game.sim.event.type == EVENT_BOMB) {
+        int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
+        Sprite *al = game.alert_terror;
+        if (al && al->texture) {
+            int bob = (game.sim.frame % 24 < 12) ? 0 : 2;
+            SDL_Rect dst = { bx + CELL_W/2 - al->w/2,
+                             floor_y - al->h - 2 + bob, al->w, al->h };
+            SDL_RenderCopy(game.renderer, al->texture, NULL, &dst);
+        } else {
+            int pulse = 60 + (game.sim.frame % 20) * 4;
+            if (pulse > 120) pulse = 180 - pulse;
+            SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
+            SDL_Rect bomb_rect = { bx - 16, floor_y - 8, 32, CELL_H + 16 };
+            SDL_RenderFillRect(game.renderer, &bomb_rect);
+        }
+    }
+}
+
+/* Top-center disaster alert: real EXE alert icon + blinking label while an
+ * event runs. Mirrors SimTower popping an alert when a fire/bomb strikes
+ * (alert sprites 0xA714 fire / 0xA710 terrorist, decoded from EventT/FireT). */
+static void render_event_alert(void)
+{
+    if (!game.sim.event.active) return;
+    if (game.sim.frame % 30 < 6) return;  /* blink for urgency */
+
+    int is_fire = (game.sim.event.type == EVENT_FIRE);
+    Sprite *icon = is_fire ? game.alert_fire : game.alert_terror;
+    const char *label = is_fire ? "FIRE!" : "BOMB THREAT!";
+    SDL_Color fg = is_fire ? (SDL_Color){ 230, 90, 0, 255 }
+                           : (SDL_Color){ 210, 0, 0, 255 };
+
+    int iw = icon ? icon->w : 0, ih = icon ? icon->h : 0;
+    TTF_Font *f = game.font ? game.font : game.font_small;
+    SDL_Surface *ts = f ? TTF_RenderText_Blended(f, label, fg) : NULL;
+    int tw = ts ? ts->w : 0, th = ts ? ts->h : 0;
+
+    int pad = 10, gap = (iw && tw) ? 8 : 0;
+    int panel_w = iw + gap + tw + pad * 2;
+    int panel_h = (ih > th ? ih : th) + pad * 2;
+    int px = (game.screen_w - panel_w) / 2;
+    int py = 48;
+
+    draw_win31_rect(px, py, panel_w, panel_h, 1);
+    if (icon && icon->texture) {
+        SDL_Rect d = { px + pad, py + (panel_h - ih) / 2, iw, ih };
+        SDL_RenderCopy(game.renderer, icon->texture, NULL, &d);
+    }
+    if (ts) {
+        SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+        SDL_Rect d = { px + pad + iw + gap, py + (panel_h - th) / 2, tw, th };
+        SDL_RenderCopy(game.renderer, tt, NULL, &d);
+        SDL_DestroyTexture(tt);
+        SDL_FreeSurface(ts);
+    }
+}
+
 static void render(void)
 {
     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
     SDL_RenderClear(game.renderer);
-    
+
     render_sky();
     render_tower();
     render_people();
+    render_events();       /* fire/bomb effects ON TOP of the burning floors */
     render_crane();
     render_build_ghost();
     render_ui();
     render_stats_window();
     render_tuning_window();
     render_elv_dialog();
-    
+    render_event_alert();
+
     SDL_RenderPresent(game.renderer);
 }
 
@@ -4400,12 +4468,20 @@ int main(int argc, char *argv[])
     game.crane_x = 0;
     {
         struct { uint16_t id; Sprite **target; const char *name; } decos[] = {
-            { SPR_ENTRANCES,   &game.entrances,  "Entrance awning" },
-            { SPR_CRANE,       &game.crane,       "Construction crane" },
-            { SPR_FIRELADDER,  &game.fireladder,  "Fire escape" },
+            { SPR_ENTRANCES,    &game.entrances,      "Entrance awning" },
+            { SPR_CRANE,        &game.crane,          "Construction crane" },
+            { SPR_FIRELADDER,   &game.fireladder,     "Fire escape" },
+            { SPR_FIRE_0,       &game.fire_frames[0], "Flame frame 0" },
+            { SPR_FIRE_1,       &game.fire_frames[1], "Flame frame 1" },
+            { SPR_FIRE_2,       &game.fire_frames[2], "Flame frame 2" },
+            { SPR_FIRE_3,       &game.fire_frames[3], "Flame frame 3" },
+            { SPR_FIRE_CHOPPER, &game.fire_chopper,   "Fire chopper" },
+            { SPR_FIRE_DESTROY, &game.fire_destroyed, "Burnt cell" },
+            { SPR_ALERT_TERROR, &game.alert_terror,   "Terror alert" },
+            { SPR_ALERT_FIRE,   &game.alert_fire,     "Fire alert" },
         };
         NEResourceList *dibs = ne_find_type(&game.exe, 0x8002);
-        for (int d = 0; d < 3; d++) {
+        for (int d = 0; d < (int)(sizeof(decos)/sizeof(decos[0])); d++) {
             *decos[d].target = NULL;
             NEResource *res = NULL;
             if (dibs) {
@@ -4760,6 +4836,22 @@ int main(int argc, char *argv[])
         game.map_mode = atoi(getenv("CT_MAP_MODE")) & 3;
     if (getenv("CT_WEDDING"))          /* demo: run the TOWER ceremony */
         game.sim.wedding.active = 1;
+    if (getenv("CT_FIRE")) {           /* demo: force a fire (arg = floor) */
+        game.sim.event.active = 1;
+        game.sim.event.type = EVENT_FIRE;
+        game.sim.event.target_floor = atoi(getenv("CT_FIRE"));
+        game.sim.event.target_slot = TOWER_WIDTH / 2;
+        game.sim.event.fire_left  = TOWER_WIDTH / 2 - 12;
+        game.sim.event.fire_right = TOWER_WIDTH / 2 + 12;
+        game.sim.event.duration = game.sim.event.timer = 100000;
+    }
+    if (getenv("CT_BOMB")) {           /* demo: force a bomb threat (arg = floor) */
+        game.sim.event.active = 1;
+        game.sim.event.type = EVENT_BOMB;
+        game.sim.event.target_floor = atoi(getenv("CT_BOMB"));
+        game.sim.event.target_slot = TOWER_WIDTH / 2;
+        game.sim.event.duration = game.sim.event.timer = 100000;
+    }
     (void)show_underground;
     game.zoom = 1.0f;
     
@@ -4795,7 +4887,33 @@ int main(int argc, char *argv[])
             int prev_star = game.tower.star_rating;
             int prev_pop = game.tower.population;
             int prev_unreach = game.sim.unreachable_tenants;
+            int prev_event_active = game.sim.event.active;
             game_update(&game.sim, &game.tower);
+
+            /* Disaster events: announce onset and resolution in the feed.
+             * On the falling edge the sim leaves caught/damage_cost intact
+             * (only cleared when the next event starts), so we can read them. */
+            if (game.sim.event.active && !prev_event_active) {
+                char buf[48];
+                if (game.sim.event.type == EVENT_FIRE)
+                    snprintf(buf, sizeof buf, "FIRE on floor %d! Evacuate!",
+                             game.sim.event.target_floor);
+                else
+                    snprintf(buf, sizeof buf, "Bomb threat on floor %d! Security responding.",
+                             game.sim.event.target_floor);
+                add_event_message(buf);
+            } else if (!game.sim.event.active && prev_event_active) {
+                char buf[48];
+                if (game.sim.event.type == EVENT_BOMB && game.sim.event.caught)
+                    snprintf(buf, sizeof buf, "Security caught the bomb! Crisis averted.");
+                else if (game.sim.event.type == EVENT_BOMB)
+                    snprintf(buf, sizeof buf, "BOMB EXPLODED! $%d in damage.",
+                             game.sim.event.damage_cost);
+                else
+                    snprintf(buf, sizeof buf, "Fire extinguished on floor %d.",
+                             game.sim.event.target_floor);
+                add_event_message(buf);
+            }
 
             /* Commute feedback: units cut off from the entrance */
             if (game.sim.unreachable_tenants > prev_unreach) {
