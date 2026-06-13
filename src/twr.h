@@ -24,4 +24,9 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
 int twr_export(const char *path, Tower *tower, const GameSim *sim,
                char *err, int errlen);
 
+/* Storefront variants (the retail table's +0x0B byte): how many the EXE
+ * art has for a retail class, and which one a tenant shows. */
+int twr_variant_count(ItemType it);
+int twr_tenant_variant(const Tower *tower, const Tenant *t);
+
 #endif

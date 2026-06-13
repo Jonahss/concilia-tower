@@ -189,6 +189,12 @@
 #define SPR_METRO_COMP        0x001B  /* metro station composite */
 #define SPR_CINEMA_COMP_F1    0x001C  /* cinema with cycled marquee */
 #define SPR_CATHEDRAL_COMP    0x001D  /* 5 strips stacked: 448x180, day|night */
+/* Retail storefront variants (retail table byte +0x0B picks one).
+ * Restaurants 0x8568+2v paired with 0x8569+2v (frames: empty, busy,
+ * packed, closed), fast food likewise from 0x86E8; shops are single
+ * sheets 0x8668+v with three fill frames, used straight from the EXE. */
+#define SPR_RESTAURANT_V0     0x0020  /* ..0x0024, 5 variants */
+#define SPR_FASTFOOD_V0       0x0025  /* ..0x0029, 5 variants */
 
 /* ---------- Sprite mapping for item types ---------- */
 static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
@@ -985,6 +991,14 @@ static void render_tower(void)
             int frame_w_hint = 0, item_floors = 1;
             uint16_t spr_id = item_sprite_id(tenant->type, &frame_w_hint, &item_floors);
             spr_id = item_sprite_animated(tenant->type, spr_id);
+            /* Retail: swap in this tenant's storefront variant */
+            if (tenant->type == ITEM_RESTAURANT || tenant->type == ITEM_SHOP ||
+                tenant->type == ITEM_FAST_FOOD) {
+                int v = twr_tenant_variant(&game.tower, tenant);
+                spr_id = tenant->type == ITEM_RESTAURANT ? SPR_RESTAURANT_V0 + v
+                       : tenant->type == ITEM_FAST_FOOD  ? SPR_FASTFOOD_V0 + v
+                       : 0x8668 + v;
+            }
             Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
             
             int tx, ty;
@@ -4161,6 +4175,17 @@ int main(int argc, char *argv[])
         /* Escalator: 0x8AA8 (top) + 0x8AE8 (bottom) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8AA8, 0x8AE8, SPR_ESCALATOR_COMP) == 0)
             ok++; else fail++;
+        /* Retail variants: restaurants and fast food pair two sheets per
+         * variant ([empty|busy] + [packed|closed]); variant 0 equals the
+         * legacy COMP sprites. Shops need no composition. */
+        for (int v = 0; v < 5; v++) {
+            if (sprites_compose_h(&game.sprites, game.renderer,
+                                  0x8568 + 2 * v, 0x8569 + 2 * v,
+                                  SPR_RESTAURANT_V0 + v) == 0) ok++; else fail++;
+            if (sprites_compose_h(&game.sprites, game.renderer,
+                                  0x86E8 + 2 * v, 0x86E9 + 2 * v,
+                                  SPR_FASTFOOD_V0 + v) == 0) ok++; else fail++;
+        }
         /* Cathedral: five 448x36 strips stacked (dome 0x8CE8 ... entrance
          * 0x8DE8), then the sky backdrop keyed out so the dome silhouette
          * sits against the live sky. */

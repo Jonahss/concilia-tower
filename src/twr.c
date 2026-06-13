@@ -464,6 +464,29 @@ static int rec_cmp(const void *a, const void *b)
     return ((const Rec *)a)->left - ((const Rec *)b)->left;
 }
 
+/* How many storefront variants the EXE art carries per retail class:
+ * restaurants/fast food are PAIRS of sheets (empty|busy + packed|closed),
+ * shops are single sheets with three fill states. */
+int twr_variant_count(ItemType it)
+{
+    return it == ITEM_SHOP ? 11 : 5;
+}
+
+/* Which storefront variant a retail tenant shows: the variant byte
+ * (+0x0B) of its preserved retail-table entry, or a stable id-derived
+ * fallback for tenants that have no slot yet. The exporter writes the
+ * same fallback into newly allocated slots, so the look survives a
+ * round-trip. */
+int twr_tenant_variant(const Tower *tower, const Tenant *t)
+{
+    int nv = twr_variant_count(t->type);
+    if (t->retail_ref) {
+        const uint8_t *e = tower->twr_retail + (t->retail_ref - 1) * 18;
+        return e[0x0b] % nv;
+    }
+    return t->id % nv;
+}
+
 /* Observed per-class constants in real retail-table entries */
 static void retail_template(ItemType it, int file_floor, int seq,
                             int variant, uint8_t *e)
@@ -518,7 +541,8 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             for (int k = 0; k < 18; k++) allzero &= !e[k];
             if (e[0] < 0x80 && !allzero) continue;
             retail_template(t->type, t->floor + 10,
-                            retail_seq[t->type] - 1, s % 5, e);
+                            retail_seq[t->type] - 1,
+                            t->id % twr_variant_count(t->type), e);
             t->retail_ref = s + 1;
             break;
         }
