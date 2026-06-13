@@ -890,6 +890,30 @@ static void draw_shaft_digits(int tx, int ty, int w, int wf)
     }
 }
 
+/* Per-floor extents of the floor map — the OverlayT anchor for every
+ * decoration. Mirrors the file's floor records: every floor a
+ * non-transport tenant covers, including multi-floor continuations.
+ * right is EXCLUSIVE; right == 0 marks an empty floor. */
+static int ovl_left[TOWER_FLOOR_COUNT], ovl_right[TOWER_FLOOR_COUNT];
+
+static void floor_map_extents(void)
+{
+    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) {
+        ovl_left[i] = TOWER_WIDTH;
+        ovl_right[i] = 0;
+    }
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        const Tenant *t = &game.tower.tenants[i];
+        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+        for (int f = t->floor; f < t->floor + t->height; f++) {
+            int fi = floor_to_index(f);
+            if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
+            if (t->x < ovl_left[fi]) ovl_left[fi] = t->x;
+            if (t->x + t->width > ovl_right[fi]) ovl_right[fi] = t->x + t->width;
+        }
+    }
+}
+
 static void render_tower(void)
 {
     /* Determine visible floor range */
@@ -1253,75 +1277,54 @@ static void render_tower(void)
         }
     }
     
-    /* ====== PASS 4: Decorative overlays (awning, crane, fire escape) ====== */
-    
-    /* Entrance awning — drawn over each lobby's edges */
+    /* ====== PASS 4: Decorative overlays (awning, fire escape) ======
+     * All of OverlayT (seg_11c0) anchors to the FLOOR MAP's per-floor
+     * extents — transports live in separate file blocks and do not
+     * count, so a shaft poking past the wall never drags an overlay
+     * with it. Extents computed once per frame, shared with the crane
+     * (drawn later, after the people pass). */
+    floor_map_extents();
+
+    /* Entrance awnings — GROUND FLOOR ONLY (11c0:0374 draws solely on
+     * file floor 10): 56x36 halves of 0x83E9 hanging outside the
+     * ground extent's edges. Sky lobbies get none. */
     if (game.entrances) {
-        for (int i = 0; i < game.tower.tenant_count; i++) {
-            Tenant *t = &game.tower.tenants[i];
-            if (t->type != ITEM_LOBBY) continue;
-            
-            int tx, ty;
-            grid_to_screen(t->floor, t->x, &tx, &ty);
-            int tw = t->width * CELL_W;
-            
-            /* Awning extends OUTWARD from lobby edges (overhanging the sidewalk).
-             * Left half of sprite = left entrance, right half = right entrance.
-             * Each half is entrances->w/2 pixels wide.
-             * Left awning: right edge aligns with lobby's left edge.
-             * Right awning: left edge aligns with lobby's right edge. */
+        int gi = floor_to_index(0);
+        if (ovl_right[gi] > 0) {
             int half_w = game.entrances->w / 2;
-            
-            /* Left entrance — awning extends to the left of the lobby */
+            int tx, ty;
+            grid_to_screen(0, ovl_left[gi], &tx, &ty);
             SDL_Rect src_l = { 0, 0, half_w, game.entrances->h };
-            SDL_Rect awning_l = { tx - half_w, ty, half_w, game.entrances->h };
+            SDL_Rect awning_l = { tx - half_w, ty, half_w, CELL_H };
             SDL_RenderCopy(game.renderer, game.entrances->texture, &src_l, &awning_l);
-            
-            /* Right entrance — awning extends to the right of the lobby */
+            grid_to_screen(0, ovl_right[gi], &tx, &ty);
             SDL_Rect src_r = { half_w, 0, half_w, game.entrances->h };
-            SDL_Rect awning_r = { tx + tw, ty, half_w, game.entrances->h };
+            SDL_Rect awning_r = { tx, ty, half_w, CELL_H };
             SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
         }
     }
-    
-    /* Fire escape — drawn on BOTH sides of each floor's extent.
-     * Each floor gets its own left/right edges (not global building envelope). */
+
+    /* Fire escapes — both sides of every floor's extent, ground up to
+     * the build ceiling (11c0:02c0 over file floors 10..110: left
+     * piece at extent_left*8 - 24, right piece at extent_right*8;
+     * basements get none). */
     if (game.fireladder) {
         int half_w = game.fireladder->w / 2;
-        
-        for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
+        for (int floor = 0; floor <= TOWER_MAX_FLOOR; floor++) {
             int fidx = floor_to_index(floor);
-            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-            
-            /* Find this floor's own left/right extent */
-            int floor_left = TOWER_WIDTH, floor_right = -1;
-            for (int cx = 0; cx < TOWER_WIDTH; cx++) {
-                if (game.tower.grid[fidx][cx].type != ITEM_NONE) {
-                    if (cx < floor_left) floor_left = cx;
-                    if (cx > floor_right) floor_right = cx;
-                }
-            }
-            if (floor_left > floor_right) continue;  /* Empty floor */
-            
-            int fsx, fsy;
-            grid_to_screen(floor, 0, &fsx, &fsy);
-            
-            /* Left fire escape at THIS floor's left edge */
-            int lx, ly;
-            grid_to_screen(floor, floor_left, &lx, &ly);
-            SDL_Rect fe_left = { lx - half_w, fsy, half_w, CELL_H };
+            if (ovl_right[fidx] == 0) continue;     /* empty floor */
+            int lx, ly, rx, ry;
+            grid_to_screen(floor, ovl_left[fidx], &lx, &ly);
+            grid_to_screen(floor, ovl_right[fidx], &rx, &ry);
             SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
+            SDL_Rect fe_left = { lx - half_w, ly, half_w, CELL_H };
             SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
-            
-            /* Right fire escape at THIS floor's right edge */
-            int rx_pos, ry;
-            grid_to_screen(floor, floor_right + 1, &rx_pos, &ry);
-            SDL_Rect fe_right = { rx_pos, fsy, half_w, CELL_H };
             SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
+            SDL_Rect fe_right = { rx, ry, half_w, CELL_H };
             SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
         }
     }
-    
+
     /* Floor number labels on the left edge */
     {
         int top_f, bot_f, dummy2;
@@ -3171,39 +3174,30 @@ static void render_ui(void)
 }
 
 /* Construction crane — the EXE's real rule (OverlayT seg_11c0).
- * UpdateCrane (11c0:024a): scan floors top-down for the highest one
- * with floor-map records (transports live in separate file blocks and
- * do NOT count). Only when that floor CHANGES is the crane
- * re-evaluated: a top floor narrower than 7 cells gets no crane;
- * otherwise the crane parks at the extent's LEFT edge and stays there
- * even if the floor later grows sideways — the original's famous
- * stuck crane. Draw gate (11c0:0000): crane floor must be below floor
- * 100 (file floor 0x6E), so a topped-out tower or the cathedral crown
- * hides it. 36x36, one row above, no centering. Drawn after the
- * people/elevator pass so it tops the machinery caps. */
+ * UpdateCrane (11c0:024a): the highest floor with floor-map records;
+ * only when that floor CHANGES is the crane re-evaluated: a top floor
+ * narrower than 7 cells gets no crane; otherwise the crane parks at
+ * the extent's LEFT edge and stays there even if the floor later
+ * grows sideways — the original's famous stuck crane. Draw gate
+ * (11c0:0000): crane floor must be below floor 100 (file floor 0x6E),
+ * so a topped-out tower or the cathedral crown hides it. 36x36, one
+ * row above, no centering. Drawn after the people/elevator pass so it
+ * tops the machinery caps. Uses the extents pass 4 computed. */
 static void render_crane(void)
 {
-    int top = -1000, left = TOWER_WIDTH, right = 0;
-    for (int i = 0; i < game.tower.tenant_count; i++) {
-        const Tenant *t = &game.tower.tenants[i];
-        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
-        int tf = t->floor + t->height - 1;
-        if (tf > top) top = tf;
-    }
-    if (top > -1000) {
-        for (int i = 0; i < game.tower.tenant_count; i++) {
-            const Tenant *t = &game.tower.tenants[i];
-            if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
-            if (t->floor > top || t->floor + t->height - 1 < top) continue;
-            if (t->x < left) left = t->x;
-            if (t->x + t->width > right) right = t->x + t->width;
-        }
-    }
-    if (top == -1000) {
+    int top_fi = -1;
+    for (int fi = TOWER_FLOOR_COUNT - 1; fi >= 0; fi--)
+        if (ovl_right[fi] > 0) { top_fi = fi; break; }
+
+    if (top_fi < 0) {
         game.crane_floor = CRANE_NONE;
-    } else if (game.crane_floor != top) {
-        if (right - left < 7) game.crane_floor = CRANE_NONE;
-        else { game.crane_floor = top; game.crane_x = left; }
+    } else {
+        int top = index_to_floor(top_fi);
+        if (game.crane_floor != top) {
+            if (ovl_right[top_fi] - ovl_left[top_fi] < 7)
+                game.crane_floor = CRANE_NONE;
+            else { game.crane_floor = top; game.crane_x = ovl_left[top_fi]; }
+        }
     }
 
     if (game.crane && game.crane_floor != CRANE_NONE &&
