@@ -238,16 +238,18 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
         /* Need security office */
         return sim->promo.has_security;
     case 4:
-        /* Need recycling + metro + hotel suites ≥ 4 + VIP */
+        /* Recycling + metro + hotel suites ≥ 4 + a satisfied VIP visit
+         * (LevelUp 0xB92D requires VIP for both 3→4 and 4→5). */
         return sim->promo.has_recycling &&
                sim->promo.has_metro &&
-               sim->promo.hotel_quarters >= 4;
-        /* Note: VIP check omitted for now (not implemented) */
+               sim->promo.hotel_quarters >= 4 &&
+               sim->promo.vip_visited;
     case 5:
-        /* Need medical + metro + hotel suites ≥ 4 */
+        /* Need medical + metro + hotel suites ≥ 4 + a satisfied VIP visit */
         return sim->promo.has_medical &&
                sim->promo.has_metro &&
-               sim->promo.hotel_quarters >= 4;
+               sim->promo.hotel_quarters >= 4 &&
+               sim->promo.vip_visited;
     case 6:
         /* TOWER: special event, not automatic */
         return 0;
@@ -733,11 +735,16 @@ void game_update(GameSim *sim, Tower *tower)
             sim->day_income = 0;
             sim->day_expenses = 0;
             tower->day++;
-            
+
+            /* Tenant pairing pass — MainteT runs upgrades/pairing every 3rd day. */
+            if (tower->day % 3 == 0)
+                game_tenant_pairing(sim, tower);
+
             /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
             if (tower->day % 9 == 3 && tower->star_rating >= 3) {
                 sim->vip_visiting = 1;
                 sim->vip_last_day = tower->day;
+                sim->vip_notice = 1;   /* arrived (consumed by UI feed) */
                 printf("👔 VIP is visiting the tower today! (Day %d)\n", tower->day);
             } else {
                 /* VIP evaluation at end of visit day */
@@ -756,8 +763,10 @@ void game_update(GameSim *sim, Tower *tower)
                     if (hotel_ok) {
                         sim->vip_satisfied = 1;
                         sim->promo.vip_visited = 1;
+                        sim->vip_notice = 2;   /* satisfied */
                         printf("👔 VIP was satisfied! ⭐ (Helps with star promotion)\n");
                     } else {
+                        sim->vip_notice = 3;   /* not satisfied */
                         printf("👔 VIP was NOT satisfied. Hotels need improvement.\n");
                     }
                     sim->vip_visiting = 0;
@@ -927,6 +936,31 @@ int game_retail_income(const GameSim *sim, const Tenant *t, int base_income)
     if (thresh > 0 && cnt > thresh)
         return base_income * thresh / cnt;
     return base_income;
+}
+
+/* Tenant pairing (MainteT, runs every 3rd day): a content tenant (occupied,
+ * low stress) reaches out to a stressed same-type neighbour on its floor and
+ * eases it back below the stress threshold — a thriving tenant stabilises an
+ * unhappy one, breaking move-out cascades. One rescue per content tenant; the
+ * relief is temporary (the next judge pass re-stresses it if the underlying
+ * cause persists), matching the decomp's stress 2->1 nudge. */
+void game_tenant_pairing(GameSim *sim, Tower *tower)
+{
+    (void)sim;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->state != TENANT_OCCUPIED || t->stress > 10) continue;  /* content */
+        for (int j = 0; j < tower->tenant_count; j++) {
+            Tenant *n = &tower->tenants[j];
+            if (j == i || n->type != t->type || n->floor != t->floor) continue;
+            if (n->state == TENANT_STRESSED) {
+                n->stress = 50;             /* below the 70 stress threshold */
+                n->state = TENANT_OCCUPIED;
+                n->complaints = 0;
+                break;                      /* one rescue per content tenant */
+            }
+        }
+    }
 }
 
 void game_judge_tenants(GameSim *sim, Tower *tower)

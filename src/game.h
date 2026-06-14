@@ -374,6 +374,7 @@ typedef struct {
     int           vip_visiting;    /* VIP currently in tower */
     int           vip_satisfied;   /* VIP was satisfied (for star promotion) */
     int           vip_last_day;    /* Last day VIP visited */
+    int           vip_notice;      /* one-shot for UI: 1=arrived 2=satisfied 3=not */
     
     /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
     int           last_stress_day;
@@ -447,6 +448,10 @@ int game_retail_income(const GameSim *sim, const Tenant *t, int base_income);
 /* Apply zone-based stress to commercial tenants.
  * Too many competitors in same zone = stress accumulation. */
 void game_judge_tenants(GameSim *sim, Tower *tower);
+
+/* Every-3-day pass: a content tenant eases a stressed same-type floor-mate
+ * (MainteT tenant pairing — breaks move-out cascades). */
+void game_tenant_pairing(GameSim *sim, Tower *tower);
 
 /* --- Events (EventT + FireT) --- */
 

@@ -739,6 +739,46 @@ static void test_retail_competition(void)
           "over-clustered shops earn a diluted share");
 }
 
+/* Tenant pairing: a content tenant eases a stressed same-type floor-mate. */
+static void test_tenant_pairing(void)
+{
+    printf("tenant pairing (MainteT):\n");
+    /* Build a controlled tower state directly — pairing only reads
+     * type/floor/state/stress, so we skip placement geometry. */
+    fresh();
+    tw.tenant_count = 0;
+    Tenant *ta = &tw.tenants[tw.tenant_count++];
+    *ta = (Tenant){0};
+    ta->type = ITEM_OFFICE; ta->floor = 1; ta->x = 179; ta->width = 6;
+    ta->state = TENANT_OCCUPIED; ta->stress = 0;               /* content */
+    Tenant *tb = &tw.tenants[tw.tenant_count++];
+    *tb = (Tenant){0};
+    tb->type = ITEM_OFFICE; tb->floor = 1; tb->x = 185; tb->width = 6;
+    tb->state = TENANT_STRESSED; tb->stress = 90; tb->complaints = 2;
+    game_tenant_pairing(&sim, &tw);
+    CHECK(tb->state == TENANT_OCCUPIED && tb->stress <= 50 && tb->complaints == 0,
+          "a content office stabilises a stressed same-floor office");
+
+    /* A stressed office on a DIFFERENT floor from the content one is not rescued. */
+    tb->state = TENANT_STRESSED; tb->stress = 90; tb->floor = 2;
+    game_tenant_pairing(&sim, &tw);
+    CHECK(tb->state == TENANT_STRESSED, "no content same-floor neighbour -> no rescue");
+}
+
+/* VIP visit gates star-4 / star-5 promotion (LevelUp 0xB92D). */
+static void test_vip_gate(void)
+{
+    printf("VIP star gate (LevelUp 0xB92D):\n");
+    fresh();
+    sim.promo.has_recycling = 1;
+    sim.promo.has_metro = 1;
+    sim.promo.hotel_quarters = 4;
+    sim.promo.vip_visited = 0;
+    CHECK(!game_check_promotion(&sim, &tw, 4), "no star-4 without a satisfied VIP");
+    sim.promo.vip_visited = 1;
+    CHECK(game_check_promotion(&sim, &tw, 4), "star-4 allowed once the VIP is satisfied");
+}
+
 int main(void)
 {
     test_stairs();
@@ -751,6 +791,8 @@ int main(void)
     test_patrons_and_staff();
     test_money();
     test_retail_competition();
+    test_tenant_pairing();
+    test_vip_gate();
     test_twr_import();
     test_twr_export();
     test_wedding();

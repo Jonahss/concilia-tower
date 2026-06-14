@@ -4987,6 +4987,18 @@ int main(int argc, char *argv[])
                 add_event_message(buf);
             }
 
+            /* VIP visit notifications (one-shot signal from the sim). The VIP
+             * is now a real star-promotion gate, so the player needs to see it. */
+            if (game.sim.vip_notice) {
+                if (game.sim.vip_notice == 1)
+                    add_event_message("A VIP is visiting the tower today!");
+                else if (game.sim.vip_notice == 2)
+                    add_event_message("The VIP left satisfied! (star promotion unlocked)");
+                else
+                    add_event_message("The VIP was unimpressed - improve your hotels.");
+                game.sim.vip_notice = 0;
+            }
+
             /* Commute feedback: units cut off from the entrance */
             if (game.sim.unreachable_tenants > prev_unreach) {
                 char buf[48];
