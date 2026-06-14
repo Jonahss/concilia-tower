@@ -103,6 +103,9 @@ typedef struct {
     uint8_t  walk_timer;    /* ticks left on the walking leg */
     uint8_t  stay;          /* visit countdown at destination (patrons/staff,
                              * 8-tick units); 0 = resident/commuter */
+    uint8_t  entry_floor;   /* floor this visitor leaves through (ground for
+                             * street patrons/commuters; the metro floor for
+                             * metro visitors). Set at spawn. */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
     int      wait_start;    /* sim frame when the queue was joined (+0xA) */
     int      x;             /* walking-origin x (home tenant x, GetPersonX) */

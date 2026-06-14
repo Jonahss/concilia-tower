@@ -899,6 +899,7 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
     p->cur_floor = (uint8_t)from;
     p->dest_floor = (uint8_t)to;
     p->going_home = (uint8_t)going_home;
+    p->entry_floor = GROUND_IDX;   /* street level by default; metro overrides */
     p->x = t->x;
     (void)tower;
     return slot + 1;
@@ -925,11 +926,67 @@ static int tenant_commuters(const Tenant *t)
     return n > 8 ? 8 : n;       /* cap per tenant to keep entity counts sane */
 }
 
+/* A commercial venue a visitor would come into the tower to patronise. */
+static int is_visit_venue(ItemType ty)
+{
+    return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD ||
+           ty == ITEM_CINEMA || ty == ITEM_PARTY_HALL;
+}
+
+/* True if a tenant is an occupied venue people can actually reach. */
+static int venue_reachable(const Tenant *t, const uint8_t *reach)
+{
+    if (t->state != TENANT_OCCUPIED || !is_visit_venue(t->type)) return 0;
+    int f = floor_to_index(t->floor);
+    return f >= 0 && f < TOWER_FLOOR_COUNT && reach[f];
+}
+
+/* Deterministically pick the seed-th reachable commercial venue (so metro
+ * visitors fan out across shops/restaurants/cinemas instead of mobbing one). */
+static Tenant *pick_visit_venue(Tower *tower, int seed, const uint8_t *reach)
+{
+    int n = 0;
+    for (int i = 0; i < tower->tenant_count; i++)
+        if (venue_reachable(&tower->tenants[i], reach)) n++;
+    if (!n) return NULL;
+    int pick = ((seed % n) + n) % n, k = 0;
+    for (int i = 0; i < tower->tenant_count; i++)
+        if (venue_reachable(&tower->tenants[i], reach) && k++ == pick)
+            return &tower->tenants[i];
+    return NULL;
+}
+
+/* The car-park entry floor a resident commuter can drive to, or -1. Parking is
+ * the original's elevator-bypass utility: rather than every worker funnelling
+ * through the single ground lobby, those with a car enter/leave at the parking
+ * level, splitting the crowd off the lobby/express crush. We use the lowest
+ * reachable occupied parking floor. */
+static int parking_entry_floor(Tower *tower, const uint8_t *reach)
+{
+    int best = -1, bestf = 9999;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_PARKING || t->state != TENANT_OCCUPIED) continue;
+        int f = floor_to_index(t->floor);
+        if (f < 0 || f >= TOWER_FLOOR_COUNT || !reach[f]) continue;
+        if (t->floor < bestf) { bestf = t->floor; best = f; }
+    }
+    return best;
+}
+
+/* How many visitors one metro pumps into the tower per time-of-day phase.
+ * The decomp's exact spawn curve lives in the undecoded high-offset UniPeple
+ * behaviour funcs; this is a tractable stand-in — enough to make the metro the
+ * tower's visible traffic source without flooding the entity pool. */
+#define METRO_VISITORS_PER_PHASE 8
+
 /* Phase transitions drive trips:
  *   MORNING: office workers arrive       EVENING: they go home
  *   EVENING: hotel guests check in       DAWN:    they check out */
-static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod)
+static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
+                        const uint8_t *reach_public)
 {
+    int park = parking_entry_floor(tower, reach_public);
     if ((uint8_t)tod != ps->cur_phase) {
         ps->cur_phase = (uint8_t)tod;
         memset(ps->spawned, 0, sizeof(ps->spawned));
@@ -988,11 +1045,47 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod)
             }
             continue;
         }
-        int sp = spawn_person(ps, tower, t, GROUND_IDX, fidx, 0);
+        /* Resident commuters with a car drive in via the parking level instead
+         * of the ground lobby — alternate arrivals from each unit split off to
+         * the car park, thinning the lobby/express crowd. Street patrons always
+         * arrive at ground. */
+        int entry = (inbound && park >= 0 && (ps->spawned[i] & 1))
+                        ? park : GROUND_IDX;
+        int sp = spawn_person(ps, tower, t, entry, fidx, 0);
         if (sp) {
+            ps->people[sp - 1].entry_floor = (uint8_t)entry;
             if (patron)
                 ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
             ps->spawned[i]++;
+        }
+    }
+
+    /* Metro: the tower's visitor source. Each reachable metro pumps outside
+     * visitors up to the commercial venues through the day; they patronise a
+     * shop/restaurant/cinema, then ride back down and leave through the metro.
+     * This is the bulk of a tower's foot traffic — without a metro, venues see
+     * only the trickle that walks in off the street (the GROUND patrons above). */
+    if (tod != TOD_NIGHT) {
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *m = &tower->tenants[i];
+            if (m->type != ITEM_METRO || m->state != TENANT_OCCUPIED) continue;
+            if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
+            if ((frame + i) % 6) continue;            /* stagger arrivals */
+            int mf = floor_to_index(m->floor);
+            if (mf < 0 || mf >= TOWER_FLOOR_COUNT || !reach_public[mf]) continue;
+            Tenant *v = pick_visit_venue(tower, frame + i, reach_public);
+            if (!v) continue;                          /* nowhere reachable yet */
+            int vf = floor_to_index(v->floor);
+            if (vf < 0 || vf >= TOWER_FLOOR_COUNT) continue;
+            /* home = the venue (its floor anchors the visit); enter & leave
+             * via the metro floor rather than the street. */
+            int sp = spawn_person(ps, tower, v, mf, vf, 0);
+            if (sp) {
+                Person *np = &ps->people[sp - 1];
+                np->stay = (uint8_t)(4 + (i * 3) % 10);
+                np->entry_floor = (uint8_t)mf;
+                ps->spawned[i]++;
+            }
         }
     }
 }
@@ -1002,9 +1095,9 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod)
 void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
                    const uint8_t *reach_public, const uint8_t *reach_service)
 {
-    (void)reach_public; (void)reach_service;
+    (void)reach_service;
 
-    spawn_phase(ps, tower, frame, tod);
+    spawn_phase(ps, tower, frame, tod, reach_public);
 
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
@@ -1055,7 +1148,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
                 int hf = ht ? floor_to_index(ht->floor) : -1;
                 p->going_home = 1;
                 p->dest_floor = (p->service && hf >= 0) ? (uint8_t)hf
-                                                        : GROUND_IDX;
+                                                        : p->entry_floor;
                 p->state = PERSON_PLANNING;
             }
             break;

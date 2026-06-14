@@ -191,6 +191,92 @@ static void test_commute_elevator(void)
     CHECK(gone, "workers went home in the evening and despawned");
 }
 
+/* Metro pumps outside visitors up to commercial venues (UniPeple traffic
+ * source); they enter/leave via the metro floor, not the street. */
+static void test_metro_visitors(void)
+{
+    printf("metro visitors (UniPeple traffic source):\n");
+    fresh();
+    for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t shop = place(ITEM_SHOP, 5, BX + 6);
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    CHECK(shop != 0, "shop placed");
+    force_occupied(shop);
+
+    /* Construct the metro directly on f2 — placement is basement-restricted,
+     * but the sim only needs floor/type/state to feed visitors. */
+    Tenant *m = &tw.tenants[tw.tenant_count++];
+    *m = (Tenant){0};
+    m->id = 0xF00; m->type = ITEM_METRO; m->floor = 2; m->x = BX;
+    m->width = 6; m->state = TENANT_OCCUPIED;
+    int mf = floor_to_index(2);
+
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);   /* metro/venue spawns gate on reach */
+
+    int visitors = 0;
+    for (int frame = 0; frame < 3000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+                      sim.reach_public, sim.reach_service);
+        visitors = 0;
+        for (int i = 0; i < sim.people.people_high; i++) {
+            Person *p = &sim.people.people[i];
+            if (p->home_tenant == shop && p->entry_floor == mf) visitors++;
+        }
+        if (visitors > 0) break;
+    }
+    CHECK(visitors > 0, "metro pumps visitors to the shop (entry via metro floor)");
+
+    /* night: the metro stops feeding the tower */
+    memset(&sim.people, 0, sizeof(sim.people));
+    people_rebuild_transport(&sim.people, &tw);
+    int night = 0;
+    for (int frame = 0; frame < 600; frame++)
+        people_update(&sim.people, &tw, frame, TOD_NIGHT,
+                      sim.reach_public, sim.reach_service);
+    for (int i = 0; i < sim.people.people_high; i++) {
+        Person *p = &sim.people.people[i];
+        if (p->home_tenant == shop && p->entry_floor == mf) night++;
+    }
+    CHECK(night == 0, "no metro visitors at night");
+}
+
+/* Parking is an elevator bypass: a tower's own commuters drive in via the
+ * parking level instead of all funnelling through the ground lobby. */
+static void test_parking_bypass(void)
+{
+    printf("parking bypass (commuters drive in via the car park):\n");
+    fresh();
+    for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    CHECK(office != 0, "office placed");
+    force_occupied(office);
+
+    /* parking on f2 (constructed directly — placement is basement-only) */
+    Tenant *pk = &tw.tenants[tw.tenant_count++];
+    *pk = (Tenant){0};
+    pk->id = 0xF01; pk->type = ITEM_PARKING; pk->floor = 2; pk->x = BX;
+    pk->width = 6; pk->state = TENANT_OCCUPIED;
+    int pf = floor_to_index(2);
+
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);
+
+    int via_park = 0;
+    for (int frame = 0; frame < 3000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING,
+                      sim.reach_public, sim.reach_service);
+        via_park = 0;
+        for (int i = 0; i < sim.people.people_high; i++) {
+            Person *p = &sim.people.people[i];
+            if (p->home_tenant == office && p->entry_floor == pf) via_park++;
+        }
+        if (via_park > 0) break;
+    }
+    CHECK(via_park > 0, "some office commuters arrive via the parking level");
+}
+
 static void test_walk_rules(void)
 {
     printf("walk budget (6 escalator / 3 with stairs):\n");
@@ -879,6 +965,8 @@ int main(void)
     test_elevators();
     test_housekeeping();
     test_commute_elevator();
+    test_metro_visitors();
+    test_parking_bypass();
     test_walk_rules();
     test_queue_and_stress();
     test_elevator_dialog();
