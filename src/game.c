@@ -457,16 +457,15 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 t->complaints++;
                 if (t->complaints >= 3) {
                     if (t->type == ITEM_OFFICE) {
-                        /* Offices don't abandon (MainteT OfficeStressCheck):
-                         * three strikes force them to top occupancy instead.
-                         * The original reads it as the firm finally committing
-                         * — overflowing its space rather than leaving. */
-                        t->cap_peak = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : 0x38;
+                        /* Offices have no abandon path in the original (MainteT
+                         * OfficeStressCheck): an unhappy office just rides it
+                         * out — the firm stays put. Being stressed RESETS its
+                         * growth timer (game_office_dynamics won't grow a
+                         * stressed office), so stress only ever *delays* growth;
+                         * it is never rewarded for it. So: clear and persist. */
                         t->stress = 0;
                         t->complaints = 0;
                         t->state = TENANT_OCCUPIED;
-                        printf("🏢 Office on F%d force-upgraded to full occupancy "
-                               "(3 strikes — offices don't leave)\n", t->floor);
                     } else {
                         t->state = TENANT_ABANDONED;
                         t->capacity = CAP_EMPTY;
