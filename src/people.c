@@ -926,6 +926,20 @@ static int tenant_commuters(const Tenant *t)
     return n > 8 ? 8 : n;       /* cap per tenant to keep entity counts sane */
 }
 
+/* Staggered-departure dice. The EXE doesn't hold a spawn-rate table: in the
+ * per-person AI (UniPeple sim funcs, e.g. office 0x2e92) each person, processed
+ * at 1/16 LOD, rolls rand()%12==0 inside a time-of-day window to decide whether
+ * to set off — so arrivals trickle in irregularly across the window instead of
+ * bursting all at once. We fold (frame, index) into a hash for the same
+ * irregular trickle, but reproducibly (the sim stays replayable). Returns true
+ * on a 1-in-n hit. */
+static int depart_roll(int frame, int idx, int n)
+{
+    uint32_t h = (uint32_t)frame * 2654435761u ^ (uint32_t)idx * 40503u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return (h % (uint32_t)n) == 0;
+}
+
 /* A commercial venue a visitor would come into the tower to patronise. */
 static int is_visit_venue(ItemType ty)
 {
@@ -1029,7 +1043,7 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                     (tod == TOD_DAWN || tod == TOD_MORNING);
         if (!inbound && !patron && !staff) continue;
         if (ps->spawned[i] >= tenant_commuters(t)) continue;
-        if ((frame + i) % 8) continue;
+        if (!depart_roll(frame, i, 8)) continue;   /* irregular trickle (EXE dice) */
         int fidx = floor_to_index(t->floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
 
@@ -1070,7 +1084,7 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             Tenant *m = &tower->tenants[i];
             if (m->type != ITEM_METRO || m->state != TENANT_OCCUPIED) continue;
             if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
-            if ((frame + i) % 6) continue;            /* stagger arrivals */
+            if (!depart_roll(frame, i, 6)) continue;  /* irregular trickle (EXE dice) */
             int mf = floor_to_index(m->floor);
             if (mf < 0 || mf >= TOWER_FLOOR_COUNT || !reach_public[mf]) continue;
             Tenant *v = pick_visit_venue(tower, frame + i, reach_public);
