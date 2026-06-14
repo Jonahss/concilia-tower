@@ -793,6 +793,13 @@ static void test_office_dynamics(void)
     CHECK(game_init_cap_peak(ITEM_SHOP, 5) == 0,
           "retail is not peak-managed");
 
+    /* income/occupancy scaling denominators (cap_base_peak) */
+    CHECK(cap_base_peak(ITEM_OFFICE) == CAP_PEAK_LOW &&
+          cap_base_peak(ITEM_HOTEL_SINGLE) == 0x10 &&
+          cap_base_peak(ITEM_HOTEL_SUITE) == 0x18 &&
+          cap_base_peak(ITEM_SHOP) == 0,
+          "scaling baselines: office 0x20, hotel 0x10, suite 0x18, retail none");
+
     /* Growth: a content office climbs LOW -> MID -> HIGH over passes. */
     fresh();
     tw.star_rating = 5;

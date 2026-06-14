@@ -88,6 +88,19 @@ static inline uint8_t cap_daily_floor(uint8_t peak) {
     return (peak <= CAP_PEAK_LOW) ? CAP_MIN : (uint8_t)(peak - CAP_STEP);
 }
 
+/* The baseline cap_peak a freshly-built unit of this type sits at — the
+ * denominator for scaling income/occupancy as cap_peak grows above it.
+ * 0 = type isn't occupancy-scaled. (Hotels: their star<4 floor; growth above
+ * it comes from the room upgrade.) */
+static inline uint8_t cap_base_peak(ItemType type) {
+    switch (type) {
+    case ITEM_OFFICE:                              return CAP_PEAK_LOW;  /* 0x20 */
+    case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN:  return 0x10;
+    case ITEM_HOTEL_SUITE:                         return 0x18;
+    default:                                        return 0;
+    }
+}
+
 /* Convert capacity byte to sprite frame index (0-based) */
 static inline int capacity_to_frame(uint8_t cap) {
     if (cap < CAP_MIN) return 0;

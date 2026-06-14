@@ -93,7 +93,10 @@ int game_calc_population(GameSim *sim, Tower *tower)
             if (t->state >= 1) {  /* At least MOVING_IN */
                 int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
                 /* Office headcount scales with established occupancy (cap_peak):
-                 * a thriving office (0x40) holds twice a new one's (0x20) staff. */
+                 * a thriving office (0x40) holds twice a new one's (0x20) staff.
+                 * Hotels are excluded — a room's guest count is fixed by room
+                 * type (1/2/3); their cap_peak growth shows up in revenue, not
+                 * heads (and 1-3 guests can't scale meaningfully in ints). */
                 if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
                     base_pop = base_pop * t->cap_peak / CAP_PEAK_LOW;
                 /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
@@ -407,13 +410,17 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                  * zone dilutes each one's revenue (see game_retail_income). */
                 base_income = game_retail_income(sim, t, base_income);
 
-                /* Office rent scales with established occupancy: a thriving,
-                 * grown office (cap_peak 0x40) holds twice the workers — and
-                 * pays twice the rent — of a freshly-built one (0x20). This is
-                 * what makes the gentrification/growth mechanic economically
-                 * real instead of a sprite-frame change. */
-                if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
-                    base_income = base_income * t->cap_peak / CAP_PEAK_LOW;
+                /* Rent scales with established occupancy (cap_peak): a thriving,
+                 * grown office (0x40) pays ~2× a fresh one (0x20); an upgraded
+                 * hotel/suite earns more than a new room. This is what makes the
+                 * growth / gentrification / room-upgrade mechanics economically
+                 * real instead of a sprite-frame change. (Decomp: TenantBehavior
+                 * keys hotel revenue off the capacity byte too.) */
+                {
+                    uint8_t cbase = cap_base_peak(t->type);
+                    if (cbase && t->cap_peak > cbase)
+                        base_income = base_income * t->cap_peak / cbase;
+                }
                 if (base_income > 0 && sim->ticks_per_quarter > 0) {
                     if (sim->tick % 60 == 0) {
                         int pay = base_income / (sim->ticks_per_quarter / 60);
