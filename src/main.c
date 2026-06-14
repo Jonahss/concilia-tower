@@ -1152,7 +1152,24 @@ static void render_tower(void)
                     SDL_RenderDrawLine(game.renderer, tx, mid_y, tx + tw, mid_y);
                 }
             }
-            
+
+            /* Burned-out cell: lay the fire/destroyed rubble over the wreckage.
+             * Sampled by world position so adjacent burned cells form one
+             * continuous rubble field. Persists until the tenant is rebuilt. */
+            if (tenant->burned && game.fire_destroyed && game.fire_destroyed->texture) {
+                Sprite *rub = game.fire_destroyed;
+                int sx = (tenant->x * CELL_W) % rub->w;
+                int dx = tx, remaining = tw;
+                while (remaining > 0) {
+                    int seg = rub->w - sx;
+                    if (seg > remaining) seg = remaining;
+                    SDL_Rect src = { sx, 0, seg, rub->h };
+                    SDL_Rect dst = { dx, tenant_y, seg, rub->h };
+                    SDL_RenderCopy(game.renderer, rub->texture, &src, &dst);
+                    dx += seg; remaining -= seg; sx = 0;
+                }
+            }
+
             /* Tenant state visual overlay (not for transports — a shaft
              * has no vacancy/stress state to tint — nor the cathedral,
              * which is never rented) */
@@ -4859,7 +4876,9 @@ int main(int argc, char *argv[])
         game.sim.event.target_slot = TOWER_WIDTH / 2;
         game.sim.event.fire_left  = TOWER_WIDTH / 2 - 12;
         game.sim.event.fire_right = TOWER_WIDTH / 2 + 12;
-        game.sim.event.duration = game.sim.event.timer = 100000;
+        /* finite so it extinguishes and leaves rubble; CT_FIRE_TICKS overrides */
+        game.sim.event.duration = game.sim.event.timer =
+            getenv("CT_FIRE_TICKS") ? atoi(getenv("CT_FIRE_TICKS")) : 250;
     }
     if (getenv("CT_BOMB")) {           /* demo: force a bomb threat (arg = floor) */
         game.sim.event.active = 1;
