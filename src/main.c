@@ -1092,16 +1092,32 @@ static void render_tower(void)
                  * capacity_to_frame gives 0-6, but sprites have varying
                  * frame counts (office=4, hotel=9, restaurant=4, etc).
                  * Scale proportionally so cap 0x40 always maps to last frame. */
+                /* Restaurants and fast food reserve their LAST frame for the
+                 * shuttered-for-the-night storefront, driven by opening hours —
+                 * NOT crowd. Without this a packed diner maps to the last frame
+                 * and renders as closed. Crowd therefore spans only the frames
+                 * before the closed one; off-hours forces the closed frame.
+                 * (Matches OpenSkyscraper Restaurant/FastFood: index=3 when
+                 * closed, else min(ceil(people/5),2) → frames 0-2.) */
+                int retail_closes = (nframes >= 2 &&
+                    (tenant->type == ITEM_RESTAURANT ||
+                     tenant->type == ITEM_FAST_FOOD));
+                int closed = retail_closes &&
+                    !TENANT_ACTIVE_TIMES[tenant->type][game.sim.time_of_day];
+                int crowd_frames = retail_closes ? nframes - 1 : nframes;
+
                 int frame_idx;
-                if (tenant->capacity <= CAP_EMPTY) {
+                if (closed) {
+                    frame_idx = nframes - 1;          /* shuttered storefront */
+                } else if (tenant->capacity <= CAP_EMPTY) {
                     frame_idx = 0;
                 } else {
-                    /* Proportional mapping: cap range [0x10..0x40] → [0..nframes-1] */
+                    /* Proportional mapping: cap [0x10..0x40] → [0..crowd_frames-1] */
                     int cap_range = CAP_MAX - CAP_MIN;  /* 0x30 = 48 */
                     int cap_pos = tenant->capacity - CAP_MIN;
                     if (cap_pos < 0) cap_pos = 0;
                     if (cap_pos > cap_range) cap_pos = cap_range;
-                    frame_idx = (cap_pos * (nframes - 1)) / cap_range;
+                    frame_idx = (cap_pos * (crowd_frames - 1)) / cap_range;
                 }
                 if (frame_idx >= nframes) frame_idx = nframes - 1;
                 if (frame_idx < 0) frame_idx = 0;
@@ -4889,6 +4905,19 @@ int main(int argc, char *argv[])
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
             game_update(&game.sim, &game.tower);
+
+            /* Demo: pin the clock so retail open/closed frames can be captured
+             * (the sim re-derives time_of_day from hour each tick, so override
+             * after the update to freeze it). */
+            if (getenv("CT_HOUR")) {
+                int h = atoi(getenv("CT_HOUR"));
+                game.sim.hour = h;
+                game.sim.time_of_day =
+                    (h >= 5  && h < 7)  ? TOD_DAWN :
+                    (h >= 7  && h < 12) ? TOD_MORNING :
+                    (h >= 12 && h < 17) ? TOD_AFTERNOON :
+                    (h >= 17 && h < 21) ? TOD_EVENING : TOD_NIGHT;
+            }
 
             /* Disaster events: announce onset and resolution in the feed.
              * On the falling edge the sim leaves caught/damage_cost intact
