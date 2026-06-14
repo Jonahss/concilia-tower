@@ -342,6 +342,12 @@ typedef struct {
     long          expenses_this_quarter;
     long          total_income;
     long          total_expenses;
+    /* Per-day rollup (the 4 quarters of a day, for daily stats) */
+    long          day_income;        /* accumulating across today's quarters */
+    long          day_expenses;
+    long          last_day_income;   /* the previous full day's totals */
+    long          last_day_expenses;
+    int           last_day_num;      /* which day last_day_* summarizes (0 = none yet) */
     
     /* Stats */
     int           max_population;   /* Peak population reached */

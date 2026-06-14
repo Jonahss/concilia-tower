@@ -1460,6 +1460,31 @@ static void stats_window_origin(int *x, int *y)
     *y = 64;
 }
 
+/* Per-day rollup — the four quarters of a day aggregated into daily totals,
+ * shown at the bottom of the Analytics window (works even before the
+ * per-quarter graphs have enough samples). */
+static void render_daily_rollup(int gx, int gy)
+{
+    char line[96];
+    long today_net = game.sim.day_income - game.sim.day_expenses;
+    snprintf(line, sizeof(line), "Today (Q%d/4):  in $%ld  out $%ld  net %s$%ld",
+             game.sim.quarter + 1, (long)game.sim.day_income, (long)game.sim.day_expenses,
+             today_net < 0 ? "-" : "+", labs(today_net));
+    stats_label(gx, gy, line, (SDL_Color){ 0, 0, 0, 255 });
+    gy += 16;
+    if (game.sim.last_day_num > 0) {
+        long y_net = game.sim.last_day_income - game.sim.last_day_expenses;
+        snprintf(line, sizeof(line), "Day %d total:  in $%ld  out $%ld  net %s$%ld",
+                 game.sim.last_day_num, (long)game.sim.last_day_income,
+                 (long)game.sim.last_day_expenses, y_net < 0 ? "-" : "+", labs(y_net));
+        stats_label(gx, gy, line, (SDL_Color){ 60, 60, 60, 255 });
+        gy += 16;
+    }
+    char foot[64];
+    snprintf(foot, sizeof(foot), "%d quarters logged (F3 to close)", game.sim.stats.count);
+    stats_label(gx, gy, foot, (SDL_Color){ 80, 80, 80, 255 });
+}
+
 static void render_stats_window(void)
 {
     if (!game.show_stats) return;
@@ -1478,8 +1503,9 @@ static void render_stats_window(void)
     int n = h->count > 120 ? 120 : h->count;
     if (n < 2) {
         stats_label(wx + 12, wy + WIN_TITLEBAR_H + 12,
-                    "Collecting data... (1 sample per quarter)",
+                    "Collecting per-quarter graph data...",
                     (SDL_Color){ 60, 60, 60, 255 });
+        render_daily_rollup(wx + 12, wy + WIN_TITLEBAR_H + 36);
         return;
     }
     int first = h->count - n;
@@ -1538,9 +1564,7 @@ static void render_stats_window(void)
         stats_plot(gx + 1, gy + 1, gw - 2, gh - 2, graphs[g].b, n, graphs[g].cb, lo, hi);
         gy += gh + 8;
     }
-    char foot[64];
-    snprintf(foot, sizeof(foot), "%d quarters of history (F3 to close)", h->count);
-    stats_label(gx, gy, foot, (SDL_Color){ 80, 80, 80, 255 });
+    render_daily_rollup(gx, gy);
 }
 
 /* ---------- Tuning window (F4): the master values, live ----------

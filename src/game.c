@@ -717,12 +717,21 @@ void game_update(GameSim *sim, Tower *tower)
                tower->money, tower->population,
                sim->people.population_now, people_avg_wait(&sim->people));
         
+        /* Roll this quarter into the running daily totals before clearing. */
+        sim->day_income   += sim->income_this_quarter;
+        sim->day_expenses += sim->expenses_this_quarter;
         sim->income_this_quarter = 0;
         sim->expenses_this_quarter = 0;
-        
+
         /* Day transition */
         if (sim->quarter >= QUARTER_COUNT) {
             sim->quarter = 0;
+            /* Close out the day: snapshot its totals, then reset the rollup. */
+            sim->last_day_num      = tower->day;
+            sim->last_day_income   = sim->day_income;
+            sim->last_day_expenses = sim->day_expenses;
+            sim->day_income = 0;
+            sim->day_expenses = 0;
             tower->day++;
             
             /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
