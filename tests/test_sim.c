@@ -701,6 +701,44 @@ static void test_wedding(void)
     CHECK(!sim.wedding.active, "below 15,000 population, no wedding");
 }
 
+/* Retail customer competition (JudgeT zone model): same-type retail clustered
+ * in a 15-floor zone split a fixed customer pool, so each earns less; a
+ * well-spread tower is unaffected; fast food is immune. */
+static void test_retail_competition(void)
+{
+    printf("retail zone competition (JudgeT seg_11a8):\n");
+    fresh();
+
+    Tenant rt = { 0 }; rt.type = ITEM_RESTAURANT; rt.floor = 5;  /* zone 0 */
+    int z0 = floor_to_zone(5);
+
+    sim.zones[z0].restaurant_count = ZONE_MAX_RESTAURANTS;   /* at the comfortable cap */
+    CHECK(game_retail_income(&sim, &rt, 1000) == 1000,
+          "restaurants at/under the zone cap earn full income");
+
+    sim.zones[z0].restaurant_count = 2 * ZONE_MAX_RESTAURANTS; /* double the cap */
+    CHECK(game_retail_income(&sim, &rt, 1000) == 500,
+          "doubling restaurants in a zone halves each one's income");
+
+    /* A lone restaurant in another zone is unaffected by the cluster. */
+    Tenant lone = { 0 }; lone.type = ITEM_RESTAURANT; lone.floor = 20; /* zone 1 */
+    sim.zones[floor_to_zone(20)].restaurant_count = 1;
+    CHECK(game_retail_income(&sim, &lone, 1000) == 1000,
+          "spreading restaurants across zones keeps full income");
+
+    /* Fast food never competes (JudgeT: fast food never goes unsatisfied). */
+    Tenant ff = { 0 }; ff.type = ITEM_FAST_FOOD; ff.floor = 5;
+    sim.zones[z0].fastfood_count = 9;
+    CHECK(game_retail_income(&sim, &ff, 1000) == 1000,
+          "fast food is immune to zone competition");
+
+    /* Shops compete too, on their own (higher) threshold. */
+    Tenant sh = { 0 }; sh.type = ITEM_SHOP; sh.floor = 5;
+    sim.zones[z0].shop_count = 2 * ZONE_MAX_SHOPS;
+    CHECK(game_retail_income(&sim, &sh, 1000) == 1000 * ZONE_MAX_SHOPS / (2 * ZONE_MAX_SHOPS),
+          "over-clustered shops earn a diluted share");
+}
+
 int main(void)
 {
     test_stairs();
@@ -712,6 +750,7 @@ int main(void)
     test_elevator_dialog();
     test_patrons_and_staff();
     test_money();
+    test_retail_competition();
     test_twr_import();
     test_twr_export();
     test_wedding();

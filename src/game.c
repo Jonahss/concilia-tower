@@ -375,6 +375,10 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 
                 /* Generate income (per tick, scaled) */
                 int base_income = (type_idx < ITEM_TYPE_COUNT) ? TENANT_INCOME[type_idx] : 0;
+
+                /* Retail customer competition: clustering same-type retail in a
+                 * zone dilutes each one's revenue (see game_retail_income). */
+                base_income = game_retail_income(sim, t, base_income);
                 if (base_income > 0 && sim->ticks_per_quarter > 0) {
                     if (sim->tick % 60 == 0) {
                         int pay = base_income / (sim->ticks_per_quarter / 60);
@@ -892,6 +896,28 @@ void game_calc_zones(GameSim *sim, Tower *tower)
         default: break;
         }
     }
+}
+
+/* Retail customer competition (JudgeT seg_11a8 zone model): same-type retail
+ * in a 15-floor zone share a limited customer pool, so clustering past the
+ * comfortable count dilutes each one's revenue — "variety thrives, clones
+ * starve." Returns base_income scaled by threshold/count when over-clustered;
+ * unchanged for a well-spread tower (count <= threshold). Fast food is exempt
+ * (JudgeT: fast food never goes unsatisfied). Relies on sim->zones, refreshed
+ * by game_calc_zones every 120 ticks. */
+int game_retail_income(const GameSim *sim, const Tenant *t, int base_income)
+{
+    if (base_income <= 0) return base_income;
+    int z = floor_to_zone(t->floor);
+    int cnt = 0, thresh = 0;
+    if (t->type == ITEM_RESTAURANT) {
+        cnt = sim->zones[z].restaurant_count; thresh = ZONE_MAX_RESTAURANTS;
+    } else if (t->type == ITEM_SHOP) {
+        cnt = sim->zones[z].shop_count;       thresh = ZONE_MAX_SHOPS;
+    }
+    if (thresh > 0 && cnt > thresh)
+        return base_income * thresh / cnt;
+    return base_income;
 }
 
 void game_judge_tenants(GameSim *sim, Tower *tower)

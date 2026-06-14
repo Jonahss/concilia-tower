@@ -434,6 +434,10 @@ const char *game_quarter_name(Quarter q);
 /* Recalculate zone competition data from all tenants */
 void game_calc_zones(GameSim *sim, Tower *tower);
 
+/* Scale a retail tenant's income by zone customer-competition (same-type
+ * clustering dilutes revenue). Relies on sim->zones being current. */
+int game_retail_income(const GameSim *sim, const Tenant *t, int base_income);
+
 /* Apply zone-based stress to commercial tenants.
  * Too many competitors in same zone = stress accumulation. */
 void game_judge_tenants(GameSim *sim, Tower *tower);
