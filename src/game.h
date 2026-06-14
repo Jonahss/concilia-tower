@@ -64,6 +64,30 @@ typedef enum {
 #define CAP_STEP    0x08   /* Step between frames */
 #define CAP_MAX     0x40   /* Fully occupied */
 
+/* Persistent occupancy tiers (cap_peak). The original packs a persistent
+ * tier + a daily oscillation into the one capacity byte: a low-tier office
+ * cycles 0x10..0x20, a mid-tier 0x28..0x30, a thriving one 0x38..0x40. The
+ * tier is the persistent "how successful is this office" level; the ±0x08
+ * within it is just the day/night fill. cap_peak stores that tier's top. */
+#define CAP_PEAK_LOW   0x20   /* new / modest office */
+#define CAP_PEAK_MID   0x30   /* established */
+#define CAP_PEAK_HIGH  0x40   /* thriving / forced-up / gentrified (0x38 if <4★) */
+
+/* The tier top for an arbitrary capacity byte — used to reconstruct cap_peak
+ * from imported .TDT towers, where the byte carries the combined value. */
+static inline uint8_t cap_tier_top(uint8_t cap) {
+    if (cap <= CAP_PEAK_LOW) return CAP_PEAK_LOW;
+    if (cap <= CAP_PEAK_MID) return CAP_PEAK_MID;
+    return CAP_PEAK_HIGH;
+}
+
+/* The daily floor the live capacity falls to beneath a given peak: low-tier
+ * offices bottom out at 0x10 (DayStartUpdate), higher tiers one step below
+ * their peak (0x28 under 0x30, 0x38 under 0x40) — matches TenantMake. */
+static inline uint8_t cap_daily_floor(uint8_t peak) {
+    return (peak <= CAP_PEAK_LOW) ? CAP_MIN : (uint8_t)(peak - CAP_STEP);
+}
+
 /* Convert capacity byte to sprite frame index (0-based) */
 static inline int capacity_to_frame(uint8_t cap) {
     if (cap < CAP_MIN) return 0;
@@ -452,6 +476,16 @@ void game_judge_tenants(GameSim *sim, Tower *tower);
 /* Every-3-day pass: a content tenant eases a stressed same-type floor-mate
  * (MainteT tenant pairing — breaks move-out cascades). */
 void game_tenant_pairing(GameSim *sim, Tower *tower);
+
+/* Every-3-day pass: persistent-occupancy dynamics keyed on cap_peak —
+ * thriving offices grow a tier, a thriving (top-tier) office spreads success
+ * to an adjacent same-floor office (gentrification, MainteT OfficeExpansion),
+ * and happy clean hotel/suite rooms upgrade their occupancy (TenantUpgrade). */
+void game_office_dynamics(GameSim *sim, Tower *tower);
+
+/* The persistent peak a freshly-built unit of this type starts at, by star
+ * level (TenantMake MakeTenant). 0 = not peak-managed. */
+uint8_t game_init_cap_peak(ItemType type, int star);
 
 /* --- Events (EventT + FireT) --- */
 

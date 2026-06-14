@@ -92,6 +92,10 @@ int game_calc_population(GameSim *sim, Tower *tower)
             /* Active — contribute population based on state */
             if (t->state >= 1) {  /* At least MOVING_IN */
                 int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
+                /* Office headcount scales with established occupancy (cap_peak):
+                 * a thriving office (0x40) holds twice a new one's (0x20) staff. */
+                if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
+                    base_pop = base_pop * t->cap_peak / CAP_PEAK_LOW;
                 /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
                 int effective_pop = base_pop;
                 if (t->state == 1) effective_pop = base_pop / 2;  /* moving in */
@@ -274,19 +278,37 @@ static void update_capacity(Tenant *t, TimeOfDay tod)
                        t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL);
     int is_night_type = (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
                          t->type == ITEM_HOTEL_SUITE);
-    
+
+    /* The live byte oscillates daily BENEATH the persistent tier ceiling
+     * (cap_peak), not up to a hard 0x40. Peak-managed types that arrive
+     * without a peak (e.g. an imported .TDT) get theirs reconstructed from
+     * the byte's current tier; everything else fills to 0x40 as before. */
+    uint8_t peak = t->cap_peak;
+    if (peak == 0) {
+        if (t->type == ITEM_OFFICE)
+            peak = cap_tier_top(t->capacity ? t->capacity : CAP_MIN);
+        else if (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN)
+            peak = 0x10;            /* star<4 baseline; upgrades up */
+        else if (t->type == ITEM_HOTEL_SUITE)
+            peak = 0x18;
+        t->cap_peak = peak;         /* stays 0 for unmanaged types */
+    }
+    uint8_t ceil = peak ? peak : CAP_MAX;
+    uint8_t floor = peak ? cap_daily_floor(peak) : CAP_MIN;
+
     if (is_day_type) {
         /* Day tenants: fill during morning, peak at afternoon, empty at evening */
         switch (tod) {
         case TOD_DAWN:
         case TOD_MORNING:
-            if (t->capacity < CAP_MAX) t->capacity += CAP_STEP;
+            if (t->capacity < ceil) t->capacity += CAP_STEP;
+            if (t->capacity > ceil) t->capacity = ceil;
             break;
         case TOD_AFTERNOON:
             /* Peak — hold at current level */
             break;
         case TOD_EVENING:
-            if (t->capacity > CAP_MIN) t->capacity -= CAP_STEP;
+            if (t->capacity > floor) t->capacity -= CAP_STEP;
             break;
         case TOD_NIGHT:
             t->capacity = CAP_EMPTY;
@@ -297,13 +319,14 @@ static void update_capacity(Tenant *t, TimeOfDay tod)
         /* Hotels: fill at evening, peak at night, empty at morning */
         switch (tod) {
         case TOD_EVENING:
-            if (t->capacity < CAP_MAX) t->capacity += CAP_STEP;
+            if (t->capacity < ceil) t->capacity += CAP_STEP;
+            if (t->capacity > ceil) t->capacity = ceil;
             break;
         case TOD_NIGHT:
             /* Peak — hold */
             break;
         case TOD_DAWN:
-            if (t->capacity > CAP_MIN) t->capacity -= CAP_STEP;
+            if (t->capacity > floor) t->capacity -= CAP_STEP;
             break;
         case TOD_MORNING:
         case TOD_AFTERNOON:
@@ -353,15 +376,17 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             } else {
                 t->state = TENANT_OCCUPIED;
                 t->capacity = CAP_MIN;
+                t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
             }
             break;
-            
+
         case TENANT_CONSTRUCTION:
             /* Under construction — decrement timer */
             t->construction--;
             if (t->construction <= 0) {
                 t->state = TENANT_MOVING_IN;
                 t->capacity = CAP_MIN;
+                t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
             }
             break;
             
@@ -381,6 +406,14 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 /* Retail customer competition: clustering same-type retail in a
                  * zone dilutes each one's revenue (see game_retail_income). */
                 base_income = game_retail_income(sim, t, base_income);
+
+                /* Office rent scales with established occupancy: a thriving,
+                 * grown office (cap_peak 0x40) holds twice the workers — and
+                 * pays twice the rent — of a freshly-built one (0x20). This is
+                 * what makes the gentrification/growth mechanic economically
+                 * real instead of a sprite-frame change. */
+                if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
+                    base_income = base_income * t->cap_peak / CAP_PEAK_LOW;
                 if (base_income > 0 && sim->ticks_per_quarter > 0) {
                     if (sim->tick % 60 == 0) {
                         int pay = base_income / (sim->ticks_per_quarter / 60);
@@ -423,10 +456,23 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (t->stress > 100) {
                 t->complaints++;
                 if (t->complaints >= 3) {
-                    t->state = TENANT_ABANDONED;
-                    t->capacity = CAP_EMPTY;
-                    printf("⚠ %s on F%d abandoned! (stress=%d, %d complaints)\n",
-                           tower_item_name(t->type), t->floor, t->stress, t->complaints);
+                    if (t->type == ITEM_OFFICE) {
+                        /* Offices don't abandon (MainteT OfficeStressCheck):
+                         * three strikes force them to top occupancy instead.
+                         * The original reads it as the firm finally committing
+                         * — overflowing its space rather than leaving. */
+                        t->cap_peak = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : 0x38;
+                        t->stress = 0;
+                        t->complaints = 0;
+                        t->state = TENANT_OCCUPIED;
+                        printf("🏢 Office on F%d force-upgraded to full occupancy "
+                               "(3 strikes — offices don't leave)\n", t->floor);
+                    } else {
+                        t->state = TENANT_ABANDONED;
+                        t->capacity = CAP_EMPTY;
+                        printf("⚠ %s on F%d abandoned! (stress=%d, %d complaints)\n",
+                               tower_item_name(t->type), t->floor, t->stress, t->complaints);
+                    }
                 } else {
                     t->stress = 60;  /* Reset after complaint */
                 }
@@ -737,8 +783,10 @@ void game_update(GameSim *sim, Tower *tower)
             tower->day++;
 
             /* Tenant pairing pass — MainteT runs upgrades/pairing every 3rd day. */
-            if (tower->day % 3 == 0)
+            if (tower->day % 3 == 0) {
                 game_tenant_pairing(sim, tower);
+                game_office_dynamics(sim, tower);
+            }
 
             /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
             if (tower->day % 9 == 3 && tower->star_rating >= 3) {
@@ -960,6 +1008,93 @@ void game_tenant_pairing(GameSim *sim, Tower *tower)
                 break;                      /* one rescue per content tenant */
             }
         }
+    }
+}
+
+/* Starting persistent peak for a freshly-built unit (TenantMake MakeTenant:
+ * sets the capacity byte by type and star level). Offices begin at the bottom
+ * tier and grow; hotels/suites begin at their star-scaled room occupancy. */
+uint8_t game_init_cap_peak(ItemType type, int star)
+{
+    switch (type) {
+    case ITEM_OFFICE:
+        return CAP_PEAK_LOW;              /* 0x20; thrives up toward 0x40 */
+    case ITEM_HOTEL_SINGLE:
+    case ITEM_HOTEL_TWIN:
+        return (star < 4) ? 0x10 : 0x18; /* MakeTenant single-room occupancy */
+    case ITEM_HOTEL_SUITE:
+        return (star < 4) ? 0x18 : 0x20; /* MakeTenant suite occupancy */
+    default:
+        return 0;                        /* retail / services / condo: unmanaged */
+    }
+}
+
+/* Persistent-occupancy dynamics, run on the same every-3rd-day MainteT cadence
+ * as tenant pairing. Three mechanics, all keyed on cap_peak (the capacity
+ * byte's persistent tier), all decoded from MainteT:
+ *
+ *   1. GROWTH — a content, well-served office (low stress) climbs one tier
+ *      (0x20→0x30→0x40). This is the engine that lets an office reach the top
+ *      tier; without it OfficeStressCheck's "capacity > 0x27" path is
+ *      unreachable. Inferred to seed the system the decomp's expansion math
+ *      assumes already-grown offices exist.
+ *   2. GENTRIFICATION (OfficeExpansion FUN_1130_01e2) — a top-tier office
+ *      (cap_peak 0x40) lifts an adjacent same-floor office that's still below
+ *      the top straight to the top tier. Success spreads along a floor.
+ *   3. ROOM UPGRADE (TenantUpgrade FUN_1130_09e5) — a happy, clean hotel
+ *      (cap_peak < 0x18) or suite (< 0x20) raises its occupancy one step.
+ *
+ * Star level caps the office top tier at 0x38 below 4★ (matching MakeTenant /
+ * OfficeStressCheck), 0x40 at 4★+. */
+void game_office_dynamics(GameSim *sim, Tower *tower)
+{
+    (void)sim;
+    uint8_t office_top = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : 0x38;
+
+    /* 1. Growth: content offices climb a tier. */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_OFFICE || t->state != TENANT_OCCUPIED) continue;
+        if (t->stress > 10) continue;                 /* must be content */
+        uint8_t next = (t->cap_peak < CAP_PEAK_MID)  ? CAP_PEAK_MID :
+                       (t->cap_peak < CAP_PEAK_HIGH) ? office_top : t->cap_peak;
+        if (next > t->cap_peak) {
+            t->cap_peak = next;
+            if (next >= CAP_PEAK_HIGH)
+                printf("📈 Office on F%d is thriving — grown to full occupancy\n",
+                       t->floor);
+        }
+    }
+
+    /* 2. Gentrification: a top-tier office lifts a same-floor neighbour. One
+     * lift per benefactor; reads only floor/type/peak, so adjacency is "same
+     * floor" (matches the zone-not-literal-adjacency reading we settled on
+     * for retail variety). */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_OFFICE || t->cap_peak < CAP_PEAK_HIGH) continue;
+        for (int j = 0; j < tower->tenant_count; j++) {
+            Tenant *n = &tower->tenants[j];
+            if (j == i || n->type != ITEM_OFFICE || n->floor != t->floor) continue;
+            if (n->state != TENANT_OCCUPIED) continue;
+            if (n->cap_peak < office_top) {
+                n->cap_peak = office_top;
+                printf("✨ Office on F%d gentrified by a thriving neighbour\n",
+                       n->floor);
+                break;
+            }
+        }
+    }
+
+    /* 3. Hotel / suite room upgrade for happy, clean rooms. */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->state != TENANT_OCCUPIED || t->stress > 10 || t->dirty) continue;
+        uint8_t cap = t->cap_peak;
+        if ((t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN) && cap < 0x18)
+            t->cap_peak = cap + CAP_STEP;
+        else if (t->type == ITEM_HOTEL_SUITE && cap < 0x20)
+            t->cap_peak = cap + CAP_STEP;
     }
 }
 

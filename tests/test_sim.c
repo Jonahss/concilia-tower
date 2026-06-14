@@ -779,6 +779,93 @@ static void test_vip_gate(void)
     CHECK(game_check_promotion(&sim, &tw, 4), "star-4 allowed once the VIP is satisfied");
 }
 
+/* Persistent occupancy: cap_peak growth, gentrification, hotel upgrade. */
+static void test_office_dynamics(void)
+{
+    printf("office dynamics (MainteT persistent occupancy):\n");
+
+    /* init peaks by type/star */
+    CHECK(game_init_cap_peak(ITEM_OFFICE, 1) == CAP_PEAK_LOW,
+          "a new office starts at the bottom tier (0x20)");
+    CHECK(game_init_cap_peak(ITEM_HOTEL_SINGLE, 1) == 0x10 &&
+          game_init_cap_peak(ITEM_HOTEL_SUITE, 5) == 0x20,
+          "hotel/suite peaks scale with star (TenantMake)");
+    CHECK(game_init_cap_peak(ITEM_SHOP, 5) == 0,
+          "retail is not peak-managed");
+
+    /* Growth: a content office climbs LOW -> MID -> HIGH over passes. */
+    fresh();
+    tw.star_rating = 5;
+    tw.tenant_count = 0;
+    Tenant *o = &tw.tenants[tw.tenant_count++];
+    *o = (Tenant){0};
+    o->type = ITEM_OFFICE; o->floor = 1; o->state = TENANT_OCCUPIED;
+    o->stress = 0; o->cap_peak = CAP_PEAK_LOW;
+    game_office_dynamics(&sim, &tw);
+    CHECK(o->cap_peak == CAP_PEAK_MID, "content office grows LOW -> MID");
+    game_office_dynamics(&sim, &tw);
+    CHECK(o->cap_peak == CAP_PEAK_HIGH, "content office grows MID -> HIGH (5 star)");
+
+    /* A stressed office does not grow. */
+    Tenant *s = &tw.tenants[tw.tenant_count++];
+    *s = (Tenant){0};
+    s->type = ITEM_OFFICE; s->floor = 2; s->state = TENANT_OCCUPIED;
+    s->stress = 90; s->cap_peak = CAP_PEAK_LOW;
+    game_office_dynamics(&sim, &tw);
+    CHECK(s->cap_peak == CAP_PEAK_LOW, "a stressed office does not grow");
+
+    /* Gentrification: a top-tier office lifts a same-floor neighbour. */
+    fresh();
+    tw.star_rating = 5;
+    tw.tenant_count = 0;
+    Tenant *hi = &tw.tenants[tw.tenant_count++];
+    *hi = (Tenant){0};
+    hi->type = ITEM_OFFICE; hi->floor = 3; hi->state = TENANT_OCCUPIED;
+    hi->stress = 0; hi->cap_peak = CAP_PEAK_HIGH;
+    Tenant *lo = &tw.tenants[tw.tenant_count++];
+    *lo = (Tenant){0};
+    lo->type = ITEM_OFFICE; lo->floor = 3; lo->state = TENANT_OCCUPIED;
+    lo->stress = 50; lo->cap_peak = CAP_PEAK_LOW;   /* stressed-ish, won't grow on its own */
+    game_office_dynamics(&sim, &tw);
+    CHECK(lo->cap_peak == CAP_PEAK_HIGH,
+          "a thriving office gentrifies a same-floor neighbour");
+
+    /* An office on a DIFFERENT floor is not gentrified. */
+    fresh();
+    tw.star_rating = 5;
+    tw.tenant_count = 0;
+    Tenant *h2 = &tw.tenants[tw.tenant_count++];
+    *h2 = (Tenant){0};
+    h2->type = ITEM_OFFICE; h2->floor = 4; h2->state = TENANT_OCCUPIED;
+    h2->cap_peak = CAP_PEAK_HIGH;
+    Tenant *far = &tw.tenants[tw.tenant_count++];
+    *far = (Tenant){0};
+    far->type = ITEM_OFFICE; far->floor = 9; far->state = TENANT_OCCUPIED;
+    far->stress = 50; far->cap_peak = CAP_PEAK_LOW;
+    game_office_dynamics(&sim, &tw);
+    CHECK(far->cap_peak == CAP_PEAK_LOW, "no same-floor benefactor -> no gentrification");
+
+    /* Hotel room upgrade: happy, clean room raises occupancy a step. */
+    fresh();
+    tw.tenant_count = 0;
+    Tenant *ht = &tw.tenants[tw.tenant_count++];
+    *ht = (Tenant){0};
+    ht->type = ITEM_HOTEL_SINGLE; ht->floor = 5; ht->state = TENANT_OCCUPIED;
+    ht->stress = 0; ht->dirty = 0; ht->cap_peak = 0x10;
+    game_office_dynamics(&sim, &tw);
+    CHECK(ht->cap_peak == 0x18, "a happy clean hotel room upgrades 0x10 -> 0x18");
+    game_office_dynamics(&sim, &tw);
+    CHECK(ht->cap_peak == 0x18, "hotel single caps at 0x18");
+
+    /* A dirty room does not upgrade. */
+    Tenant *dr = &tw.tenants[tw.tenant_count++];
+    *dr = (Tenant){0};
+    dr->type = ITEM_HOTEL_SINGLE; dr->floor = 6; dr->state = TENANT_OCCUPIED;
+    dr->stress = 0; dr->dirty = 1; dr->cap_peak = 0x10;
+    game_office_dynamics(&sim, &tw);
+    CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
+}
+
 int main(void)
 {
     test_stairs();
@@ -792,6 +879,7 @@ int main(void)
     test_money();
     test_retail_competition();
     test_tenant_pairing();
+    test_office_dynamics();
     test_vip_gate();
     test_twr_import();
     test_twr_export();

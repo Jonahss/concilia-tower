@@ -199,11 +199,22 @@ typedef struct {
     int      width;        /* Width in cells */
     int      height;       /* Height in floors */
     uint8_t  state;        /* Lifecycle state (TenantState enum) */
-    uint8_t  capacity;     /* Animation state byte — drives sprite frame selection.
-                            * From TenantMake: NOT a people count!
+    uint8_t  capacity;     /* LIVE capacity byte — drives sprite frame selection.
+                            * From TenantMake: the byte packs a persistent tier
+                            * plus a daily oscillation. This field is the live,
+                            * time-of-day-modulated value; cap_peak below is the
+                            * persistent tier ceiling it oscillates beneath.
                             * Steps: 0x10→0x18→0x20→0x28→0x30→0x38→0x40
                             * Offices fill during day (ascending), empty at night.
                             * Hotels fill at night (reverse), empty during day. */
+    uint8_t  cap_peak;     /* PERSISTENT occupancy ceiling (the capacity byte's
+                            * tier top). Offices: 0x20 new → 0x30 → 0x40 thriving,
+                            * grown by MainteT when content, forced to top by the
+                            * 3-strike check, and spread to neighbours by office
+                            * gentrification. Hotels/suites: their max room
+                            * occupancy, raised by the happy-tenant upgrade.
+                            * 0 = not peak-managed (retail, services, condos).
+                            * Reconstructed from the live byte's tier on import. */
     int      construction; /* Construction ticks remaining (0 = built).
                             * From TenantMake: office=2, condo=3, restaurant=48,
                             * hotel=56, cathedral=240, etc. */
