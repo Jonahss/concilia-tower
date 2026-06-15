@@ -299,6 +299,8 @@ typedef struct {
     /* Build mode */
     ItemType        build_type;
     int             demolish_mode;   /* Bulldozer active: clicks remove facilities */
+    int             finger_mode;     /* Finger/pointer tool: clicks interact (open
+                                      * elevator dialog, etc.) instead of building */
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
     
@@ -2073,6 +2075,31 @@ static int elv_dialog_click(int mx, int my)
     return 1;   /* clicks inside the window never fall through */
 }
 
+/* Open the elevator dialog for the shaft under the current mouse cell, if any.
+ * Shared by the double-click path and the finger/pointer tool. Returns 1 if a
+ * dialog opened. btn_x/btn_y are the click's screen coords (dialog anchor). */
+static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
+{
+    int fidx = floor_to_index(game.mouse_floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
+        game.mouse_cell < 0 || game.mouse_cell >= TOWER_WIDTH ||
+        !item_is_elevator(game.tower.grid[fidx][game.mouse_cell].type))
+        return 0;
+    TowerCell *cell = &game.tower.grid[fidx][game.mouse_cell];
+    Tenant *t = tower_tenant(&game.tower, cell->tenant_id);
+    if (!t) return 0;
+    game.elv_open = 1;
+    game.elv_sx = t->x;
+    game.elv_stype = t->type;
+    game.elv_x = btn_x + 24;
+    game.elv_y = btn_y - 60;
+    if (game.elv_x + ELV_W > game.screen_w)
+        game.elv_x = game.screen_w - ELV_W - 8;
+    if (game.elv_y < 0) game.elv_y = 8;
+    game.dragging = 0;
+    return 1;
+}
+
 /* ---------- People layer: elevator cars + waiting queues ----------
  * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
  * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
@@ -3025,8 +3052,11 @@ static void render_toolbox(void)
          * (x=t*21, normal row y=0). */
         int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
         for (int t = 0; t < 3; t++) {
-            /* Bulldozer (t==0) draws pressed (row y=21) while demolish mode is on. */
-            int row_y = (t == 0 && game.demolish_mode) ? 21 : 0;
+            /* Bulldozer (t==0) draws pressed while demolishing; the finger tool
+             * (t==1) draws pressed while interact mode is on. */
+            int pressed = (t == 0 && game.demolish_mode) ||
+                          (t == 1 && game.finger_mode);
+            int row_y = pressed ? 21 : 0;
             SDL_Rect src = { t * 21, row_y, 21, 21 };
             SDL_Rect dst = { tx + t * 23, tools_y, 21, 21 };
             SDL_RenderCopy(game.renderer, game.ui_tools, &src, &dst);
@@ -3877,9 +3907,17 @@ static int toolbox_click(int mx, int my)
                 if (mx >= bxt && mx < bxt + 21) {
                     if (t == 0) {                 /* Bulldozer: toggle demolish mode */
                         game.demolish_mode = !game.demolish_mode;
-                        if (game.demolish_mode) game.tool_popup = -1;
+                        if (game.demolish_mode) { game.tool_popup = -1; game.finger_mode = 0; }
                         printf("Bulldozer %s\n", game.demolish_mode ? "ON" : "off");
-                    } else {                      /* Finger / inspector: not yet wired */
+                    } else if (t == 1) {          /* Finger/pointer: interact mode */
+                        game.finger_mode = !game.finger_mode;
+                        game.demolish_mode = 0;
+                        if (game.finger_mode) {
+                            game.build_type = ITEM_NONE;
+                            game.tool_popup = -1;
+                        }
+                        printf("Finger tool %s\n", game.finger_mode ? "ON" : "off");
+                    } else {                      /* Inspector: not yet wired */
                         game.demolish_mode = 0;
                     }
                     return 1;
@@ -3898,6 +3936,7 @@ static int toolbox_click(int mx, int my)
                 game.build_type = g->sub[j];
                 game.tool_popup = -1;
                 game.demolish_mode = 0;
+                game.finger_mode = 0;
                 printf("Build: %s\n", tower_item_name(game.build_type));
                 return 1;
             }
@@ -3917,6 +3956,7 @@ static int toolbox_click(int mx, int my)
             }
             game.build_type = tb->type;   /* primary (= sub[0] for a group) */
             game.demolish_mode = 0;
+            game.finger_mode = 0;
             printf("Build: %s\n", tower_item_name(game.build_type));
             return 1;
         }
@@ -4515,27 +4555,13 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
 
-            /* Double-click on a shaft opens the elevator dialog (ElvDlogT) */
-            if (ev->button.clicks >= 2) {
-                int fidx = floor_to_index(game.mouse_floor);
-                if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
-                    game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH &&
-                    item_is_elevator(game.tower.grid[fidx][game.mouse_cell].type)) {
-                    TowerCell *cell = &game.tower.grid[fidx][game.mouse_cell];
-                    Tenant *t = tower_tenant(&game.tower, cell->tenant_id);
-                    if (t) {
-                        game.elv_open = 1;
-                        game.elv_sx = t->x;
-                        game.elv_stype = t->type;
-                        game.elv_x = ev->button.x + 24;
-                        game.elv_y = ev->button.y - 60;
-                        if (game.elv_x + ELV_W > game.screen_w)
-                            game.elv_x = game.screen_w - ELV_W - 8;
-                        if (game.elv_y < 0) game.elv_y = 8;
-                        game.dragging = 0;
-                        break;
-                    }
-                }
+            /* Finger/pointer tool: a single click on a shaft opens its dialog
+             * (where cars are added). Double-click still works without the tool
+             * — handy since double-click can be flaky over VNC. */
+            if (game.finger_mode || ev->button.clicks >= 2) {
+                if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
+                    break;
+                if (game.finger_mode) break;   /* tool consumes the click */
             }
 
             /* Normal game click — anchor centered on the cursor, matching
