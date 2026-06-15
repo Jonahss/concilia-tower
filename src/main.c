@@ -383,6 +383,10 @@ typedef struct {
     int             cert_active;
     int             cert_star;            /* star level being celebrated (2..6) */
     int             cert_timer;           /* frames left before auto-dismiss */
+
+    /* Mouse cursors: arrow normally, crosshair while bulldozing. */
+    SDL_Cursor     *cursor_arrow;
+    SDL_Cursor     *cursor_demolish;
 } Game;
 
 static Game game;
@@ -557,10 +561,16 @@ static void screen_to_grid(int sx, int sy, int *floor, int *cell)
 {
     int world_x = sx + (int)game.cam_fx - game.screen_w / 2;
     int world_y = sy + (int)game.cam_fy - game.screen_h / 2;
-    
+
+    /* True floor-division by CELL_H. Plain integer division truncates toward
+     * zero, which picks the wrong floor (off by one) above ground where
+     * world_y is negative — that made the build ghost sit a cell below the
+     * cursor. */
+    int fdiv = (world_y >= 0) ? (world_y / CELL_H)
+                              : -(((-world_y) + CELL_H - 1) / CELL_H);
     *cell = world_x / CELL_W;
-    *floor = -(world_y / CELL_H);
-    
+    *floor = -fdiv;
+
     if (*cell < 0) *cell = 0;
     if (*cell >= TOWER_WIDTH) *cell = TOWER_WIDTH - 1;
 }
@@ -572,6 +582,29 @@ static void grid_to_screen(int floor, int cell, int *sx, int *sy)
     
     *sx = world_x - (int)game.cam_fx + game.screen_w / 2;
     *sy = world_y - (int)game.cam_fy + game.screen_h / 2;
+}
+
+/* Keep the camera within the world. cam_fy is the world-Y at screen center;
+ * larger = deeper (basements). Stop the view from running past the bottom of
+ * the deepest basement, or absurdly far above the build ceiling. */
+static void clamp_camera(void)
+{
+    float half = game.screen_h / 2.0f;
+    /* Bottom: B10's lower edge should sit no higher than the screen bottom. */
+    float bottom = (float)((-TOWER_MIN_FLOOR + 1) * CELL_H) - half;
+    /* Top: allow seeing up to the build ceiling plus a little sky. */
+    float top = (float)(-(TOWER_MAX_FLOOR + 4) * CELL_H) + half;
+    if (top > bottom) top = bottom;
+    if (game.cam_fy > bottom) game.cam_fy = bottom;
+    if (game.cam_fy < top)    game.cam_fy = top;
+
+    /* Horizontal: keep at least part of the tower's width on screen. */
+    float halfw = game.screen_w / 2.0f;
+    float right = (float)(TOWER_WIDTH * CELL_W) - halfw;
+    float left  = halfw;
+    if (left > right) left = right;
+    if (game.cam_fx > right) game.cam_fx = right;
+    if (game.cam_fx < left)  game.cam_fx = left;
 }
 
 /* ---------- HUD text rendering helpers ---------- */
@@ -3708,6 +3741,10 @@ static void render_event_alert(void)
 
 static void render(void)
 {
+    /* Cursor follows the active tool: crosshair while bulldozing, else arrow. */
+    SDL_Cursor *want = game.demolish_mode ? game.cursor_demolish : game.cursor_arrow;
+    if (want && SDL_GetCursor() != want) SDL_SetCursor(want);
+
     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
     SDL_RenderClear(game.renderer);
 
@@ -4673,7 +4710,14 @@ int main(int argc, char *argv[])
     
     /* Software renderer for VNC visibility */
     game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
-    
+
+    /* Replace the bare X-server root cursor with a proper arrow; the bulldozer
+     * gets a crosshair. (SimTower swaps the cursor per active tool.) */
+    game.cursor_arrow    = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+    game.cursor_demolish = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
+    SDL_ShowCursor(SDL_ENABLE);
+    if (game.cursor_arrow) SDL_SetCursor(game.cursor_arrow);
+
     /* Initialize SDL_ttf fonts */
     init_fonts();
     
@@ -5465,7 +5509,8 @@ int main(int argc, char *argv[])
                 /* announced once */
             }
         }
-        
+
+        clamp_camera();
         render();
         frame++;
         
