@@ -47,7 +47,8 @@
 /* Entrance decoration — red awning at ground level */
 #define SPR_ENTRANCE    0x83e9
 
-/* Office: 0x85A8-0x85AB — 288×24 (9 frames of 32px) */
+/* Office: 0x85A8 — 288×24 = 4 frames of 72px (Jonah's decode):
+ * 0 day, 1 night, 2 day-with-windows, 3 night-with-windows. */
 #define SPR_OFFICE_BASE 0x85a8
 
 /* Condo: 0x8628+ — 128×24 */
@@ -1175,6 +1176,16 @@ static void render_tower(void)
                         frame_idx = night ? 2 : 1;   /* guest in the room */
                     else
                         frame_idx = night ? 4 : 3;   /* clean, vacant */
+                } else if (tenant->type == ITEM_OFFICE && nframes >= 4) {
+                    /* Office sheet 0x85A8 = 4 frames (Jonah's decode): day,
+                     * night, day-with-windows, night-with-windows — a time-of-
+                     * day + window variant, NOT an occupancy ramp (the old
+                     * proportional map turned a busy office into night-windows).
+                     * Default to the windowed variant (the familiar early-game
+                     * look); window/no-window-as-variant is TBD. */
+                    int night = (game.sim.time_of_day == TOD_NIGHT ||
+                                 game.sim.time_of_day == TOD_EVENING);
+                    frame_idx = 2 + (night ? 1 : 0);
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (tenant->capacity <= CAP_EMPTY) {
