@@ -1099,37 +1099,32 @@ static void render_tower(void)
                 int cap_w = 56;
                 int lobby_pw = tenant->width * CELL_W;
 
-                /* Left end cap. The cap bitmap has its wall on the RIGHT, so the
-                 * right end (below) uses it as-is; the LEFT end must be MIRRORED,
-                 * otherwise both ends show a right-facing wall — the "mismatched
-                 * endcap" Jonah flagged. Flip horizontally; for a narrow lobby
-                 * take the wall (right) slice of the cap so it lands on the left. */
-                {
-                    int ew = cap_w;
-                    if (ew > lobby_pw) ew = lobby_pw;
-                    SDL_Rect src_ec = { base + 272 + (cap_w - ew), 0, ew, sheet->h };
-                    SDL_Rect dst_ec = { tx, ty, ew, CELL_H };
-                    SDL_RenderCopyEx(game.renderer, sheet->texture, &src_ec,
-                                     &dst_ec, 0, NULL, SDL_FLIP_HORIZONTAL);
-                }
-                /* Repeating interior */
-                int mid_start = cap_w;
-                int mid_end = lobby_pw - cap_w;
-                for (int mx = mid_start; mx < mid_end; mx += interior_w) {
-                    int mw = interior_w;
-                    if (mx + mw > mid_end) mw = mid_end - mx;
-                    int msx = tx + mx;
-                    if (msx + mw < 0 || msx > game.screen_w) continue;
-                    SDL_Rect src_mid = { base, 0, mw, sheet->h };
-                    SDL_Rect dst_mid = { msx, ty, mw, CELL_H };
-                    SDL_RenderCopy(game.renderer, sheet->texture, &src_mid, &dst_mid);
-                }
-                /* Right end cap */
-                if (lobby_pw > cap_w) {
-                    int rx = tx + lobby_pw - cap_w;
-                    SDL_Rect src_ec = { base + 272, 0, cap_w, sheet->h };
-                    SDL_Rect dst_ec = { rx, ty, cap_w, CELL_H };
-                    SDL_RenderCopy(game.renderer, sheet->texture, &src_ec, &dst_ec);
+                /* Faithful to the original (OpenSkyscraper loadLobbies): the
+                 * lobby tiles repeating [cap-pillar (56px) + body (256px)]
+                 * segments, the cap drawn AS-IS (it's a column separator, not a
+                 * mirrored building-edge wall). cap = chunk +272, body = chunk
+                 * +0. Tile from the left across the whole lobby width. */
+                int seg_w = cap_w + interior_w;          /* 56 + 256 = 312 */
+                for (int sxp = 0; sxp < lobby_pw; sxp += seg_w) {
+                    int cw = cap_w;
+                    if (sxp + cw > lobby_pw) cw = lobby_pw - sxp;
+                    if (cw > 0) {
+                        int csx = tx + sxp;
+                        if (!(csx + cw < 0 || csx > game.screen_w)) {
+                            SDL_Rect src_cap = { base + 272, 0, cw, sheet->h };
+                            SDL_Rect dst_cap = { csx, ty, cw, CELL_H };
+                            SDL_RenderCopy(game.renderer, sheet->texture, &src_cap, &dst_cap);
+                        }
+                    }
+                    int bxp = sxp + cap_w;
+                    if (bxp >= lobby_pw) continue;
+                    int bw = interior_w;
+                    if (bxp + bw > lobby_pw) bw = lobby_pw - bxp;
+                    int bsx = tx + bxp;
+                    if (bsx + bw < 0 || bsx > game.screen_w) continue;
+                    SDL_Rect src_body = { base, 0, bw, sheet->h };
+                    SDL_Rect dst_body = { bsx, ty, bw, CELL_H };
+                    SDL_RenderCopy(game.renderer, sheet->texture, &src_body, &dst_body);
                 }
                 continue;
             } else if (spr && frame_w_hint > 0) {

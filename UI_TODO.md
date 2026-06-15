@@ -71,6 +71,12 @@
 - [ ] **Mod menu / feature-flags system** — toggle intentional "Jonah-additions" (mods) separate from faithful behavior. First mod candidate: the floor auto-fill behavior (store as an intentional Jonah-addition flag). Faithful base stays clean.
 - [ ] **MOD: multi-tower gaps + bridges** — deliberate gaps in floors (separate towers). Tenants can't cross gaps. Gaps improve views/light → adjacent + edge units more desirable. No accidental holes (a bridging unit fills floor underneath; partial overhangs still disallowed). Later: bridges → upgradeable moving walkways favorable in routing.
 - [ ] **MOD: above-ground parking** — allow parking above ground (if not already), cheaper than underground.
+- [ ] **MOD: window washing** — install window-washing cranes on the roof; pay washers a quarterly fee; cranes animate up/down washing the tower's faces. Pairs with the views/windows/light-wells/bridges mod family (dirty windows → lower desirability?).
+
+## Sprite-state decode (Jonah decoding sheets, like he did for hotels)
+- [x] HOTEL single 0x84A9: door(0) + occupied/clean/dirty/roaches × day/night (frames 1–8). Wired `1e268da`.
+- [ ] OFFICE 0x85A8 (288×24, 9 frames of 32px): currently capacity-proportional GUESS. Sent Jonah the sheet to decode the real frame meanings (occupancy levels? day/night? vacant?).
+- [ ] CONDO, RESTAURANT/FAST FOOD (variant pairs: empty/busy/packed/closed), SHOP (3 fill frames × 11 variants): also currently guessed — decode when convenient.
 
 ## NOW
 - Posted status table to Jonah. Cranking Batch 1c top-down, starting with the placement/build-validation cluster (bulldozer over-greedy is the most destructive bug) + the stairs-reachability cluster (most impactful for gameplay).
