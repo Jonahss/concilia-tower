@@ -40,15 +40,16 @@
 
 ### Menu / toolbar / HUD
 - [x] **Sub-menu selection updates the selected-tile sprite** in the group button. `b17fd4a`
-- [ ] **Menu should match real gameplay screenshot** (Jonah sent one, msg 1516160505323192340): single play/pause button, correct sizing. NEED to download that att.
+- [x] **Single wide play/pause toggle** (was two buttons) — matches Jonah's reference shot. `bd79ebb`
 - [ ] **Top menu bar still not visible** — confirm not just a VNC crop; tie into Batch 3 (MENU_BAR_H=0).
 
 ### Minimap
 - [x] **Minimap legend obscures bottom floors** → moved to top (sky). `b17fd4a`
-- [ ] **Minimap hotel dirty rooms but clean main sprite** — BLOCKED on Jonah picking the dirty frame (1–8) from the dumped hotel sheet; then wire t->dirty → that frame in main.c:1156 frame selection.
+- [x] **Minimap hotel dirty rooms but clean main sprite** → hotel rooms now render by state (dirty frame shows). `1e268da`
 
 ### Visual / sprites
-- [ ] Lobby tileset mismatch: wrong endcap on the middle lobby segment. Verify endcap vs middle sprite mapping.
+- [x] **Lobby endcap** → now tiles cap+body segments like the original (OS loadLobbies). `5ab8401`
+- [x] **Office frames** → time-of-day + windowed variant (was capacity ramp). `14fdb7c`. OPEN: window-vs-no-window variant rule (a/b/c asked Jonah).
 
 ## Batch 2 — gating + modes
 - [ ] Item gating: HIDE locked items (not grey); toolbox physically shrinks/grows with stars (decomp seg_1050).

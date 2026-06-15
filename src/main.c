@@ -209,6 +209,10 @@
  * sheets 0x8668+v with three fill frames, used straight from the EXE. */
 #define SPR_RESTAURANT_V0     0x0020  /* ..0x0024, 5 variants */
 #define SPR_FASTFOOD_V0       0x0025  /* ..0x0029, 5 variants */
+#define SPR_CONDO_COMP        0x002A  /* 0x8628..0x862c joined = 5 frames of 128px:
+                                       * 0 occupied-day, 1 occupied-evening,
+                                       * 2 occupied-night, 3 for-sale-day,
+                                       * 4 for-sale-night (OS loadCondo). */
 
 /* ---------- Sprite mapping for item types ---------- */
 static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
@@ -217,7 +221,7 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     switch (type) {
     case ITEM_LOBBY:         *frame_w = 0;   return SPR_LOBBY_BOT0;
     case ITEM_OFFICE:        *frame_w = 72;  return SPR_OFFICE_BASE;
-    case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_BASE;
+    case ITEM_CONDO:         *frame_w = 128; return SPR_CONDO_COMP;
     case ITEM_HOTEL_SINGLE:  *frame_w = 32;  return SPR_HOTEL_S_COMP;
     case ITEM_HOTEL_TWIN:    *frame_w = 48;  return SPR_HOTEL_T_COMP;
     case ITEM_HOTEL_SUITE:   *frame_w = 80;  return SPR_HOTEL_SUITE_COMP;  /* 720/9=80 */
@@ -1186,6 +1190,17 @@ static void render_tower(void)
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
                     frame_idx = 2 + (night ? 1 : 0);
+                } else if (tenant->type == ITEM_CONDO && nframes >= 5) {
+                    /* Condo sheet (0x8628..0x862c) = occupied day/evening/night
+                     * (0/1/2) + For-Sale day/night (3/4) (Jonah's decode + OS
+                     * loadCondo). Sold once it has residents (reachable ->
+                     * population>0); unsold/unreachable shows the For Sale board. */
+                    TimeOfDay tod = game.sim.time_of_day;
+                    if (tenant->population > 0)
+                        frame_idx = (tod == TOD_NIGHT) ? 2 :
+                                    (tod == TOD_EVENING) ? 1 : 0;
+                    else
+                        frame_idx = (tod == TOD_NIGHT || tod == TOD_EVENING) ? 4 : 3;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (tenant->capacity <= CAP_EMPTY) {
@@ -4868,6 +4883,13 @@ int main(int argc, char *argv[])
             ok++; else fail++;
         /* Hotel suite: 0x8528 + 0x8529 */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8528, 0x8529, SPR_HOTEL_SUITE_COMP) == 0)
+            ok++; else fail++;
+        /* Condo: 5 frames 0x8628..0x862c joined (OS loadCondo) — chained through
+         * scratch IDs 0x00F4..0x00F6 into SPR_CONDO_COMP. */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x8628, 0x8629, 0x00F4) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00F4, 0x862A, 0x00F5) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00F5, 0x862B, 0x00F6) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00F6, 0x862C, SPR_CONDO_COMP) == 0)
             ok++; else fail++;
         /* Stairs: 0x8968 (top) + 0x89A8 (bottom) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8968, 0x89A8, SPR_STAIRS_COMP) == 0)
