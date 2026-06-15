@@ -2196,6 +2196,17 @@ static int elevator_drag_column(void)
     return game.drag_start_cell;
 }
 
+/* Build origin cell, centered on the cursor so the tile straddles the pointer
+ * instead of hanging entirely to its right. Clamped to the tower width. */
+static int build_origin_cell(int mouse_cell)
+{
+    int w = ITEM_WIDTH[game.build_type];
+    int c = mouse_cell - (w - 1) / 2;
+    if (c < 0) c = 0;
+    if (c + w > TOWER_WIDTH) c = TOWER_WIDTH - w;
+    return c;
+}
+
 static void render_build_ghost(void)
 {
     if (game.demolish_mode || game.build_type == ITEM_NONE) return;
@@ -2287,12 +2298,13 @@ static void render_build_ghost(void)
             }
         }
     } else {
-        /* Single-unit ghost at mouse position */
+        /* Single-unit ghost, centered on the cursor */
+        int oc = build_origin_cell(game.mouse_cell);
         int gx, gy;
-        grid_to_screen(game.mouse_floor, game.mouse_cell, &gx, &gy);
-        
-        int can = tower_can_place(&game.tower, game.build_type, 
-                                   game.mouse_floor, game.mouse_cell);
+        grid_to_screen(game.mouse_floor, oc, &gx, &gy);
+
+        int can = tower_can_place(&game.tower, game.build_type,
+                                   game.mouse_floor, oc);
         
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
         if (can) {
@@ -2494,8 +2506,8 @@ static void render_info_window(void)
             SDL_FreeSurface(ts);
         }
     } else if (game.ui_star[0] && game.ui_star[1]) {
-        int shown = game.tower.star_rating < 5 ? game.tower.star_rating + 1 : 5;
-        for (int i = 0; i < shown; i++) {
+        /* Always show all five slots: earned stars filled, the rest empty. */
+        for (int i = 0; i < 5; i++) {
             int filled = (i < game.tower.star_rating) ? 1 : 0;
             SDL_Rect src = { 0, 0, STAR_CELL_W, game.ui_star_h };
             SDL_Rect dst = { star_x + i * STAR_CELL_W, wy + 2,
@@ -2892,17 +2904,19 @@ static void draw_tool_icon(int bx, int by, int icon_idx, int selected)
     }
 }
 
-/* Small triangle in the lower-right corner marking a group (pull-down) button. */
+/* Solid triangle hugging the lower-right CORNER of a group (pull-down) button
+ * — the right angle sits in the corner (◢), so it points into the corner
+ * rather than up into the button face. */
 static void draw_pulldown_marker(int bx, int by)
 {
+    int x1 = bx + TOOL_BTN_SIZE - 2;   /* corner: right edge */
+    int y1 = by + TOOL_BTN_SIZE - 2;   /* corner: bottom edge */
+    int T  = 6;
     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
-    for (int k = 0; k < 5; k++) {
-        SDL_RenderDrawLine(game.renderer,
-                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3,
-                           bx + TOOL_BTN_SIZE - 2,     by + TOOL_BTN_SIZE - 3);
-        SDL_RenderDrawLine(game.renderer,
-                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3 - k,
-                           bx + TOOL_BTN_SIZE - 2 - k, by + TOOL_BTN_SIZE - 3);
+    /* Fill rows from the bottom up; each row up shrinks from the left, leaving
+     * a hypotenuse from (x1-T, y1) to (x1, y1-T) and a solid bottom-right. */
+    for (int k = 0; k <= T; k++) {
+        SDL_RenderDrawLine(game.renderer, x1 - (T - k), y1 - k, x1, y1 - k);
     }
 }
 
@@ -4485,10 +4499,11 @@ static void handle_event(SDL_Event *ev)
                 }
             }
 
-            /* Normal game click */
+            /* Normal game click — anchor centered on the cursor, matching
+             * the placement ghost. */
             if (game.build_type != ITEM_NONE) {
                 game.dragging = 1;
-                game.drag_start_cell = game.mouse_cell;
+                game.drag_start_cell = build_origin_cell(game.mouse_cell);
                 game.drag_start_floor = game.mouse_floor;
             }
         }
@@ -4523,7 +4538,9 @@ static void handle_event(SDL_Event *ev)
             }
             /* Stop building placement drag */
             if (game.dragging) {
-                if (game.drag_start_cell == game.mouse_cell &&
+                /* No-drag click: the centered origin under the cursor still
+                 * matches where the drag anchored. */
+                if (game.drag_start_cell == build_origin_cell(game.mouse_cell) &&
                     game.drag_start_floor == game.mouse_floor) {
                     /* Elevator click snaps to the shaft column, so clicking
                      * the cap arrows extends the shaft by one floor. */
