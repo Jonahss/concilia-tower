@@ -4505,9 +4505,11 @@ static void handle_event(SDL_Event *ev)
                     game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
                     uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
                     if (tid) {
-                        printf("Demolish: %s\n",
-                               tower_item_name(game.tower.grid[fidx][game.mouse_cell].type));
-                        tower_remove(&game.tower, tid);
+                        ItemType ty = game.tower.grid[fidx][game.mouse_cell].type;
+                        if (tower_remove(&game.tower, tid))
+                            printf("Demolish: %s\n", tower_item_name(ty));
+                        else
+                            printf("Can't demolish %s\n", tower_item_name(ty));
                     }
                 }
                 break;

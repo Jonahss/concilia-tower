@@ -430,9 +430,18 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
     Tenant *t = tower_tenant(tower, tenant_id);
     if (!t) return 0;
 
+    /* The lobby is structural and permanent — the bulldozer can't remove it
+     * (matches the original: you can never demolish the ground lobby). */
+    if (t->type == ITEM_LOBBY) return 0;
+
     /* Value accounting: bulldozed construction is lost value */
     tower->built_value -= ITEM_COST[t->type];
     tower->lost_value += ITEM_COST[t->type];
+
+    /* Stairs/escalators are stored as an OVERLAY (flag bit 1), not as the cell
+     * type — they sit on top of the floor/tenant. Removing one must only drop
+     * the overlay, never wipe what's underneath. */
+    int is_transport = (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR);
 
     /* Clear grid cells on all floors */
     for (int f = t->floor; f < t->floor + t->height; f++) {
@@ -440,7 +449,22 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
         if (idx < 0 || idx >= TOWER_FLOOR_COUNT) continue;
         for (int cx = t->x; cx < t->x + t->width; cx++) {
             TowerCell *cell = &tower->grid[idx][cx];
-            memset(cell, 0, sizeof(*cell));
+            if (is_transport) {
+                cell->flags &= ~2;                /* drop overlay, keep cell */
+            } else if (t->type != ITEM_FLOOR && f >= 0) {
+                /* Bulldozing a facility removes the TENANT but leaves the build
+                 * floor behind (Jonah's ask: "delete tenants, not the floor"). */
+                cell->type = ITEM_FLOOR;
+                cell->tenant_id = 0;
+                cell->cell_index = 0;
+                cell->flags = (cell->flags & 2) | 1;  /* preserve any overlay */
+            } else {
+                /* Explicitly removing a FLOOR tile (or an underground cell) ->
+                 * back to bare dirt, but don't clobber a transport overlay. */
+                uint8_t keep_overlay = cell->flags & 2;
+                memset(cell, 0, sizeof(*cell));
+                cell->flags = keep_overlay;
+            }
         }
     }
     

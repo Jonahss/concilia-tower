@@ -1133,11 +1133,37 @@ static void test_floor_fill(void)
     CHECK(tw.grid[fidx][140].type == ITEM_NONE, "cells right of the tenants stay open");
 }
 
+static void test_bulldozer(void)
+{
+    printf("bulldozer keeps the build floor, spares the lobby:\n");
+    fresh();
+    tw.money = 100000000L;
+    place(ITEM_FLOOR, 0, 100);          /* ground support 100..162 */
+    uint16_t off = place(ITEM_OFFICE, 1, 105);   /* 105..113 */
+    int fidx = floor_to_index(1);
+
+    /* Bulldozing the office leaves the build floor behind, not bare dirt. */
+    CHECK(tower_remove(&tw, off) == 1, "office bulldozed");
+    int left_floor = 1;
+    for (int cx = 105; cx <= 113; cx++)
+        if (tw.grid[fidx][cx].type != ITEM_FLOOR) left_floor = 0;
+    CHECK(left_floor, "office cells revert to build floor, not dirt");
+    CHECK(tw.grid[fidx][105].tenant_id == 0, "vacated cells have no tenant");
+
+    /* The ground lobby is permanent — bulldozer refuses it. */
+    int lidx = floor_to_index(0);
+    uint16_t lob = tw.grid[lidx][BX].tenant_id;
+    CHECK(lob != 0, "lobby present at ground");
+    CHECK(tower_remove(&tw, lob) == 0, "bulldozer refuses to remove the lobby");
+    CHECK(tw.grid[lidx][BX].type == ITEM_LOBBY, "lobby still standing after bulldoze attempt");
+}
+
 int main(void)
 {
     test_stairs();
     test_flavor();
     test_floor_fill();
+    test_bulldozer();
     test_elevators();
     test_housekeeping();
     test_commute_elevator();
