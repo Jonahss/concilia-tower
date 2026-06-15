@@ -181,8 +181,27 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                 }
             }
         }
+    } else {
+        /* Stairs/escalators overlay a floor, so two of them can SHARE a single
+         * landing floor to form a chain — but they must not FULLY overlap
+         * another transport (share both of their floors). Reject only when both
+         * the lower and upper floors already carry a transport overlay. */
+        int lf = floor_to_index(floor);
+        int uf = floor_to_index(floor + height - 1);
+        int ov_lower = 0, ov_upper = 0;
+        if (lf >= 0 && lf < TOWER_FLOOR_COUNT)
+            for (int cx = x; cx < x + width; cx++)
+                if (tower->grid[lf][cx].flags & 2) ov_lower = 1;
+        if (uf >= 0 && uf < TOWER_FLOOR_COUNT)
+            for (int cx = x; cx < x + width; cx++)
+                if (tower->grid[uf][cx].flags & 2) ov_upper = 1;
+        if (ov_lower && ov_upper) {
+            printf("  [reject] %s at F%d x%d: overlaps an existing stair/escalator\n",
+                   tower_item_name(type), floor, x);
+            return 0;
+        }
     }
-    
+
     /* Support check:
      * - Elevators: none — a shaft is its own vertical structure, placeable on
      *   any floor inside the tower's extent (it connects floors, doesn't rest
@@ -203,42 +222,25 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         int lower_idx = floor_to_index(floor);
         int upper_idx = floor_to_index(floor + height - 1);
         
-        /* Check lower floor (or floor below it) for content */
+        /* Both connected floors must actually be BUILT (have content on the
+         * floor itself). The old code also accepted a floor one level
+         * below/above as a fallback — which let you drop a stair/escalator
+         * onto an empty dirt floor as long as some neighbouring level was
+         * built. That's the "escalator into dirt" bug; require real content
+         * on the two floors the transport connects. */
         if (lower_idx >= 0 && lower_idx < TOWER_FLOOR_COUNT) {
             for (int cx = 0; cx < TOWER_WIDTH && !has_lower; cx++) {
                 if (tower->grid[lower_idx][cx].type != ITEM_NONE)
                     has_lower = 1;
             }
         }
-        /* Also accept if floor below has content */
-        if (!has_lower) {
-            int below_idx = floor_to_index(floor - 1);
-            if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
-                for (int cx = 0; cx < TOWER_WIDTH && !has_lower; cx++) {
-                    if (tower->grid[below_idx][cx].type != ITEM_NONE)
-                        has_lower = 1;
-                }
-            }
-        }
-        
-        /* Check upper floor for content */
         if (upper_idx >= 0 && upper_idx < TOWER_FLOOR_COUNT) {
             for (int cx = 0; cx < TOWER_WIDTH && !has_upper; cx++) {
                 if (tower->grid[upper_idx][cx].type != ITEM_NONE)
                     has_upper = 1;
             }
         }
-        /* Also accept if floor above top has content */
-        if (!has_upper) {
-            int above_idx = floor_to_index(floor + height);
-            if (above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
-                for (int cx = 0; cx < TOWER_WIDTH && !has_upper; cx++) {
-                    if (tower->grid[above_idx][cx].type != ITEM_NONE)
-                        has_upper = 1;
-                }
-            }
-        }
-        
+
         if (!has_lower || !has_upper) {
             printf("  [reject] %s at F%d: needs content on both floors (lower=%d upper=%d)\n",
                    tower_item_name(type), floor, has_lower, has_upper);

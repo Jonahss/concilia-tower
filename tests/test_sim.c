@@ -54,6 +54,19 @@ static void test_stairs(void)
     CHECK(sim.reach_public[floor_to_index(3)], "floor 3 reachable via stair chain");
     CHECK(sim.unreachable_tenants == 0, "office connected");
     (void)office;
+
+    /* Into-dirt: a stair whose UPPER floor is empty dirt is rejected (floors 1
+     * and 2 are built; floor 5/6 are bare). The old below/above fallback used
+     * to let this through. */
+    CHECK(!tower_can_place(&tw, ITEM_STAIRS, 5, BX),
+          "stair into an empty upper floor rejected (no into-dirt)");
+    CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX + 30),
+          "stair between two built floors still allowed");
+
+    /* Overlap: a second stair fully on top of an existing one (same two
+     * floors, same columns) is rejected; sharing one landing (a chain) is ok. */
+    CHECK(!tower_can_place(&tw, ITEM_STAIRS, 1, BX + 20),
+          "stair fully overlapping another stair rejected");
 }
 
 static void test_elevators(void)
