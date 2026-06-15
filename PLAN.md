@@ -78,6 +78,7 @@ YootTower code map  ──→ Function names/structure       │
 - [ ] Sound effects (SoundT.c / seg 11c8)
 - [ ] VIP visits
 - [ ] Parking, metro, cathedral, medical
+- [x] Flavor polish DONE 2026-06-15: medical emergencies (CheckMedicalEmergency — only with a medical center, no penalty, red-cross marker + feed); Santa once-a-year holiday flyby (no calendar months in the EXE, so year-end); fire-glow palette flash (warm screen tint scaled to blaze size); star-up certificate (gold card built from the real star sprites; no cert bitmap in original); multi-story grand-lobby wait-forgiveness bonus (WaitT: 2/3-story lobby forgives 25/50 ticks of wait stress)
 
 ## Key Files
 

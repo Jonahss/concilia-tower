@@ -563,9 +563,14 @@ static void add_penalty(Person *p, int amount)
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
     Tenant *t = tower_tenant(tower, p->home_tenant);
+    /* The grand lobby forgives some waiting before it stings (WaitT). The
+     * forgiveness is what the tenant *feels*; the raw wait still feeds the
+     * elevator-performance average below. */
+    int felt = p->wait_accum - ps->lobby_bonus;
+    if (felt < 0) felt = 0;
     if (t) {
-        if (p->wait_accum >= TUNING.judge_stressed)      t->stress += 15;
-        else if (p->wait_accum >= TUNING.judge_moderate) t->stress += 5;
+        if (felt >= TUNING.judge_stressed)      t->stress += 15;
+        else if (felt >= TUNING.judge_moderate) t->stress += 5;
         if (t->stress > 100) t->stress = 100;
     }
     ps->wait_total += p->wait_accum;

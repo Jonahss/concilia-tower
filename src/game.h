@@ -314,6 +314,17 @@ typedef struct {
     int  y;         /* Pixel position (increases) */
 } SantaState;
 
+/* --- Medical emergencies (CheckMedicalEmergency, seg_11e8) ---
+ * A medical center occasionally handles an on-site emergency. Cosmetic/flavor
+ * (no penalty) — faithful to the EXE skeleton, which only fires it when a
+ * medical center exists. */
+typedef struct {
+    int active;
+    int floor;      /* floor of the emergency */
+    int timer;      /* ticks until paramedics clear the scene */
+    int notice;     /* one-shot signal for the UI feed */
+} MedicalState;
+
 /* --- Analytics: per-quarter time series for the stats window ---
  * One sample at the end of every quarter (4/day). 1024 samples = 256
  * game days of history in a ring buffer. */
@@ -408,6 +419,9 @@ typedef struct {
     
     /* Random events */
     EventState    event;
+
+    /* Medical emergencies (flavor) */
+    MedicalState  medical;
     
     /* VIP system (from VipT seg_1240) */
     int           vip_visiting;    /* VIP currently in tower */
@@ -519,6 +533,14 @@ void game_resolve_event(GameSim *sim, Tower *tower);
  * ransom:  bomb only — pay off the threat for a star-scaled fee; no blast. */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
+
+/* Medical emergencies (flavor — only with a medical center, no penalty) */
+void game_try_medical(GameSim *sim, Tower *tower);
+void game_update_medical(GameSim *sim);
+
+/* Stories of the ground lobby (0 if none, capped at 3) — drives the
+ * grand-lobby wait-forgiveness bonus. */
+int game_lobby_height(Tower *tower);
 
 /* --- Santa Easter egg (SantaT) --- */
 

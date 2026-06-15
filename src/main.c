@@ -377,6 +377,12 @@ typedef struct {
      * the event runs.) */
     int             disaster_modal;       /* 1 = modal capturing input */
     GameSpeed       disaster_saved_speed; /* speed to restore on dismiss */
+
+    /* Star-promotion certificate — a celebratory card shown when the tower
+     * earns a new star. Non-blocking; auto-dismisses or click to close. */
+    int             cert_active;
+    int             cert_star;            /* star level being celebrated (2..6) */
+    int             cert_timer;           /* frames left before auto-dismiss */
 } Game;
 
 static Game game;
@@ -3542,6 +3548,114 @@ static void disaster_modal_key(SDL_Keycode k)
     }
 }
 
+/* Draw text horizontally centered on cx. */
+static void draw_text_centered(const char *text, int cx, int y, SDL_Color color)
+{
+    int w, h;
+    SDL_Texture *t = render_text(text, color, &w, &h);
+    if (!t) return;
+    SDL_Rect dst = { cx - w / 2, y, w, h };
+    SDL_RenderCopy(game.renderer, t, NULL, &dst);
+    SDL_DestroyTexture(t);
+}
+
+/* Fire-glow: a warm, pulsing tint washed over the scene while a fire burns.
+ * (The decomp animates fire via palette entries 207/213; this is the SDL
+ * equivalent — a screen-wide glow that intensifies with the blaze's size.) */
+static void render_fire_glow(void)
+{
+    if (!game.sim.event.active || game.sim.event.type != EVENT_FIRE) return;
+    int spread = game.sim.event.fire_right - game.sim.event.fire_left + 1;
+    if (spread < 1) spread = 1;
+    int a = 12 + spread;                 /* bigger fire -> stronger glow */
+    if (a > 64) a = 64;
+    a += (game.sim.frame % 8 < 4) ? 0 : 10;   /* flicker */
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(game.renderer, 255, 90, 0, a);
+    SDL_Rect full = { 0, 0, game.screen_w, game.screen_h };
+    SDL_RenderFillRect(game.renderer, &full);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+}
+
+/* Medical emergency: a flashing red-cross marker bobbing over the affected
+ * floor while the paramedics (your medical center) are on scene. */
+static void render_medical(void)
+{
+    if (!game.sim.medical.active) return;
+    int lobby_sx, lobby_sy;
+    grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
+    int fy  = lobby_sy - game.sim.medical.floor * CELL_H;
+    int bob = (game.sim.frame % 24 < 12) ? 0 : 3;
+    int sz  = 18;
+    int bx  = lobby_sx + (TOWER_WIDTH / 2) * CELL_W;
+    int y   = fy - sz - 6 + bob;
+    if (game.sim.frame % 16 < 8) {       /* blink */
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_Rect box = { bx, y, sz, sz };
+        SDL_RenderFillRect(game.renderer, &box);
+        SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 255);
+        SDL_RenderDrawRect(game.renderer, &box);
+        SDL_SetRenderDrawColor(game.renderer, 220, 0, 0, 255);
+        SDL_Rect v = { bx + sz / 2 - 2, y + 3, 4, sz - 6 };
+        SDL_Rect h = { bx + 3, y + sz / 2 - 2, sz - 6, 4 };
+        SDL_RenderFillRect(game.renderer, &v);
+        SDL_RenderFillRect(game.renderer, &h);
+    }
+}
+
+/* Star-promotion certificate — a celebratory gold-framed card. SimTower has
+ * no certificate bitmap (promotions fire event animations 0xBD4+star), so
+ * this is a port-authored flourish built from the real star sprites. */
+#define CERT_W 400
+#define CERT_H 210
+static void render_certificate(void)
+{
+    if (!game.cert_active) return;
+    int wx = (game.screen_w - CERT_W) / 2;
+    int wy = (game.screen_h - CERT_H) / 2;
+    int cx = wx + CERT_W / 2;
+
+    /* parchment + gold double frame */
+    SDL_SetRenderDrawColor(game.renderer, 250, 246, 224, 255);
+    SDL_Rect body = { wx, wy, CERT_W, CERT_H };
+    SDL_RenderFillRect(game.renderer, &body);
+    for (int b = 0; b < 4; b++) {
+        SDL_SetRenderDrawColor(game.renderer, 176 + b * 16, 140 + b * 16, 36 + b * 14, 255);
+        SDL_Rect fr = { wx + 3 + b, wy + 3 + b, CERT_W - 6 - 2 * b, CERT_H - 6 - 2 * b };
+        SDL_RenderDrawRect(game.renderer, &fr);
+    }
+
+    SDL_Color ink  = { 90, 60, 10, 255 };
+    int is_tower = (game.cert_star >= 6);
+    draw_text_centered("Certificate of Achievement", cx, wy + 26, ink);
+
+    /* star row (or TOWER trophy text) */
+    int stars_y = wy + 70;
+    if (is_tower) {
+        SDL_Color gold = { 150, 100, 10, 255 };
+        draw_text_centered("T O W E R", cx, stars_y, gold);
+    } else if (game.ui_star[1] && game.ui_star_w > 0) {
+        int n = game.cert_star;
+        int sw = game.ui_star_w, sh = game.ui_star_h, gap = 6;
+        int total = n * sw + (n - 1) * gap;
+        int sx = cx - total / 2;
+        for (int i = 0; i < n; i++) {
+            SDL_Rect d = { sx + i * (sw + gap), stars_y, sw, sh };
+            SDL_RenderCopy(game.renderer, game.ui_star[1], NULL, &d);
+        }
+    }
+
+    char line[96];
+    if (is_tower)
+        snprintf(line, sizeof line, "Your skyscraper has earned TOWER status!");
+    else
+        snprintf(line, sizeof line, "Your tower is now a %d-star tower!", game.cert_star);
+    draw_text_centered(line, cx, wy + 120, ink);
+    draw_text_centered("Congratulations, architect.", cx, wy + 146, ink);
+    SDL_Color faint = { 150, 130, 90, 255 };
+    draw_text_centered("(click to dismiss)", cx, wy + CERT_H - 30, faint);
+}
+
 static void render_event_alert(void)
 {
     if (!game.sim.event.active) return;
@@ -3587,6 +3701,8 @@ static void render(void)
     render_tower();
     render_people();
     render_events();       /* fire/bomb effects ON TOP of the burning floors */
+    render_medical();      /* medical-emergency marker over the affected floor */
+    render_fire_glow();    /* warm tint washed over the world while it burns */
     render_crane();
     render_build_ghost();
     render_ui();
@@ -3595,6 +3711,7 @@ static void render(void)
     render_elv_dialog();
     render_event_alert();
     render_disaster_modal();   /* on top of everything — it's modal */
+    render_certificate();      /* star-promotion celebration card */
 
     SDL_RenderPresent(game.renderer);
 }
@@ -3986,6 +4103,13 @@ static void handle_event(SDL_Event *ev)
             disaster_modal_key(ev->key.keysym.sym);
             break;
         }
+        return;
+    }
+
+    /* The promotion certificate is non-blocking, but a click dismisses it
+     * (and is swallowed so it doesn't also build something). */
+    if (game.cert_active && ev->type == SDL_MOUSEBUTTONDOWN) {
+        game.cert_active = 0;
         return;
     }
 
@@ -5149,6 +5273,16 @@ int main(int argc, char *argv[])
         game.disaster_saved_speed = SPEED_NORMAL;
         game.sim.speed = SPEED_PAUSED;
     }
+    if (getenv("CT_CERT")) {           /* demo: show the star certificate */
+        game.cert_active = 1;
+        game.cert_star = atoi(getenv("CT_CERT"));
+        game.cert_timer = 100000;
+    }
+    if (getenv("CT_MEDICAL")) {        /* demo: force a medical emergency */
+        game.sim.medical.active = 1;
+        game.sim.medical.floor = atoi(getenv("CT_MEDICAL"));
+        game.sim.medical.timer = 100000;
+    }
     (void)show_underground;
     game.zoom = 1.0f;
     
@@ -5245,6 +5379,33 @@ int main(int argc, char *argv[])
                     add_event_message("The VIP was unimpressed - improve your hotels.");
                 game.sim.vip_notice = 0;
             }
+
+            /* Santa holiday flyby — announce on the rising edge. */
+            {
+                static int prev_santa = 0;
+                if (game.sim.santa.active && !prev_santa)
+                    add_event_message("Happy holidays! Santa flies over the tower!");
+                prev_santa = game.sim.santa.active;
+            }
+
+            /* Medical emergency (one-shot feed). */
+            if (game.sim.medical.notice) {
+                char buf[48];
+                snprintf(buf, sizeof buf, "Medical emergency on floor %d!",
+                         game.sim.medical.floor);
+                add_event_message(buf);
+                game.sim.medical.notice = 0;
+            }
+
+            /* Star-promotion certificate: consume the sim's pending flag. */
+            if (game.sim.pending_star_up) {
+                game.cert_active = 1;
+                game.cert_star   = game.sim.pending_star_up;
+                game.cert_timer  = 360;
+                game.sim.pending_star_up = 0;
+            }
+            if (game.cert_active && --game.cert_timer <= 0)
+                game.cert_active = 0;
 
             /* Commute feedback: units cut off from the entrance */
             if (game.sim.unreachable_tenants > prev_unreach) {

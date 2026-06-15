@@ -201,6 +201,11 @@ typedef struct {
     long     trips_failed;
     long     wait_total;        /* sum of banked waits (for avg) */
     long     wait_samples;
+
+    /* Grand-lobby prestige bonus (WaitT LobbyBonusAdjust, seg_11d8): a
+     * 2/3-story ground lobby forgives 25/50 ticks of waiting before it
+     * registers as frustration. Recomputed each tick from the lobby height. */
+    int      lobby_bonus;
 } PeopleSim;
 
 void people_init(PeopleSim *ps);

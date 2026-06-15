@@ -1057,9 +1057,67 @@ static void test_event_decisions(void)
           "bomb blast leaves rubble (burned)");
 }
 
+/* Flavor mechanics: grand-lobby height (drives the WaitT wait-forgiveness
+ * bonus) and medical emergencies (only with a medical center, no penalty). */
+static void test_flavor(void)
+{
+    printf("flavor: lobby height + medical gating:\n");
+
+    fresh();
+    CHECK(game_lobby_height(&tw) == 1, "default ground lobby -> height 1");
+    for (int f = 0; f <= 1; f++) {
+        Tenant *l = &tw.tenants[tw.tenant_count++];
+        *l = (Tenant){0};
+        l->type = ITEM_LOBBY; l->floor = f; l->state = TENANT_OCCUPIED;
+    }
+    CHECK(game_lobby_height(&tw) == 2, "lobby on floors 0-1 -> height 2");
+    Tenant *l2 = &tw.tenants[tw.tenant_count++];
+    *l2 = (Tenant){0}; l2->type = ITEM_LOBBY; l2->floor = 2; l2->state = TENANT_OCCUPIED;
+    CHECK(game_lobby_height(&tw) == 3, "lobby on floors 0-2 -> height 3");
+
+    /* a gap breaks the stack */
+    fresh();
+    Tenant *g0 = &tw.tenants[tw.tenant_count++];
+    *g0 = (Tenant){0}; g0->type = ITEM_LOBBY; g0->floor = 0; g0->state = TENANT_OCCUPIED;
+    Tenant *g2 = &tw.tenants[tw.tenant_count++];
+    *g2 = (Tenant){0}; g2->type = ITEM_LOBBY; g2->floor = 2; g2->state = TENANT_OCCUPIED;
+    CHECK(game_lobby_height(&tw) == 1, "lobby floors 0 and 2 (gap) -> height 1");
+
+    /* medical never fires without a medical center */
+    fresh();
+    sim.promo.has_medical = 0;
+    Tenant *o = &tw.tenants[tw.tenant_count++];
+    *o = (Tenant){0}; o->type = ITEM_OFFICE; o->floor = 6; o->state = TENANT_OCCUPIED;
+    int fired = 0;
+    for (int i = 0; i < 5000 && !fired; i++) {
+        game_try_medical(&sim, &tw);
+        if (sim.medical.active) fired = 1;
+    }
+    CHECK(!fired, "no medical center -> no medical emergency");
+
+    /* with a medical center it eventually fires, on an occupied floor */
+    fresh();
+    sim.promo.has_medical = 1;
+    Tenant *o2 = &tw.tenants[tw.tenant_count++];
+    *o2 = (Tenant){0}; o2->type = ITEM_OFFICE; o2->floor = 6; o2->state = TENANT_OCCUPIED;
+    int got = 0;
+    for (int i = 0; i < 20000 && !got; i++) {
+        game_try_medical(&sim, &tw);
+        if (sim.medical.active) got = 1;
+    }
+    CHECK(got, "medical center -> emergency eventually fires");
+    CHECK(sim.medical.floor == 6 && sim.medical.notice,
+          "emergency lands on the occupied floor and raises a notice");
+
+    sim.medical.timer = 1;
+    game_update_medical(&sim);
+    CHECK(!sim.medical.active, "medical emergency clears when its timer runs out");
+}
+
 int main(void)
 {
     test_stairs();
+    test_flavor();
     test_elevators();
     test_housekeeping();
     test_commute_elevator();

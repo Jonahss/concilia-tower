@@ -691,6 +691,13 @@ void game_update(GameSim *sim, Tower *tower)
         sim->people.sched_period = (uint8_t)(per < 0 ? 0 : per > 6 ? 6 : per);
     }
 
+    /* Grand-lobby prestige: a 2/3-story ground lobby forgives 25/50 ticks of
+     * waiting (WaitT LobbyBonusAdjust). Recompute before the people step. */
+    {
+        int h = game_lobby_height(tower);
+        sim->people.lobby_bonus = (h >= 3) ? 50 : (h == 2) ? 25 : 0;
+    }
+
     /* People + elevators run every tick — cars and queues are the game */
     people_update(&sim->people, tower, sim->frame, sim->time_of_day,
                   sim->reach_public, sim->reach_service);
@@ -717,11 +724,15 @@ void game_update(GameSim *sim, Tower *tower)
         
         /* Try starting a random event (fires, bombs) */
         game_try_event(sim, tower);
+
+        /* Or a medical emergency (only with a medical center, no disaster) */
+        game_try_medical(sim, tower);
     }
-    
+
     /* Update active events (fire spread, bomb countdown) */
     game_update_event(sim, tower);
-    
+    game_update_medical(sim);
+
     /* Update Santa position */
     game_update_santa(sim);
     
@@ -848,9 +859,11 @@ void game_update(GameSim *sim, Tower *tower)
                 sim->expenses_this_quarter += upkeep;
             }
             
-            /* Santa: launch on day 25 of each "year" (every 12 game-days)
-             * Day 25 ≈ Christmas in game time */
-            if (tower->day % 12 == 9 && !sim->santa.active) {
+            /* Santa: a once-a-year holiday flyby. The EXE has no calendar
+             * months (a "year" is just 4 quarters; SantaT's launch was never
+             * wired), so "Christmas" maps to the last day of each game year
+             * (year = 4 days; the year's final day is day % 4 == 0). */
+            if (tower->day > 0 && tower->day % 4 == 0 && !sim->santa.active) {
                 game_launch_santa(sim, 960);
             }
             
@@ -1174,6 +1187,61 @@ static int calc_lobby_maintenance(Tower *tower)
     }
 
     return lobby_segments * ITEM_WIDTH[ITEM_LOBBY] * per_cell;
+}
+
+/* Height of the ground lobby in stories: count consecutive floors from the
+ * lobby floor (0) upward that carry a LOBBY tenant. A grand lobby is 2-3
+ * stories tall and earns the WaitT wait-forgiveness bonus. Capped at 3. */
+int game_lobby_height(Tower *tower)
+{
+    int h = 0;
+    for (int f = TOWER_LOBBY_FLOOR; f <= TOWER_LOBBY_FLOOR + 2; f++) {
+        int on_this_floor = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            if (tower->tenants[i].type == ITEM_LOBBY &&
+                tower->tenants[i].floor == f) { on_this_floor = 1; break; }
+        }
+        if (!on_this_floor) break;
+        h++;
+    }
+    return h;
+}
+
+/* ================================================================
+ * Medical emergencies (CheckMedicalEmergency, seg_11e8)
+ * ================================================================
+ * Faithful to the EXE skeleton: only fires when a medical center exists and
+ * no disaster is running, at ~1% per evaluation. In the original it's purely
+ * cosmetic (activates an emergency animation + a sound, no penalty). Here it
+ * surfaces as a brief alert at a tenant floor — the medical center handles
+ * it, so it's flavor, not a threat. */
+void game_try_medical(GameSim *sim, Tower *tower)
+{
+    if (sim->medical.active || sim->event.active || sim->event.pending) return;
+    if (!sim->promo.has_medical) return;
+    if ((rand() % 100) != 0) return;
+
+    /* Pick a random occupied tenant floor. */
+    int occ_floors[128], n = 0;
+    for (int i = 0; i < tower->tenant_count && n < 128; i++) {
+        if (tower->tenants[i].state == TENANT_OCCUPIED &&
+            tower->tenants[i].floor > 0)
+            occ_floors[n++] = tower->tenants[i].floor;
+    }
+    if (n == 0) return;
+
+    sim->medical.active = 1;
+    sim->medical.floor  = occ_floors[rand() % n];
+    sim->medical.timer  = 240;   /* paramedics on scene for a few seconds */
+    sim->medical.notice = 1;     /* one-shot for the UI feed */
+}
+
+void game_update_medical(GameSim *sim)
+{
+    if (!sim->medical.active) return;
+    if (--sim->medical.timer <= 0) {
+        sim->medical.active = 0;
+    }
 }
 
 /* ================================================================
