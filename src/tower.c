@@ -184,13 +184,16 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     }
     
     /* Support check:
+     * - Elevators: none — a shaft is its own vertical structure, placeable on
+     *   any floor inside the tower's extent (it connects floors, doesn't rest
+     *   on one).
      * - Floor 0 (lobby level): always supported
      * - Above ground (floor > 0): must have support directly BELOW (floor - 1)
      * - Underground (floor < 0): must have support directly ABOVE (floor + height)
-     * - Stairs/escalators can bridge floors (exempt from strict support) 
+     * - Stairs/escalators can bridge floors (exempt from strict support)
      *   but still need SOME connection to existing structure */
-    if (floor == 0) {
-        /* Ground floor is always supported */
+    if (item_is_elevator(type) || floor == 0) {
+        /* Elevator shafts and the ground floor are always placeable */
     } else if (is_transport) {
         /* Transport (stairs/escalators) connect two floors — need content on BOTH.
          * Stairs/escalators span 2 floors (floor and floor+1).
