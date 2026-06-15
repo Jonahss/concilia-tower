@@ -1038,6 +1038,23 @@ static void test_event_decisions(void)
     }
     CHECK(got_pending, "try_event eventually proposes a disaster");
     CHECK(!activated_without_decision, "try_event never activates without a decision");
+
+    /* A detonating bomb leaves rubble (burned), same as fire. */
+    fresh();
+    sim.event = (EventState){0};
+    sim.event.type = EVENT_BOMB;
+    sim.event.active = 1;
+    sim.event.caught = 0;
+    sim.event.target_floor = 10;
+    sim.event.target_slot = 50;
+    sim.event.timer = 0;
+    Tenant *victim = &tw.tenants[tw.tenant_count++];
+    *victim = (Tenant){0};
+    victim->type = ITEM_OFFICE; victim->floor = 10; victim->x = 45; victim->width = 4;
+    victim->state = TENANT_OCCUPIED;
+    game_resolve_event(&sim, &tw);
+    CHECK(victim->state == TENANT_ABANDONED && victim->burned,
+          "bomb blast leaves rubble (burned)");
 }
 
 int main(void)

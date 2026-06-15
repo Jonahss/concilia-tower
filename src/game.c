@@ -1371,6 +1371,7 @@ void game_resolve_event(GameSim *sim, Tower *tower)
                 t->state = TENANT_ABANDONED;
                 t->capacity = CAP_EMPTY;
                 t->population = 0;
+                t->burned = 1;   /* leaves rubble until rebuilt, like fire */
                 destroyed++;
             }
         }

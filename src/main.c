@@ -3326,6 +3326,41 @@ static void render_events(void)
             SDL_Rect fire_rect = { fx, floor_y, fw, CELL_H };
             SDL_RenderFillRect(game.renderer, &fire_rect);
         }
+
+        /* Firefighting helicopter (sprite 0x8F6D) — air support for high-rise
+         * blazes that ground crews can't reach. The decomp is silent on the
+         * chopper (only that a fire dept extends the burn timer), so this is a
+         * port-authored cosmetic: it flies in from the right, hovers over the
+         * fire dropping water, and leaves when the blaze is out. */
+        Sprite *heli = game.fire_chopper;
+        if (heli && heli->texture && evt_floor >= 8) {
+            int fire_cx  = fx + fw / 2;
+            int elapsed  = game.sim.event.duration - game.sim.event.timer;
+            int start_x  = game.screen_w + heli->w;
+            int target_x = fire_cx - heli->w / 2;
+            /* ease in over the first ~90 ticks (×256 fixed point, no float) */
+            int prog = elapsed * 256 / 90;
+            if (prog > 256) prog = 256;
+            int hx  = start_x + (target_x - start_x) * prog / 256;
+            int bob = (game.sim.frame % 16 < 8) ? 0 : 2;
+            int hy  = floor_y - CELL_H - heli->h - 6 + bob;
+            SDL_Rect hd = { hx, hy, heli->w, heli->h };
+            SDL_RenderCopy(game.renderer, heli->texture, NULL, &hd);
+
+            /* Water drops once it's on station over the fire. */
+            if (prog >= 250) {
+                int span = floor_y - (hy + heli->h);
+                if (span < 1) span = 1;
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(game.renderer, 90, 160, 230, 200);
+                for (int d = 0; d < 3; d++) {
+                    int dy = (game.sim.frame * 5 + d * 17) % span;
+                    SDL_Rect drop = { fire_cx - 6 + d * 6, hy + heli->h + dy, 2, 6 };
+                    SDL_RenderFillRect(game.renderer, &drop);
+                }
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+            }
+        }
     } else if (game.sim.event.type == EVENT_BOMB) {
         int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
         Sprite *al = game.alert_terror;

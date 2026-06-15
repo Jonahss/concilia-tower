@@ -74,7 +74,7 @@ YootTower code map  ──→ Function names/structure       │
 ### Phase 6: Full Simulation
 - [ ] All tenant types (office, condo, hotel, restaurant, shop, cinema, etc.)
 - [ ] Hotel housekeeping (MainteT.c / seg 1130)
-- [~] Fire/terrorist events (FireT.c, EventT.c) — visual presentation DONE 2026-06-13 (real flame anim + alert icons + banner + feed); interactive decision modal DONE 2026-06-15 (bomb: deploy security vs. pay star-scaled ransom; fire: info-only acknowledge — faithful to EventT/FireT decomp; pauses sim, full modal input capture); chopper/rubble still open
+- [~] Fire/terrorist events (FireT.c, EventT.c) — visual presentation DONE 2026-06-13 (real flame anim + alert icons + banner + feed); interactive decision modal DONE 2026-06-15 (bomb: deploy security vs. pay star-scaled ransom; fire: info-only acknowledge — faithful to EventT/FireT decomp; pauses sim, full modal input capture). Aftermath DONE 2026-06-15 (firefighting chopper flies in + drops water on high-rise fires >=F8; fire AND bomb blasts leave rubble until rebuilt). Disaster arc complete bar sound.
 - [ ] Sound effects (SoundT.c / seg 11c8)
 - [ ] VIP visits
 - [ ] Parking, metro, cathedral, medical
