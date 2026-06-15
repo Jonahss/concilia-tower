@@ -2433,6 +2433,8 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define MAP_WIN_H   280       /* Map height (sky + ground) */
 
 #define TOOL_WIN_W  128       /* Faithful toolbox width (toolbox.rml: 128px = 4×32 icons) */
+#define SPEED_BTN_W 56        /* Single wide play/pause toggle */
+#define SPEED_BTN_H 26
 #define TOOL_WIN_H  264       /* Fits play/pause + tools + 5-row icon grid + cost */
 
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
@@ -3058,16 +3060,18 @@ static void render_toolbox(void)
      *   (Multi-speed 1x/2x/3x is via menu/keyboard, not the toolbar.) */
     int speed_y = wy + 8;
     {
-        int bw = 40, bh = 24, gap = 4;
-        int sx = wx + (TOOL_WIN_W - (2 * bw + gap)) / 2;
+        /* ONE wide play/pause toggle (faithful to the original toolbox — Jonah's
+         * reference shot shows a single button). While running it shows the
+         * PAUSE icon (click to pause); while paused it shows PLAY (click to
+         * resume). Fine speed (1x/2x/3x) lives in the Speed menu. */
+        int bw = SPEED_BTN_W, bh = SPEED_BTN_H;
+        int sx = wx + (TOOL_WIN_W - bw) / 2;
         int playing = (game.sim.speed > 0);
         if (game.ui_speed) {
-            SDL_Rect psrc = { 0,  playing ? 32 : 0, 64, 32 };  /* Play */
-            SDL_Rect pdst = { sx, speed_y, bw, bh };
-            SDL_RenderCopy(game.renderer, game.ui_speed, &psrc, &pdst);
-            SDL_Rect qsrc = { 64, playing ? 0 : 32, 64, 32 };  /* Pause */
-            SDL_Rect qdst = { sx + bw + gap, speed_y, bw, bh };
-            SDL_RenderCopy(game.renderer, game.ui_speed, &qsrc, &qdst);
+            int icon_x = playing ? 64 : 0;        /* pause : play (64px cells) */
+            SDL_Rect src = { icon_x, 0, 64, 32 };
+            SDL_Rect dst = { sx, speed_y, bw, bh };
+            SDL_RenderCopy(game.renderer, game.ui_speed, &src, &dst);
         }
     }
     
@@ -3953,20 +3957,14 @@ static int toolbox_click(int mx, int my)
     int wx = game.tool_x;
     int wy = game.tool_y + WIN_TITLEBAR_H;  /* Skip title bar */
     
-    /* Speed buttons — two only (Play / Pause), must match render_toolbox layout */
+    /* Single play/pause toggle — must match render_toolbox layout. */
     int speed_y = wy + 8;
     {
-        int bw = 40, bh = 24, gap = 4;
-        int sx = wx + (TOOL_WIN_W - (2 * bw + gap)) / 2;
-        if (my >= speed_y && my < speed_y + bh) {
-            if (mx >= sx && mx < sx + bw) {            /* Play */
-                if (game.sim.speed == 0) game.sim.speed = 1;
-                return 1;
-            }
-            if (mx >= sx + bw + gap && mx < sx + 2 * bw + gap) {  /* Pause */
-                game.sim.speed = 0;
-                return 1;
-            }
+        int bw = SPEED_BTN_W, bh = SPEED_BTN_H;
+        int sx = wx + (TOOL_WIN_W - bw) / 2;
+        if (my >= speed_y && my < speed_y + bh && mx >= sx && mx < sx + bw) {
+            game.sim.speed = (game.sim.speed > 0) ? SPEED_PAUSED : SPEED_NORMAL;
+            return 1;
         }
     }
 
