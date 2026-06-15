@@ -274,8 +274,18 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
  *   Midday:  offices peak, restaurants active
  *   Evening: offices emptying, hotels filling (capacity descending/ascending)
  * Step size = 0x08, range = 0x00 (empty) to 0x40 (full) */
-static void update_capacity(Tenant *t, TimeOfDay tod)
+static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
 {
+    /* A venue nobody can reach has no patrons — its occupancy byte must drain
+     * to empty, not follow the time-of-day fill curve. (Otherwise an isolated
+     * restaurant would animate to "packed" at dinnertime despite zero pop —
+     * the "full unreachable restaurant" Jonah spotted.) */
+    if (!reachable) {
+        if (t->capacity > CAP_STEP) t->capacity -= CAP_STEP;
+        else t->capacity = CAP_EMPTY;
+        return;
+    }
+
     int is_day_type = (t->type == ITEM_OFFICE || t->type == ITEM_SHOP ||
                        t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
                        t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL);
@@ -360,12 +370,13 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
          * rents, and a dirty hotel room can't take guests until cleaned. */
         int is_hotel = (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
                         t->type == ITEM_HOTEL_SUITE);
+        int reachable;
         {
             int fidx = floor_to_index(t->floor);
             int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
-            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
-                !(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]))
-                is_active = 0;
+            reachable = (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
+                         (is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]));
+            if (!reachable) is_active = 0;
             if (is_hotel && t->dirty) is_active = 0;
         }
         
@@ -401,7 +412,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         case TENANT_OCCUPIED:
             if (is_active) {
                 /* Advance capacity animation (3-phase daily cycle) */
-                update_capacity(t, sim->time_of_day);
+                update_capacity(t, sim->time_of_day, reachable);
                 
                 /* Generate income (per tick, scaled) */
                 int base_income = (type_idx < ITEM_TYPE_COUNT) ? TENANT_INCOME[type_idx] : 0;
@@ -452,7 +463,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             
         case TENANT_VACANT:
             /* Even when vacant, capacity can animate (hotels emptying, etc.) */
-            update_capacity(t, sim->time_of_day);
+            update_capacity(t, sim->time_of_day, reachable);
             if (is_active) {
                 t->state = TENANT_OCCUPIED;
             }

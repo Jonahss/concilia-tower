@@ -108,6 +108,24 @@ static void run_days(int days)
         game_update(&sim, &tw);
 }
 
+static void test_unreachable_empty(void)
+{
+    printf("unreachable venue drains to empty:\n");
+    fresh();
+    tw.money = 100000000L;
+    /* A disconnected stack: floors 1..5 above the lobby, no stairs/elevator. */
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t r = place(ITEM_RESTAURANT, 6, BX);   /* sits on floor 5's support */
+    Tenant *rt = tenant(r);
+    rt->state = TENANT_OCCUPIED;
+    rt->capacity = CAP_MAX;          /* pretend it filled up */
+    game_update_reachability(&sim, &tw);
+    CHECK(!sim.reach_public[floor_to_index(6)], "restaurant floor unreachable");
+    run_days(1);
+    CHECK(rt->capacity == CAP_EMPTY, "unreachable restaurant drains to empty (not 'packed')");
+    CHECK(rt->population == 0, "unreachable restaurant has no patrons");
+}
+
 static void test_housekeeping(void)
 {
     printf("housekeeping cycle:\n");
@@ -1177,6 +1195,7 @@ int main(void)
     test_flavor();
     test_floor_fill();
     test_bulldozer();
+    test_unreachable_empty();
     test_elevators();
     test_housekeeping();
     test_commute_elevator();
