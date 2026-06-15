@@ -3834,6 +3834,40 @@ static void cycle_build_type(int direction)
 
 /* ---------- Drag placement ---------- */
 
+/* The faithful way to add an elevator car: select the elevator tool and click
+ * an EXISTING shaft of the same type (within its span). Returns 1 if it handled
+ * the click (car added, or refused for funds/max) so the caller skips the
+ * normal placement attempt; 0 if there's no such shaft here (e.g. clicking the
+ * cap to extend, or empty space to build a new shaft). */
+static int elev_add_car_at(int x, int floor)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active || s->type != (ItemType)game.build_type || s->x != x)
+            continue;
+        if (fidx < s->lo || fidx > s->hi) continue;   /* outside span = cap/extend */
+        if (s->num_cars >= CARS_PER_SHAFT) {
+            printf("Shaft x=%d already at the max %d cars\n", x, CARS_PER_SHAFT);
+            return 1;
+        }
+        int cost = elv_car_cost(s->type);
+        if (game.tower.money < cost) {
+            printf("Can't afford a car ($%d)\n", cost);
+            return 1;
+        }
+        game.tower.money -= cost;
+        game.tower.built_value += cost;
+        people_set_num_cars(ps, i, s->num_cars + 1);
+        printf("Added car to shaft x=%d: now %d cars (cost $%d)\n",
+               x, s->num_cars, cost);
+        return 1;
+    }
+    return 0;
+}
+
 static void drag_place_units(void)
 {
     if (game.build_type == ITEM_NONE) return;
@@ -3859,6 +3893,10 @@ static void drag_place_units(void)
         if (placed > 0) {
             printf("Drag-extended %s at x=%d by %d floor(s)\n",
                    tower_item_name(game.build_type), x, placed);
+        } else {
+            /* Nothing new placed — the click/drag landed entirely on an existing
+             * shaft, so add a car to it instead. */
+            elev_add_car_at(x, game.drag_start_floor);
         }
         return;
     }
@@ -4617,12 +4655,15 @@ static void handle_event(SDL_Event *ev)
                 if (game.drag_start_cell == build_origin_cell(game.mouse_cell) &&
                     game.drag_start_floor == game.mouse_floor) {
                     /* Elevator click snaps to the shaft column, so clicking
-                     * the cap arrows extends the shaft by one floor. */
+                     * the cap arrows extends the shaft by one floor — and
+                     * clicking WITHIN an existing shaft adds a car to it. */
                     int px = item_is_elevator(game.build_type)
                                  ? elevator_drag_column()
                                  : game.drag_start_cell;
-                    tower_place(&game.tower, game.build_type,
-                               game.drag_start_floor, px);
+                    if (!(item_is_elevator(game.build_type) &&
+                          elev_add_car_at(px, game.drag_start_floor)))
+                        tower_place(&game.tower, game.build_type,
+                                   game.drag_start_floor, px);
                 } else {
                     drag_place_units();
                 }
