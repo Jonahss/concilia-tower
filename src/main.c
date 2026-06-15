@@ -1158,8 +1158,29 @@ static void render_tower(void)
                     !TENANT_ACTIVE_TIMES[tenant->type][game.sim.time_of_day];
                 int crowd_frames = retail_closes ? nframes - 1 : nframes;
 
+                int is_hotel = (tenant->type == ITEM_HOTEL_SINGLE ||
+                                tenant->type == ITEM_HOTEL_TWIN ||
+                                tenant->type == ITEM_HOTEL_SUITE);
+
                 int frame_idx;
-                if (closed) {
+                if (is_hotel && nframes >= 9) {
+                    /* Hotel room sheet = door (frame 0) + 8 room frames decoded
+                     * by Jonah as state×time-of-day pairs (day, night):
+                     *   1/2 occupied · 3/4 clean · 5/6 dirty · 7/8 cockroaches.
+                     * So frame is picked by room STATE, not an occupancy ramp
+                     * (the old proportional map sent a packed room to the
+                     * cockroach frame). */
+                    int night = (game.sim.time_of_day == TOD_NIGHT ||
+                                 game.sim.time_of_day == TOD_EVENING);
+                    if (tenant->dirty && tenant->complaints >= 2)
+                        frame_idx = night ? 8 : 7;   /* long-neglected -> roaches (inferred) */
+                    else if (tenant->dirty)
+                        frame_idx = night ? 6 : 5;   /* checked out, needs housekeeping */
+                    else if (tenant->capacity > CAP_EMPTY)
+                        frame_idx = night ? 2 : 1;   /* guest in the room */
+                    else
+                        frame_idx = night ? 4 : 3;   /* clean, vacant */
+                } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (tenant->capacity <= CAP_EMPTY) {
                     frame_idx = 0;
