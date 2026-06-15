@@ -1234,26 +1234,67 @@ void game_try_event(GameSim *sim, Tower *tower)
     /* Pick event type: 60% bomb, 40% fire */
     EventType etype = (rand() % 10 < 6) ? EVENT_BOMB : EVENT_FIRE;
     
+    /* Propose the event but DON'T run it yet — the player decides via the
+     * disaster modal (EventT shows a dialog before the bomb flag is set;
+     * see decomp seg_10c8). game_event_proceed/ransom activate or cancel it. */
     sim->event.type = etype;
-    sim->event.active = 1;
+    sim->event.active = 0;
+    sim->event.pending = 1;
     sim->event.target_floor = target_floor;
     sim->event.target_slot = target_slot;
     sim->event.caught = 0;
     sim->event.damage_cost = 0;
-    
+    sim->event.ransom_cost = 0;
+
     if (etype == EVENT_BOMB) {
         /* Bomb: 600 ticks to defuse (~10 seconds at normal speed) */
         sim->event.duration = 600;
         sim->event.timer = sim->event.duration;
-        printf("💣 BOMB THREAT on floor %d! Security is responding...\n", target_floor);
+        /* Payoff fee scales with star rating. Stand-in for the EXE's per-star
+         * event cost (decomp: 0xde1c-0xde20, costs by star 2/3/4 — exact $
+         * not decoded), extrapolated through TOWER. */
+        static const int RANSOM_BY_STAR[7] = { 0, 0, 20000, 35000, 60000, 100000, 150000 };
+        int sr = tower->star_rating;
+        if (sr < 0) sr = 0;
+        if (sr > 6) sr = 6;
+        sim->event.ransom_cost = RANSOM_BY_STAR[sr];
+        printf("💣 BOMB THREAT on floor %d! Awaiting your decision...\n", target_floor);
     } else {
         /* Fire: burns for 800 ticks, spreads outward */
         sim->event.duration = 800;
         sim->event.timer = sim->event.duration;
         sim->event.fire_left = target_slot;
         sim->event.fire_right = target_slot;
-        printf("🔥 FIRE on floor %d at slot %d! Spreading...\n", target_floor, target_slot);
+        printf("🔥 FIRE reported on floor %d at slot %d! Awaiting acknowledgement...\n",
+               target_floor, target_slot);
     }
+}
+
+/* Player chose to face the event head-on: deploy security (bomb) or just ride
+ * out the fire. This is the risky path — the bomb may still explode, the fire
+ * still spreads. Activates the (already-configured) event for game_update_event. */
+void game_event_proceed(GameSim *sim, Tower *tower)
+{
+    (void)tower;
+    if (!sim->event.pending) return;
+    sim->event.pending = 0;
+    sim->event.active = 1;
+    sim->event.timer = sim->event.duration;   /* full countdown from now */
+}
+
+/* Player paid off a bomb threat: a star-scaled fee, and the crisis is averted
+ * with no blast. Fire has no payoff option (decomp: fire dialog is info-only),
+ * so for a fire this just proceeds. */
+void game_event_ransom(GameSim *sim, Tower *tower)
+{
+    if (!sim->event.pending) return;
+    if (sim->event.type != EVENT_BOMB) { game_event_proceed(sim, tower); return; }
+    sim->event.pending = 0;
+    sim->event.active = 0;
+    tower->money -= sim->event.ransom_cost;
+    sim->expenses_this_quarter += sim->event.ransom_cost;
+    sim->event.caught = 1;            /* neutralized — no explosion */
+    sim->event.type = EVENT_NONE;
 }
 
 void game_update_event(GameSim *sim, Tower *tower)

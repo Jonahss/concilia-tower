@@ -959,6 +959,87 @@ static void test_office_dynamics(void)
     CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
 }
 
+/* Disaster decision model (EventT modal): a proposed event waits as `pending`
+ * until the player chooses — deploy security / pay off a bomb / acknowledge a
+ * fire. game_try_event must never run an event without that decision. */
+static void test_event_decisions(void)
+{
+    printf("disaster decisions (EventT modal: deploy/pay/acknowledge):\n");
+
+    /* Pending bomb -> pay ransom: money down, recorded expense, no blast. */
+    fresh();
+    long money0 = tw.money;
+    long exp0 = sim.expenses_this_quarter;
+    sim.event = (EventState){0};
+    sim.event.type = EVENT_BOMB;
+    sim.event.pending = 1;
+    sim.event.target_floor = 10;
+    sim.event.duration = 600;
+    sim.event.timer = 600;
+    sim.event.ransom_cost = 35000;
+    game_event_ransom(&sim, &tw);
+    CHECK(tw.money == money0 - 35000, "paying ransom deducts the fee");
+    CHECK(sim.expenses_this_quarter == exp0 + 35000, "ransom recorded as an expense");
+    CHECK(!sim.event.pending && !sim.event.active, "ransom clears the event");
+    CHECK(sim.event.caught == 1, "ransom = no detonation");
+
+    /* Pending bomb -> deploy security: risky path goes active, for free. */
+    fresh();
+    sim.event = (EventState){0};
+    sim.event.type = EVENT_BOMB;
+    sim.event.pending = 1;
+    sim.event.duration = 600;
+    money0 = tw.money;
+    game_event_proceed(&sim, &tw);
+    CHECK(sim.event.active && !sim.event.pending, "deploy security activates the bomb event");
+    CHECK(sim.event.timer == 600, "bomb countdown starts from full duration");
+    CHECK(tw.money == money0, "deploying security is free");
+
+    /* Pending fire -> acknowledge: activates, no choice, no charge. */
+    fresh();
+    sim.event = (EventState){0};
+    sim.event.type = EVENT_FIRE;
+    sim.event.pending = 1;
+    sim.event.duration = 800;
+    money0 = tw.money;
+    game_event_proceed(&sim, &tw);
+    CHECK(sim.event.active && !sim.event.pending, "acknowledging a fire activates it");
+    CHECK(tw.money == money0, "fire acknowledgement is free");
+
+    /* A fire has no payoff option: ransom just proceeds without charging. */
+    fresh();
+    sim.event = (EventState){0};
+    sim.event.type = EVENT_FIRE;
+    sim.event.pending = 1;
+    sim.event.duration = 800;
+    money0 = tw.money;
+    game_event_ransom(&sim, &tw);
+    CHECK(sim.event.active && tw.money == money0, "fire has no ransom - it just proceeds");
+
+    /* game_try_event proposes (pending) but never runs an event on its own. */
+    fresh();
+    tw.money = 100000000L;
+    tw.star_rating = 4;
+    sim.time_of_day = TOD_AFTERNOON;
+    /* Inject a guard + an occupied high office directly (skip placement
+     * prerequisites — we only need try_event's conditions satisfied). */
+    Tenant *sec = &tw.tenants[tw.tenant_count++];
+    *sec = (Tenant){0};
+    sec->type = ITEM_SECURITY; sec->floor = 5; sec->state = TENANT_OCCUPIED;
+    Tenant *off = &tw.tenants[tw.tenant_count++];
+    *off = (Tenant){0};
+    off->type = ITEM_OFFICE; off->floor = 8; off->state = TENANT_OCCUPIED;
+    int activated_without_decision = 0;
+    int got_pending = 0;
+    for (int i = 0; i < 20000 && !got_pending; i++) {
+        game_try_event(&sim, &tw);
+        if (sim.event.active && !sim.event.pending) activated_without_decision = 1;
+        if (sim.event.pending) got_pending = 1;
+    }
+    CHECK(got_pending, "try_event eventually proposes a disaster");
+    CHECK(!activated_without_decision, "try_event never activates without a decision");
+}
+
 int main(void)
 {
     test_stairs();
@@ -976,6 +1057,7 @@ int main(void)
     test_tenant_pairing();
     test_office_dynamics();
     test_vip_gate();
+    test_event_decisions();
     test_twr_import();
     test_twr_export();
     test_wedding();

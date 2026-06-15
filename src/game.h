@@ -293,6 +293,7 @@ typedef enum {
 typedef struct {
     EventType type;
     int       active;
+    int       pending;         /* Proposed — paused, awaiting the player's modal choice */
     int       target_floor;
     int       target_slot;
     int       timer;           /* Ticks until resolution */
@@ -301,6 +302,7 @@ typedef struct {
     int       fire_right;      /* Fire spread: rightmost burning slot */
     int       caught;          /* Security guard caught the bomb? */
     int       damage_cost;     /* Total $ damage from event */
+    int       ransom_cost;     /* Bomb: $ to pay off the threat (star-scaled) */
 } EventState;
 
 /* --- Santa system (from SantaT seg_11b8) ---
@@ -511,6 +513,12 @@ void game_update_event(GameSim *sim, Tower *tower);
 
 /* Resolve event: bomb explodes or fire extinguished */
 void game_resolve_event(GameSim *sim, Tower *tower);
+
+/* Player's response to a pending event (chosen via the disaster modal).
+ * proceed: let it run — deploy security (bomb) / acknowledge (fire), the risky path.
+ * ransom:  bomb only — pay off the threat for a star-scaled fee; no blast. */
+void game_event_proceed(GameSim *sim, Tower *tower);
+void game_event_ransom(GameSim *sim, Tower *tower);
 
 /* --- Santa Easter egg (SantaT) --- */
 

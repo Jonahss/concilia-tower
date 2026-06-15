@@ -371,6 +371,12 @@ typedef struct {
     
     /* Weather (from OpenSkyscraper Sky.cpp) */
     int             rainy_day;       /* 1 = rain today */
+
+    /* Disaster decision modal — opens when sim->event.pending is set, pausing
+     * the sim until the player accepts/declines. (EventT shows a dialog before
+     * the event runs.) */
+    int             disaster_modal;       /* 1 = modal capturing input */
+    GameSpeed       disaster_saved_speed; /* speed to restore on dismiss */
 } Game;
 
 static Game game;
@@ -3341,6 +3347,166 @@ static void render_events(void)
 /* Top-center disaster alert: real EXE alert icon + blinking label while an
  * event runs. Mirrors SimTower popping an alert when a fire/bomb strikes
  * (alert sprites 0xA714 fire / 0xA710 terrorist, decoded from EventT/FireT). */
+/* ---------- Disaster decision modal (EventT dialog) ----------
+ * When a disaster is proposed (sim->event.pending), the game pauses and this
+ * modal asks the player what to do. Faithful to the decomp: the bomb threat is
+ * a real choice (deploy security and risk a blast, or pay it off); the fire is
+ * informational only (acknowledge — crews respond, you ride it out). */
+
+#define DMODAL_W 360
+#define DMODAL_H 156
+
+static void disaster_modal_origin(int *x, int *y)
+{
+    *x = (game.screen_w - DMODAL_W) / 2;
+    *y = (game.screen_h - DMODAL_H) / 2;
+}
+
+/* Bottom-row buttons. idx 0 = left, idx 1 = right. Fire uses idx 1 only. */
+static SDL_Rect disaster_btn_rect(int idx)
+{
+    int wx, wy;
+    disaster_modal_origin(&wx, &wy);
+    int bw = 150, bh = 26;
+    int by = wy + DMODAL_H - bh - 12;
+    int left  = wx + 18;
+    int right = wx + DMODAL_W - bw - 18;
+    SDL_Rect r = { idx == 0 ? left : right, by, bw, bh };
+    return r;
+}
+
+static int point_in_rect(int x, int y, SDL_Rect r)
+{
+    return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+static void draw_modal_button(SDL_Rect r, const char *label)
+{
+    int hot = point_in_rect(game.mouse_x, game.mouse_y, r);
+    draw_win31_rect(r.x, r.y, r.w, r.h, hot ? 0 : 1);
+    SDL_Color fg = { 0, 0, 0, 255 };
+    int tw, th;
+    SDL_Texture *t = render_text(label, fg, &tw, &th);
+    if (t) {
+        SDL_Rect d = { r.x + (r.w - tw) / 2, r.y + (r.h - th) / 2, tw, th };
+        SDL_RenderCopy(game.renderer, t, NULL, &d);
+        SDL_DestroyTexture(t);
+    }
+}
+
+static void render_disaster_modal(void)
+{
+    if (!game.disaster_modal) return;
+    int is_fire = (game.sim.event.type == EVENT_FIRE);
+
+    /* Dim the world behind the modal. */
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 150);
+    SDL_Rect full = { 0, 0, game.screen_w, game.screen_h };
+    SDL_RenderFillRect(game.renderer, &full);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+
+    int wx, wy;
+    disaster_modal_origin(&wx, &wy);
+    draw_win31_titlebar(wx, wy, DMODAL_W, is_fire ? "Fire!" : "Bomb Threat!");
+    int body_y = wy + WIN_TITLEBAR_H;
+    draw_win31_rect(wx, body_y, DMODAL_W, DMODAL_H - WIN_TITLEBAR_H, 1);
+
+    /* Alert icon (reuse the in-world alert sprites). */
+    Sprite *icon = is_fire ? game.alert_fire : game.alert_terror;
+    int text_x = wx + 16;
+    if (icon && icon->texture) {
+        SDL_Rect d = { wx + 14, body_y + 14, icon->w, icon->h };
+        SDL_RenderCopy(game.renderer, icon->texture, NULL, &d);
+        text_x = wx + 14 + icon->w + 12;
+    }
+
+    SDL_Color black = { 0, 0, 0, 255 };
+    char line[96];
+    int ty = body_y + 16;
+    if (is_fire) {
+        snprintf(line, sizeof line, "Fire has broken out on floor %d!",
+                 game.sim.event.target_floor);
+        draw_text(line, text_x, ty, black); ty += 24;
+        draw_text("Fire crews are on the way -", text_x, ty, black); ty += 18;
+        draw_text("brace for damage as it spreads.", text_x, ty, black);
+    } else {
+        snprintf(line, sizeof line, "A bomb has been planted on floor %d.",
+                 game.sim.event.target_floor);
+        draw_text(line, text_x, ty, black); ty += 24;
+        draw_text("Send security to hunt for it (they may", text_x, ty, black); ty += 18;
+        draw_text("fail and it detonates) - or pay it off.", text_x, ty, black);
+    }
+
+    if (is_fire) {
+        draw_modal_button(disaster_btn_rect(1), "OK");
+    } else {
+        draw_modal_button(disaster_btn_rect(0), "Deploy Security");
+        char pay[48];
+        snprintf(pay, sizeof pay, "Pay $%d", game.sim.event.ransom_cost);
+        draw_modal_button(disaster_btn_rect(1), pay);
+    }
+}
+
+static void disaster_close(void)
+{
+    game.disaster_modal = 0;
+    game.sim.speed = game.disaster_saved_speed;
+}
+
+/* Face the event: deploy security (bomb) / acknowledge (fire). The risky path. */
+static void disaster_do_proceed(void)
+{
+    int is_fire = (game.sim.event.type == EVENT_FIRE);
+    int fl = game.sim.event.target_floor;
+    game_event_proceed(&game.sim, &game.tower);
+    char b[64];
+    if (is_fire) snprintf(b, sizeof b, "FIRE on floor %d! Crews responding.", fl);
+    else         snprintf(b, sizeof b, "Security deployed - hunting the bomb!");
+    add_event_message(b);
+    disaster_close();
+}
+
+/* Bomb only: pay the threat off — guaranteed safe, at a star-scaled cost. */
+static void disaster_do_ransom(void)
+{
+    int cost = game.sim.event.ransom_cost;
+    game_event_ransom(&game.sim, &game.tower);
+    char b[64];
+    snprintf(b, sizeof b, "Paid off the threat - $%d. Crisis averted.", cost);
+    add_event_message(b);
+    disaster_close();
+}
+
+/* Returns 1 if the modal is up (so the caller swallows the click entirely). */
+static int disaster_modal_click(int mx, int my)
+{
+    if (!game.disaster_modal) return 0;
+    int is_fire = (game.sim.event.type == EVENT_FIRE);
+    if (is_fire) {
+        if (point_in_rect(mx, my, disaster_btn_rect(1))) disaster_do_proceed();
+    } else {
+        if (point_in_rect(mx, my, disaster_btn_rect(0)))      disaster_do_proceed();
+        else if (point_in_rect(mx, my, disaster_btn_rect(1))) disaster_do_ransom();
+    }
+    return 1;   /* fully modal: consume every click while open */
+}
+
+/* Keyboard shortcuts while the modal is up. */
+static void disaster_modal_key(SDL_Keycode k)
+{
+    if (game.sim.event.type == EVENT_FIRE) {
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE ||
+            k == SDLK_ESCAPE)
+            disaster_do_proceed();
+    } else {
+        if (k == SDLK_d || k == SDLK_RETURN || k == SDLK_KP_ENTER)
+            disaster_do_proceed();
+        else if (k == SDLK_p || k == SDLK_y)
+            disaster_do_ransom();
+    }
+}
+
 static void render_event_alert(void)
 {
     if (!game.sim.event.active) return;
@@ -3393,6 +3559,7 @@ static void render(void)
     render_tuning_window();
     render_elv_dialog();
     render_event_alert();
+    render_disaster_modal();   /* on top of everything — it's modal */
 
     SDL_RenderPresent(game.renderer);
 }
@@ -3765,6 +3932,28 @@ static void execute_menu_item(const MenuItem *item)
 /* ---------- Input handling ---------- */
 static void handle_event(SDL_Event *ev)
 {
+    /* The disaster modal is fully modal: it eats all input until dismissed
+     * (only window-close still works). */
+    if (game.disaster_modal) {
+        switch (ev->type) {
+        case SDL_QUIT:
+            game.running = 0;
+            break;
+        case SDL_MOUSEMOTION:
+            game.mouse_x = ev->motion.x;   /* keep button hover live */
+            game.mouse_y = ev->motion.y;
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (ev->button.button == SDL_BUTTON_LEFT)
+                disaster_modal_click(ev->button.x, ev->button.y);
+            break;
+        case SDL_KEYDOWN:
+            disaster_modal_key(ev->key.keysym.sym);
+            break;
+        }
+        return;
+    }
+
     switch (ev->type) {
     case SDL_QUIT:
         game.running = 0;
@@ -4911,6 +5100,20 @@ int main(int argc, char *argv[])
         game.sim.event.target_slot = TOWER_WIDTH / 2;
         game.sim.event.duration = game.sim.event.timer = 100000;
     }
+    if (getenv("CT_MODAL")) {          /* demo: open the disaster decision modal */
+        const char *which = getenv("CT_MODAL");
+        int is_fire = (which[0] == 'f' || which[0] == 'F');
+        game.sim.event = (EventState){0};
+        game.sim.event.type = is_fire ? EVENT_FIRE : EVENT_BOMB;
+        game.sim.event.pending = 1;
+        game.sim.event.target_floor = 12;
+        game.sim.event.target_slot = TOWER_WIDTH / 2;
+        game.sim.event.duration = game.sim.event.timer = is_fire ? 800 : 600;
+        game.sim.event.ransom_cost = 60000;
+        game.disaster_modal = 1;
+        game.disaster_saved_speed = SPEED_NORMAL;
+        game.sim.speed = SPEED_PAUSED;
+    }
     (void)show_underground;
     game.zoom = 1.0f;
     
@@ -4948,6 +5151,15 @@ int main(int argc, char *argv[])
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
             game_update(&game.sim, &game.tower);
+
+            /* A freshly proposed disaster pauses the game for the player's
+             * decision (handled by the modal). */
+            if (game.sim.event.pending && !game.disaster_modal) {
+                game.disaster_modal = 1;
+                game.disaster_saved_speed =
+                    (game.sim.speed == SPEED_PAUSED) ? SPEED_NORMAL : game.sim.speed;
+                game.sim.speed = SPEED_PAUSED;
+            }
 
             /* Demo: pin the clock so retail open/closed frames can be captured
              * (the sim re-derives time_of_day from hour each tick, so override
