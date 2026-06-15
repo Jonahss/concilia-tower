@@ -2791,14 +2791,16 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &dot);
     }
 
-    /* Legend strip (the EXE blits bitmap 0x138+mode over the map) */
+    /* Legend strip (the EXE blits bitmap 0x138+mode over the map). Anchor it to
+     * the TOP of the map (sky) rather than the bottom — the lowest floors
+     * (lobby + basements) are the densest part of the silhouette and the legend
+     * was sitting right on top of them. */
     if (game.map_mode > 0) {
         Sprite *lg = sprites_find(&game.sprites, (uint16_t)(0x8138 + game.map_mode));
         if (lg) {
             int lw = lg->w * map_w / 200;       /* legends drawn for a 200px map */
             int lh = lg->h;
-            SDL_Rect dst = { map_x + (map_w - lw) / 2,
-                             map_y + map_h - lh - 2, lw, lh };
+            SDL_Rect dst = { map_x + (map_w - lw) / 2, map_y + 2, lw, lh };
             SDL_RenderCopy(game.renderer, lg->texture, NULL, &dst);
         }
     }
@@ -3070,13 +3072,20 @@ static void render_toolbox(void)
         tool_button_rect(i, &bx, &by);
         const ToolButton *tb = &tool_buttons[i];
 
-        /* A group button stays highlighted when any of its sub-items is active. */
+        /* A group button stays highlighted when any of its sub-items is active,
+         * and it shows the icon of the CURRENTLY SELECTED sub-item (so picking
+         * "Restaurant" from the food group updates the button face) — falling
+         * back to the primary icon when none of its subs is active. */
         int selected = (tb->type == game.build_type);
+        int show_icon = tb->icon_idx;
         for (int j = 0; j < tb->sub_count; j++)
-            if (tb->sub[j] == game.build_type) selected = 1;
+            if (tb->sub[j] == game.build_type) {
+                selected = 1;
+                show_icon = tb->sub_icon[j];
+            }
 
-        if (game.ui_items && tb->icon_idx >= 0) {
-            draw_tool_icon(bx, by, tb->icon_idx, selected);
+        if (game.ui_items && show_icon >= 0) {
+            draw_tool_icon(bx, by, show_icon, selected);
         } else if (game.font_small) {
             /* Fallback: colored square + text label */
             SDL_SetRenderDrawColor(game.renderer, tb->r, tb->g, tb->b, 255);
