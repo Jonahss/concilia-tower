@@ -14,37 +14,38 @@
 - [x] Elevator placement: placeable on ANY built floor inside the tower (was over-restricted). `74b4099`
 - [x] Black-screen incident: my fault (killed live game for a screenshot, relaunch died in sandbox). Resolved — new rule: render check screenshots OFF-SCREEN, never touch the live session.
 
-## Batch 1c — live VNC bug wave (19:11–19:39) — QUEUED, priority order
+## Batch 1c — live VNC bug wave (19:11–19:39)
 
 ### Placement / build validation (cluster — tower.c)
-- [ ] **Bulldozer deletes the build floor itself** — should delete the TENANT but leave the build floor. Currently nukes the whole floor.
-- [ ] **Bulldozer killed the lobby** too (same root cause — bulldozer too greedy).
-- [ ] **Escalator placeable straight into dirt** — needs a built floor under it.
-- [ ] **Underground elevator** — likely the real culprit behind the "into dirt" issue; elevators below ground bypass floor-support check. Audit.
-- [ ] **Stairs & escalators shouldn't overlap** each other.
+- [x] **Bulldozer deletes the build floor itself** → now keeps the floor. `3f7c631`
+- [x] **Bulldozer killed the lobby** → lobby is permanent now. `3f7c631`
+- [x] **Escalator placeable straight into dirt** → removed support fallback. `331d65e`
+- [x] **Underground elevator** — confirmed: shafts are intentionally self-supporting (Jonah OK'd leaving them free); buildable within the tower (`74b4099`).
+- [x] **Stairs & escalators shouldn't overlap** → full-overlap rejected, chains still ok. `331d65e`
 
 ### Sim correctness / reachability (cluster — people.c / tower.c)
-- [ ] **Stairs don't let people reach units** — reachability network not honoring stairs.
-- [ ] **Top restaurant full despite being unreachable** — occupancy granted without a valid transport path. (Same root as stairs reachability? verify.)
-- [ ] **Adding elevator cars doesn't work** — car-add action no-ops.
-- [ ] **Condos showing occupancy?** — verify condos report occupancy at all.
+- [x] ~~Stairs don't let people reach units~~ — Jonah retracted (misread; they do).
+- [x] **Top restaurant full despite being unreachable** → capacity byte drains when unreachable. `4b9f662`
+- [x] **Adding elevator cars doesn't work** → finger tool + double-click dialog (`c4f4fdc`) AND faithful elevator-tool-on-shaft car add (`19b04c2`).
+- [ ] **Condos showing occupancy?** — STILL TO VERIFY. (game_calc_population gives condos pop when active or via the inactive-period condo branch; confirm it renders.)
 
-### Tools not implemented
-- [ ] **Inspection tool** — appears unimplemented.
-- [ ] **Pointer tool** — unimplemented/inaccessible → can't drag elevator shafts up/down. (Needed to extend shafts.)
+### Tools
+- [x] **Pointer/finger tool** wired as interact (opens elevator dialog). `c4f4fdc`
+- [ ] **Inspector tool** — still a stub. Click a unit → info popup. TODO.
+- [ ] **Drag-to-extend elevator shaft up/down** — clicking the cap extends; verify the drag UX feels right / works for Jonah.
 
 ### Animation
 - [ ] **Stairs need people/movement animations.**
-- [ ] **Construction-worker build animation** — does it exist at all? Investigate, then wire or note as absent.
+- [ ] **Construction-worker build animation** — does it exist? Investigate, then wire or note as absent.
 
 ### Menu / toolbar / HUD
-- [ ] **Sub-menu selection doesn't update the selected-tile sprite** in the toolbox button.
-- [ ] **Menu should match real gameplay screenshot** (Jonah sent one): single play/pause button, correct button sizing.
-- [ ] **Top menu bar still not visible** — confirm it's not just a VNC crop; tie into Batch 3 (MENU_BAR_H=0).
+- [x] **Sub-menu selection updates the selected-tile sprite** in the group button. `b17fd4a`
+- [ ] **Menu should match real gameplay screenshot** (Jonah sent one, msg 1516160505323192340): single play/pause button, correct sizing. NEED to download that att.
+- [ ] **Top menu bar still not visible** — confirm not just a VNC crop; tie into Batch 3 (MENU_BAR_H=0).
 
 ### Minimap
-- [ ] **Minimap legend obscures bottom floors** — reposition legend.
-- [ ] **Minimap hotel shows dirty rooms but the room sprite stays clean** — dirty state mismatch minimap vs main render.
+- [x] **Minimap legend obscures bottom floors** → moved to top (sky). `b17fd4a`
+- [ ] **Minimap hotel dirty rooms but clean main sprite** — BLOCKED on Jonah picking the dirty frame (1–8) from the dumped hotel sheet; then wire t->dirty → that frame in main.c:1156 frame selection.
 
 ### Visual / sprites
 - [ ] Lobby tileset mismatch: wrong endcap on the middle lobby segment. Verify endcap vs middle sprite mapping.

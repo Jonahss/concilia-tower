@@ -1099,13 +1099,18 @@ static void render_tower(void)
                 int cap_w = 56;
                 int lobby_pw = tenant->width * CELL_W;
 
-                /* Left end cap */
+                /* Left end cap. The cap bitmap has its wall on the RIGHT, so the
+                 * right end (below) uses it as-is; the LEFT end must be MIRRORED,
+                 * otherwise both ends show a right-facing wall — the "mismatched
+                 * endcap" Jonah flagged. Flip horizontally; for a narrow lobby
+                 * take the wall (right) slice of the cap so it lands on the left. */
                 {
                     int ew = cap_w;
                     if (ew > lobby_pw) ew = lobby_pw;
-                    SDL_Rect src_ec = { base + 272, 0, ew, sheet->h };
+                    SDL_Rect src_ec = { base + 272 + (cap_w - ew), 0, ew, sheet->h };
                     SDL_Rect dst_ec = { tx, ty, ew, CELL_H };
-                    SDL_RenderCopy(game.renderer, sheet->texture, &src_ec, &dst_ec);
+                    SDL_RenderCopyEx(game.renderer, sheet->texture, &src_ec,
+                                     &dst_ec, 0, NULL, SDL_FLIP_HORIZONTAL);
                 }
                 /* Repeating interior */
                 int mid_start = cap_w;
