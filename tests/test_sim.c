@@ -1114,10 +1114,30 @@ static void test_flavor(void)
     CHECK(!sim.medical.active, "medical emergency clears when its timer runs out");
 }
 
+/* Auto-fill: gaps between tenants on a row become plain floor (no
+ * swiss-cheese); cells beyond the outermost tenants stay open. */
+static void test_floor_fill(void)
+{
+    printf("auto-fill floor between tenants:\n");
+    fresh();
+    tw.money = 100000000L;
+    place(ITEM_FLOOR, 0, 100);     /* 100..162 support, clear of the seeded lobby */
+    place(ITEM_OFFICE, 1, 105);    /* 105..113 */
+    place(ITEM_OFFICE, 1, 125);    /* 125..133, gap 114..124 */
+    int fidx = floor_to_index(1);
+    int gap_filled = 1;
+    for (int cx = 114; cx <= 124; cx++)
+        if (tw.grid[fidx][cx].type != ITEM_FLOOR) gap_filled = 0;
+    CHECK(gap_filled, "gap between two offices fills with floor");
+    CHECK(tw.grid[fidx][104].type == ITEM_NONE, "cells left of the tenants stay open");
+    CHECK(tw.grid[fidx][140].type == ITEM_NONE, "cells right of the tenants stay open");
+}
+
 int main(void)
 {
     test_stairs();
     test_flavor();
+    test_floor_fill();
     test_elevators();
     test_housekeeping();
     test_commute_elevator();

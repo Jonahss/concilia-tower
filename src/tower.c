@@ -268,6 +268,33 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     return 1;
 }
 
+/* Fill empty cells BETWEEN the outermost built cells on a floor with plain
+ * floor, so a row never has gaps (swiss-cheese) between its tenants. Floor is
+ * a cell-only type — no tenant record needed (renderer + reachability read the
+ * grid). Cells outside the built span are left as open sky/dirt. */
+static void fill_floor_gaps(Tower *tower, int floor)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return;
+    int left = -1, right = -1;
+    for (int cx = 0; cx < TOWER_WIDTH; cx++) {
+        if (tower->grid[fidx][cx].type != ITEM_NONE) {
+            if (left < 0) left = cx;
+            right = cx;
+        }
+    }
+    if (left < 0) return;
+    for (int cx = left; cx <= right; cx++) {
+        TowerCell *cell = &tower->grid[fidx][cx];
+        if (cell->type == ITEM_NONE) {
+            cell->type = ITEM_FLOOR;
+            cell->tenant_id = 0;
+            cell->cell_index = 0;
+            cell->flags = 1;
+        }
+    }
+}
+
 uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
 {
     if (!tower_can_place(tower, type, floor, x)) return 0;
@@ -292,6 +319,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
         if (existing_lobby) {
+            /* Cells this segment newly covers — pure overlap over existing
+             * lobby adds nothing, so it's free (don't charge for re-placing). */
+            int new_cells = 0;
+            for (int cx = x; cx < x + width; cx++)
+                if (tower->grid[fidx][cx].type != ITEM_LOBBY) new_cells++;
+
             /* Extend existing lobby to cover new segment */
             int old_left = existing_lobby->x;
             int old_right = existing_lobby->x + existing_lobby->width;
@@ -309,10 +342,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->cell_index = cx - final_left;
                 cell->flags = 1;
             }
-            tower->money -= cost;
-            tower->built_value += cost;
-            printf("Extended lobby on F%d: now x=%d w=%d (cost $%d, balance $%ld)\n",
-                   floor, final_left, existing_lobby->width, cost, tower->money);
+            if (new_cells > 0) {
+                tower->money -= cost;
+                tower->built_value += cost;
+                printf("Extended lobby on F%d: now x=%d w=%d (cost $%d, balance $%ld)\n",
+                       floor, final_left, existing_lobby->width, cost, tower->money);
+            }
             return existing_lobby->id;
         }
         /* Otherwise fall through to create a new lobby tenant */
@@ -374,9 +409,16 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
         }
     }
     
+    /* No swiss-cheese: fill any gaps between tenants on each floor this item
+     * occupies with plain floor. (Deliberate multi-tower gaps are a future mod.) */
+    if (!is_transport && type != ITEM_FLOOR) {
+        for (int f = floor; f < floor + height; f++)
+            fill_floor_gaps(tower, f);
+    }
+
     printf("Placed %s at floor %d, x=%d (cost $%d, balance $%ld)\n",
            tower_item_name(type), floor, x, cost, tower->money);
-    
+
     return id;
 }
 

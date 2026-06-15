@@ -17,7 +17,14 @@
 - [ ] Item gating: HIDE locked items (not grey); toolbox physically shrinks and grows with stars (decomp seg_1050: sub-items scale with star).
 - [ ] Campaign mode (default): star-gated. **Starts with NO lobby** (empty lot — Jonah confirmed).
 - [ ] Sandbox/Editor mode: everything unlocked.
-- [ ] Unlock schedule: decomp only confirms cinema=3★ (gating data lives in EXE resources, not C). → research online guides for the canonical table.
+
+### Unlock schedule — CONFIRMED (kiwizoid GameFAQs + simtower.fandom, two primary sources agree)
+- 1★: Lobby, Floor, Stairs, Standard Elevator, Office, Condo, Fast Food
+- 2★: Service Elevator, Hotel Single, Security, Housekeeping
+- 3★: Express Elevator, Escalator, Hotel Twin, Hotel Suite, Restaurant, Retail Shop, Cinema, Party Hall, Parking (space + ramp), Recycling, Medical
+- 4★: Metro / Subway Station
+- 5★: Cathedral
+(PC v1.0 data. Promotion gates: 2→3 needs a Security office; 3→4 needs ≥2 suites+VIP+recycling+medical demand; 4→5 needs a Metro; 5→TOWER needs Cathedral+wedding.)
 
 ## Batch 3 — menu bar
 - [ ] Enable the (coded but MENU_BAR_H=0) top menu bar. Shift top windows down to avoid overlap. Home for: Mode (Campaign/Sandbox), tuning params, analytics, speed, view.
@@ -27,3 +34,9 @@
 
 ## Backlog / research
 - [ ] Easter eggs (research original user guide — NOT in decomp): buried treasure, secret money-click spot, hidden grand lobby.
+- [ ] **Mod menu / feature-flags system** — a menu to toggle intentional "Jonah-additions" (mods) separate from faithful behavior. Store mods as flags so the faithful base stays clean.
+- [ ] **MOD: multi-tower gaps + bridges** — allow deliberate gaps in floors (separate towers). Tenants can't walk across gaps. Gaps improve views/light → adjacent units more desirable (also applies to units on normal edges). No accidental holes: a unit bridging a gap fills floor underneath (partial overhangs still disallowed). Later: bridges between towers, upgradeable to moving walkways favorable in routing.
+- [ ] **MOD: above-ground parking** — allow parking above ground (if not already), cheaper than underground.
+
+## NOW
+- "Go with filling floor for now": floors auto-fill so there are no gaps between tenants on a row (no swiss-cheese); multi-tower gaps are the backlogged mod.
