@@ -3421,12 +3421,14 @@ static void draw_win31_rect(int x, int y, int w, int h, int raised)
 }
 
 /* Draw a text string in the small font for menus */
-static int draw_menu_text(const char *text, int x, int y, int selected)
+/* state: 0 = normal, 1 = selected/hover, 2 = disabled (greyed) */
+static int draw_menu_text(const char *text, int x, int y, int state)
 {
     if (!game.font_small || !text) return 0;
     SDL_Color color;
-    if (selected) { color = (SDL_Color){WIN31_SEL_TEXT, 255}; }
-    else          { color = (SDL_Color){WIN31_TEXT, 255}; }
+    if (state == 2)      { color = (SDL_Color){WIN31_DISABLED, 255}; }
+    else if (state == 1) { color = (SDL_Color){WIN31_SEL_TEXT, 255}; }
+    else                 { color = (SDL_Color){WIN31_TEXT, 255}; }
     SDL_Surface *surf = TTF_RenderUTF8_Blended(game.font_small, text, color);
     if (!surf) return 0;
     SDL_Texture *tex = SDL_CreateTextureFromSurface(game.renderer, surf);
@@ -3558,11 +3560,15 @@ static void render_dropdown(void)
             shortcut_buf[0] = '\0';
         }
         
-        draw_menu_text(label_buf, drop_x + 22, iy + 2, is_hover);
+        /* A build item that's still locked in Campaign greys out. */
+        int locked = (tm->items[i].build_type != ITEM_NONE &&
+                      !item_unlocked(tm->items[i].build_type));
+        int tstate = locked ? 2 : is_hover;
+        draw_menu_text(label_buf, drop_x + 22, iy + 2, tstate);
         if (shortcut_buf[0]) {
             /* Right-align shortcut */
             int sw = (int)strlen(shortcut_buf) * 7;
-            draw_menu_text(shortcut_buf, drop_x + drop_w - sw - 8, iy + 2, is_hover);
+            draw_menu_text(shortcut_buf, drop_x + drop_w - sw - 8, iy + 2, tstate);
         }
         
         iy += item_h;
@@ -4558,6 +4564,11 @@ static int dropdown_hit_test(int mx, int my)
 static void execute_menu_item(const MenuItem *item)
 {
     if (item->build_type != ITEM_NONE) {
+        if (!item_unlocked(item->build_type)) {   /* locked in Campaign */
+            add_event_message("Locked — raise your star rating first.");
+            game.menu_open = -1;
+            return;
+        }
         game.build_type = item->build_type;
         printf("Build: %s\n", tower_item_name(game.build_type));
     }
