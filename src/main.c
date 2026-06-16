@@ -1341,10 +1341,27 @@ static void render_tower(void)
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_CONSTRUCTION) {
-                    /* Under construction: yellow/amber overlay */
-                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 80);
+                    /* Under construction: a faint amber wash plus little workers
+                     * busy on the unit (0x85EA, 3-frame animation). */
+                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 45);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
+
+                    Sprite *cw = sprites_find(&game.sprites, SPR_CONST_WORKER);
+                    if (cw) {
+                        int fw = 32, nf = cw->w / fw;     /* 3 frames */
+                        if (nf < 1) nf = 1;
+                        int ww = 24, wh = 30;             /* drawn worker size */
+                        int wy = draw_y + draw_h - wh;    /* stand on the floor */
+                        /* one worker per ~56px of width, each on its own phase
+                         * so they're not lock-stepped. */
+                        for (int wx = tx + 6; wx + ww <= tx + tw; wx += 56) {
+                            int phase = (game.sim.frame / 8 + wx / 56) % nf;
+                            SDL_Rect src = { phase * fw, 0, fw, cw->h };
+                            SDL_Rect dst = { wx, wy, ww, wh };
+                            SDL_RenderCopy(game.renderer, cw->texture, &src, &dst);
+                        }
+                    }
                 } else if (tenant->state == TENANT_STRESSED) {
                     /* Stressed: pulsing red (from MainteT stress cascade) */
                     int pulse = 40 + (game.sim.frame % 30) * 2;
@@ -5253,6 +5270,8 @@ int main(int argc, char *argv[])
         sprites_apply_white_key(&game.sprites, game.renderer, 0x8828);
         /* Recycling collection truck (0x892E): white-keyed deco overlay. */
         sprites_apply_white_key(&game.sprites, game.renderer, 0x892E);
+        /* Construction workers (0x85EA, 3 frames): white-keyed. */
+        sprites_apply_white_key(&game.sprites, game.renderer, SPR_CONST_WORKER);
         /* Medical: 0x8728 + 0x8729 horizontally (+ 0x872A via triple) */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8728, 0x8729, SPR_MEDICAL_COMP) == 0) {
             /* Try adding 0x872A if present */

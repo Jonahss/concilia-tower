@@ -52,10 +52,11 @@
 - [x] **Lobby endcap** → now tiles cap+body segments like the original (OS loadLobbies). `5ab8401`
 - [x] **Office frames** → time-of-day + windowed variant (was capacity ramp). `14fdb7c`. OPEN: window-vs-no-window variant rule (a/b/c asked Jonah).
 
-## Batch 2 — gating + modes
-- [ ] Item gating: HIDE locked items (not grey); toolbox physically shrinks/grows with stars (decomp seg_1050).
-- [ ] Campaign mode (default): star-gated. **Starts with NO lobby** (empty lot — Jonah confirmed).
-- [ ] Sandbox/Editor mode: everything unlocked.
+## Batch 2 — gating + modes — DONE
+- [x] Item gating: HIDE locked items + toolbox compacts/grows with stars. `ab300d8`
+- [x] Campaign mode (default): star-gated, starts on empty lot (no lobby). `c5bbbe1`
+- [x] Sandbox mode: everything unlocked. F8 toggles in game. `5aa155a` `c5bbbe1`
+- ITEM_STAR_REQ[] table in tower.h; item_unlocked(); MODE_CAMPAIGN/SANDBOX in GameSim.mode.
 
 ### Unlock schedule — CONFIRMED (kiwizoid GameFAQs + simtower.fandom, two primary sources agree)
 - 1★: Lobby, Floor, Stairs, Standard Elevator, Office, Condo, Fast Food
