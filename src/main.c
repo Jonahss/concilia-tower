@@ -44,9 +44,6 @@
 /* Floor/ceiling color source — 96×36, extract column at x=16 for floor color */
 #define SPR_FLOOR_SRC   0x83e8
 
-/* Entrance decoration — red awning at ground level */
-#define SPR_ENTRANCE    0x83e9
-
 /* Office: 0x85A8 — 288×24 = 4 frames of 72px (Jonah's decode):
  * 0 day, 1 night, 2 day-with-windows, 3 night-with-windows. */
 #define SPR_OFFICE_BASE 0x85a8
@@ -1280,8 +1277,19 @@ static void render_tower(void)
                  * (0x8E28, one floor tall, tileable) instead of the finished
                  * interior — the workers (below) supply the activity. Falls back
                  * to the normal sprite if the grid sprite isn't loaded. */
+                /* Two construction stages: open scaffolding grid (0x8E28) for
+                 * the first half, then the solid walls-up fill (0x8E29) as it
+                 * nears completion — visible on slow builds like hotels.
+                 * (Stage split inferred; both are dedicated construction art.) */
+                uint16_t cg_id = SPR_CONST_GRID;
+                if (tenant->state == TENANT_CONSTRUCTION &&
+                    (int)tenant->type < ITEM_TYPE_COUNT) {
+                    int total = CONSTRUCTION_TIME[(int)tenant->type];
+                    if (total > 1 && tenant->construction <= total / 2)
+                        cg_id = SPR_CONST_SOLID;
+                }
                 Sprite *cgrid = (tenant->state == TENANT_CONSTRUCTION)
-                              ? sprites_find(&game.sprites, SPR_CONST_GRID) : NULL;
+                              ? sprites_find(&game.sprites, cg_id) : NULL;
                 if (cgrid && cgrid->w > 0) {
                     for (int fr = 0; fr < item_floors; fr++) {
                         int fy = draw_y + fr * CELL_H;
