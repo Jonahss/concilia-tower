@@ -209,6 +209,9 @@
  * sheets 0x8668+v with three fill frames, used straight from the EXE. */
 #define SPR_RESTAURANT_V0     0x0020  /* ..0x0024, 5 variants */
 #define SPR_FASTFOOD_V0       0x0025  /* ..0x0029, 5 variants */
+#define SPR_RECYCLING_COMP    0x002B  /* 5-frame trash-accumulation cycle: top row
+                                       * 0x88E9..0x88ED over bottom 0x8929..0x892D
+                                       * (OS loadRecycling). 200px frames. */
 #define SPR_CONDO_COMP        0x002A  /* 0x8628..0x862c joined = 5 frames of 128px:
                                        * 0 occupied-day, 1 occupied-evening,
                                        * 2 occupied-night, 3 for-sale-day,
@@ -236,7 +239,7 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
         * day|night frames, 5 floors tall (composited at init) */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
     case ITEM_SECURITY:      *frame_w = 128; return SPR_SECURITY;     /* 128px, palette animated */
-    case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_EMPTY; /* 200×60, single frame */
+    case ITEM_RECYCLING:     *frame_w = 200; return SPR_RECYCLING_COMP; /* 5-frame trash cycle */
     case ITEM_STAIRS:        *frame_w = 64;  return SPR_STAIRS_COMP;
     case ITEM_ESCALATOR:     *frame_w = 64;  return SPR_ESCALATOR_COMP;
     case ITEM_ELEVATOR_SHAFT:
@@ -1234,6 +1237,14 @@ static void render_tower(void)
                     int reachable = (pf >= 0 && pf < TOWER_FLOOR_COUNT &&
                                      game.sim.reach_public[pf]);
                     frame_idx = reachable ? (1 + (tenant->id % (nframes - 1))) : 0;
+                } else if (tenant->type == ITEM_RECYCLING && nframes >= 5) {
+                    /* Recycling (Jonah): the frames are a trash-accumulation
+                     * cycle. We don't model a fill level, so loop it slowly —
+                     * trash piles up then the truck clears it back to empty. */
+                    frame_idx = (game.sim.frame / 96) % nframes;
+                } else if (tenant->type == ITEM_METRO && nframes >= 3) {
+                    /* Metro (Jonah): frames 0/1 ≈ daytime platform, 2 = night. */
+                    frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2 : 0;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (tenant->capacity <= CAP_EMPTY) {
@@ -4947,6 +4958,21 @@ int main(int argc, char *argv[])
             sprites_compose_h(&game.sprites, game.renderer, 0x00F5, 0x862B, 0x00F6) == 0 &&
             sprites_compose_h(&game.sprites, game.renderer, 0x00F6, 0x862C, SPR_CONDO_COMP) == 0)
             ok++; else fail++;
+        /* Recycling: 5-frame trash cycle — each frame is top row 0x88E9+i over
+         * bottom row 0x8929+i (OS loadRecycling), then the 5 joined across. */
+        {
+            int rec_ok = 1;
+            for (int f = 0; f < 5 && rec_ok; f++)
+                if (sprites_compose_v(&game.sprites, game.renderer,
+                                      0x88E9 + f, 0x8929 + f, 0x00E0 + f) != 0)
+                    rec_ok = 0;
+            if (rec_ok &&
+                sprites_compose_h(&game.sprites, game.renderer, 0x00E0, 0x00E1, 0x00E5) == 0 &&
+                sprites_compose_h(&game.sprites, game.renderer, 0x00E5, 0x00E2, 0x00E6) == 0 &&
+                sprites_compose_h(&game.sprites, game.renderer, 0x00E6, 0x00E3, 0x00E7) == 0 &&
+                sprites_compose_h(&game.sprites, game.renderer, 0x00E7, 0x00E4, SPR_RECYCLING_COMP) == 0)
+                ok++; else fail++;
+        }
         /* Stairs: 0x8968 (top) + 0x89A8 (bottom) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8968, 0x89A8, SPR_STAIRS_COMP) == 0)
             ok++; else fail++;
