@@ -80,6 +80,7 @@
 
 /* Security: 0x8768 (animated, 3 frames via palette cycling) */
 #define SPR_SECURITY    0x8768
+#define SPR_HOUSEKEEPING 0x87A8  /* laundry room: washers + linen carts (120×24) */
 #define SPR_SECURITY_F1 0xf768  /* synthetic: palette-cycle steps 1/2 */
 
 /* Medical: 0x8728+0x8729+0x872A (3 bitmaps horizontally) */
@@ -246,7 +247,7 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_ELEVATOR_SERVICE:
     case ITEM_ELEVATOR_EXPRESS: *frame_w = 32; return SPR_ELEV_SHAFT; /* reuse shaft art for now */
     case ITEM_FLOOR:         *frame_w = 0;   return 0;
-    case ITEM_HOUSEKEEPING:  *frame_w = 0;   return 0; /* no exterior sprite yet (fallback block) */
+    case ITEM_HOUSEKEEPING:  *frame_w = 120; return SPR_HOUSEKEEPING; /* laundry room */
     default:                 *frame_w = 0;   return 0;
     }
 }
