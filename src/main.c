@@ -1230,7 +1230,8 @@ static void render_tower(void)
                         frame_idx = 0;
                     } else {
                         int cr = CAP_MAX - CAP_MIN, cp = tenant->capacity - CAP_MIN;
-                        if (cp < 0) cp = 0; if (cp > cr) cp = cr;
+                        if (cp < 0) cp = 0;
+                        if (cp > cr) cp = cr;
                         frame_idx = 1 + (cp * 2) / cr;     /* 1..3 */
                     }
                 } else if (tenant->type == ITEM_PARTY_HALL && nframes >= 3) {
@@ -1783,8 +1784,10 @@ static void render_stats_window(void)
         int64_t lo = graphs[g].a[0], hi = lo;
         for (int i = 0; i < n; i++) {
             int64_t v1 = graphs[g].a[i], v2 = graphs[g].b[i];
-            if (v1 < lo) lo = v1; if (v1 > hi) hi = v1;
-            if (v2 < lo) lo = v2; if (v2 > hi) hi = v2;
+            if (v1 < lo) lo = v1;
+            if (v1 > hi) hi = v1;
+            if (v2 < lo) lo = v2;
+            if (v2 > hi) hi = v2;
         }
         if (hi == lo) hi = lo + 1;
         stats_plot(gx + 1, gy + 1, gw - 2, gh - 2, graphs[g].a, n, graphs[g].ca, lo, hi);
@@ -3034,7 +3037,7 @@ static void render_minimap(void)
 #define TOOL_COLS   4       /* 4×32 = the faithful 128px window width */
 
 /* Tool button layout.
- * icon_idx = position in the items bitmap (from OpenSkyscraper Item/*.h).
+ * icon_idx = position in the items bitmap (from OpenSkyscraper Item headers).
  * -1 = no bitmap icon, use label text fallback. */
 /* A toolbar slot. If sub_count == 0 it's a plain button that selects `type`.
  * If sub_count > 0 it's a GROUP: the button shows icon_idx (the primary, = sub[0]),
@@ -3138,6 +3141,22 @@ static int toolbox_visible_count(void)
     int n = 0;
     for (int i = 0; i < TOOL_BTN_COUNT; i++) if (tool_button_shown(i)) n++;
     return n;
+}
+
+/* Number of icon rows currently shown — drives the window height so the toolbox
+ * physically grows and shrinks with the unlocked item count. */
+static int tool_visible_rows(void)
+{
+    int r = (toolbox_visible_count() + TOOL_COLS - 1) / TOOL_COLS;
+    return r < 1 ? 1 : r;
+}
+
+/* Toolbox window height for the current row count (title + speed + tools row +
+ * icon grid + a cost strip). */
+static int tool_win_height(void)
+{
+    int grid_off = tool_grid_origin_y() - game.tool_y;   /* top chrome height */
+    return grid_off + tool_visible_rows() * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 20;
 }
 
 /* The j-th VISIBLE (unlocked) sub-item of group i, or -1. */
@@ -3263,7 +3282,7 @@ static void render_toolbox(void)
     wy += WIN_TITLEBAR_H;
     
     /* Toolbox body */
-    draw_win31_rect(wx, wy, TOOL_WIN_W, TOOL_WIN_H - WIN_TITLEBAR_H, 1);
+    draw_win31_rect(wx, wy, TOOL_WIN_W, tool_win_height() - WIN_TITLEBAR_H, 1);
     
     /* Speed buttons at top. The original toolbar has just TWO buttons — Play and
      * Pause — each with a normal + pressed state (verified by dumping the EXE):
@@ -3360,8 +3379,8 @@ static void render_toolbox(void)
         snprintf(full_buf, sizeof(full_buf), "%s  %s",
                  tower_item_name(game.build_type), cost_buf);
         
-        /* Place below the icon grid, not at a fixed window offset (the grid grew). */
-        int rows = (TOOL_BTN_COUNT + TOOL_COLS - 1) / TOOL_COLS;
+        /* Place below the icon grid, which shrinks/grows with the unlocked set. */
+        int rows = tool_visible_rows();
         int label_y = grid_y + rows * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 4;
         SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
         if (ts) {
