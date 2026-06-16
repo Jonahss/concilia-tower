@@ -4633,7 +4633,18 @@ static void handle_event(SDL_Event *ev)
                 add_event_message("Load failed (no/old save).");
             }
             break;
-        
+
+        case SDLK_F8:   /* Toggle Campaign (star-gated) / Sandbox (all unlocked) */
+            game.sim.mode = (game.sim.mode == MODE_CAMPAIGN)
+                          ? MODE_SANDBOX : MODE_CAMPAIGN;
+            add_event_message(game.sim.mode == MODE_SANDBOX
+                              ? "Sandbox: everything unlocked"
+                              : "Campaign: star-gated unlocks");
+            /* A now-locked group's open pull-down would dangle — close it. */
+            if (game.tool_popup >= 0 && !tool_button_shown(game.tool_popup))
+                game.tool_popup = -1;
+            break;
+
         /* Debug toggle — F1 gets eaten by browsers, use backtick */
         case SDLK_F1:
         case SDLK_BACKQUOTE:
@@ -5681,9 +5692,10 @@ int main(int argc, char *argv[])
     }
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
 
-    /* Game mode. Default Sandbox for now (Campaign's empty-lot start lands in a
-     * follow-up); toggle with --campaign / --sandbox or CT_MODE=0|1. */
-    game.sim.mode = MODE_SANDBOX;
+    /* Game mode. Campaign (default): star-gated, starts on an empty lot.
+     * Sandbox: everything unlocked. Toggle with --sandbox / --campaign,
+     * CT_MODE=0|1, or F8 in game. */
+    game.sim.mode = MODE_CAMPAIGN;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--campaign"))      game.sim.mode = MODE_CAMPAIGN;
         else if (!strcmp(argv[i], "--sandbox"))  game.sim.mode = MODE_SANDBOX;
@@ -5731,7 +5743,17 @@ int main(int argc, char *argv[])
         for (int f = 0; f <= 6; f++)
             tower_place(&game.tower, ITEM_ELEVATOR_SHAFT, f, 172);
     }
-    
+
+    /* Campaign starts on an empty lot — drop the convenience starter lobby so
+     * the player lays their own (lobby is a 1-star item, so it's available).
+     * Skipped for Sandbox, imports, and demo scenes. */
+    if (game.sim.mode == MODE_CAMPAIGN && !twr_path && !demo_mode &&
+        !getenv("COMMUTE_DEMO")) {
+        memset(game.tower.grid, 0, sizeof(game.tower.grid));
+        game.tower.tenant_count = 0;
+        add_event_message("Campaign: build a lobby to begin.");
+    }
+
     /* Center camera — show the tower nicely.
      * If screenshot mode with "underground" path, show underground view */
     game.cam_fx = (TOWER_WIDTH * CELL_W) / 2.0f;
