@@ -1185,11 +1185,15 @@ static void render_tower(void)
                      * night, day-with-windows, night-with-windows — a time-of-
                      * day + window variant, NOT an occupancy ramp (the old
                      * proportional map turned a busy office into night-windows).
-                     * Default to the windowed variant (the familiar early-game
-                     * look); window/no-window-as-variant is TBD. */
+                     * Window variant by office TIER, read from the persistent
+                     * half of the capacity dual-use byte (cap_peak): the top-tier
+                     * upgraded "executive" offices use the plain frames (0/1),
+                     * everything below keeps the windowed early-game look (2/3).
+                     * (Jonah's call; top tier = 0x38 <4★ / 0x40 at 4★+.) */
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
-                    frame_idx = 2 + (night ? 1 : 0);
+                    int top_tier = (tenant->cap_peak >= 0x38);
+                    frame_idx = (top_tier ? 0 : 2) + (night ? 1 : 0);
                 } else if (tenant->type == ITEM_CONDO && nframes >= 5) {
                     /* Condo sheet (0x8628..0x862c) = occupied day/evening/night
                      * (0/1/2) + For-Sale day/night (3/4) (Jonah's decode + OS
