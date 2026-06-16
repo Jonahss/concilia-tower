@@ -1205,6 +1205,35 @@ static void render_tower(void)
                                     (tod == TOD_EVENING) ? 1 : 0;
                     else
                         frame_idx = (tod == TOD_NIGHT || tod == TOD_EVENING) ? 4 : 3;
+                } else if (tenant->type == ITEM_MEDICAL && nframes >= 3) {
+                    /* Medical (Jonah's decode): 0 active, 1 clean/idle, 2 night. */
+                    if (game.sim.time_of_day == TOD_NIGHT) frame_idx = 2;
+                    else if (game.sim.medical.active)      frame_idx = 0;
+                    else                                    frame_idx = 1;
+                } else if (tenant->type == ITEM_CINEMA && nframes >= 4) {
+                    /* Cinema (Jonah): 0 inactive/closed, 1 open, 2 crowding in,
+                     * 3 movie screening. Closed off-hours, else crowd ramp 1..3. */
+                    if (!TENANT_ACTIVE_TIMES[ITEM_CINEMA][game.sim.time_of_day]) {
+                        frame_idx = 0;
+                    } else {
+                        int cr = CAP_MAX - CAP_MIN, cp = tenant->capacity - CAP_MIN;
+                        if (cp < 0) cp = 0; if (cp > cr) cp = cr;
+                        frame_idx = 1 + (cp * 2) / cr;     /* 1..3 */
+                    }
+                } else if (tenant->type == ITEM_PARTY_HALL && nframes >= 3) {
+                    /* Party hall (Jonah): 0 dark/closed, 1 lit+empty, 2 party. */
+                    if (!TENANT_ACTIVE_TIMES[ITEM_PARTY_HALL][game.sim.time_of_day])
+                        frame_idx = 0;
+                    else
+                        frame_idx = (tenant->population > 0) ? 2 : 1;
+                } else if (tenant->type == ITEM_PARKING && nframes >= 2) {
+                    /* Parking (Jonah): frame 0 = red X (inaccessible); 1..n-1 are
+                     * car-bay VARIANTS (cosmetic, not occupancy). Red X when the
+                     * floor can't be reached, else a stable per-tenant variant. */
+                    int pf = floor_to_index(tenant->floor);
+                    int reachable = (pf >= 0 && pf < TOWER_FLOOR_COUNT &&
+                                     game.sim.reach_public[pf]);
+                    frame_idx = reachable ? (1 + (tenant->id % (nframes - 1))) : 0;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (tenant->capacity <= CAP_EMPTY) {
