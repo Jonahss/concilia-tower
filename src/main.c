@@ -1271,6 +1271,27 @@ static void render_tower(void)
                 SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
                 SDL_Rect dst = { tx, draw_y, tw, draw_h };
                 SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+
+                /* Recycling collection truck (0x892E): pulls up to empty the
+                 * center when the trash cycle is at its fullest, then it's gone
+                 * (collected). Slides in from the left, parks, slides back. */
+                if (tenant->type == ITEM_RECYCLING &&
+                    ((game.sim.frame / 96) % nframes) == nframes - 1) {
+                    Sprite *truck = sprites_find(&game.sprites, 0x892E);
+                    if (truck) {
+                        int win = game.sim.frame % 96;          /* 0..95 */
+                        float p = (win < 32) ? win / 32.0f
+                                : (win < 64) ? 1.0f
+                                : 1.0f - (win - 64) / 32.0f;    /* arrive/hold/leave */
+                        int tk_w = tw / 3;
+                        int parked = tx + tw / 2 - tk_w / 2;
+                        int off = tx - tk_w;
+                        SDL_Rect td = { off + (int)((parked - off) * p),
+                                        draw_y + draw_h - truck->h,
+                                        tk_w, truck->h };
+                        SDL_RenderCopy(game.renderer, truck->texture, NULL, &td);
+                    }
+                }
             } else if (spr) {
                 /* Full sprite, no frame extraction — scale to fit */
                 SDL_Rect dst = { tx, draw_y, tw, draw_h };
@@ -4973,8 +4994,13 @@ int main(int argc, char *argv[])
                 sprites_compose_h(&game.sprites, game.renderer, 0x00E7, 0x00E4, SPR_RECYCLING_COMP) == 0)
                 ok++; else fail++;
         }
-        /* Stairs: 0x8968 (top) + 0x89A8 (bottom) vertically */
-        if (sprites_compose_v(&game.sprites, game.renderer, 0x8968, 0x89A8, SPR_STAIRS_COMP) == 0)
+        /* Stairs: TWO variants the original merges into one 14-frame walk cycle
+         * (OS loadMergedByID stairs[0]=0x8968/0x89A8, stairs[1]=0x8969/0x89A9,
+         * then side by side). variant0 frame 0 is the empty staircase; the rest
+         * (both variants) are people mid-stride — a longer, smoother animation. */
+        if (sprites_compose_v(&game.sprites, game.renderer, 0x8968, 0x89A8, 0x00E8) == 0 &&
+            sprites_compose_v(&game.sprites, game.renderer, 0x8969, 0x89A9, 0x00E9) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00E8, 0x00E9, SPR_STAIRS_COMP) == 0)
             ok++; else fail++;
         /* Escalator: 0x8AA8 (top) + 0x8AE8 (bottom) vertically */
         if (sprites_compose_v(&game.sprites, game.renderer, 0x8AA8, 0x8AE8, SPR_ESCALATOR_COMP) == 0)
@@ -5016,6 +5042,8 @@ int main(int argc, char *argv[])
         /* Wedding procession (0x8828): bride, groom and guests on a
          * white background — keyed like the other deco sprites. */
         sprites_apply_white_key(&game.sprites, game.renderer, 0x8828);
+        /* Recycling collection truck (0x892E): white-keyed deco overlay. */
+        sprites_apply_white_key(&game.sprites, game.renderer, 0x892E);
         /* Medical: 0x8728 + 0x8729 horizontally (+ 0x872A via triple) */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8728, 0x8729, SPR_MEDICAL_COMP) == 0) {
             /* Try adding 0x872A if present */
