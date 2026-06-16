@@ -3590,8 +3590,9 @@ static void render_ui(void)
     
     /* Update window title with current state (for VNC title bar) */
     char title[256];
-    snprintf(title, sizeof(title), 
-             "ConcilliaTower | $%ld | %d★ | Pop: %d | Day %d | Build: %s",
+    snprintf(title, sizeof(title),
+             "ConcilliaTower | %s | $%ld | %d★ | Pop: %d | Day %d | Build: %s",
+             game.sim.mode == MODE_SANDBOX ? "Sandbox" : "Campaign",
              game.tower.money, game.tower.star_rating, game.tower.population,
              game.tower.day, tower_item_name(game.build_type));
     SDL_SetWindowTitle(game.window, title);
