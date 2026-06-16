@@ -27,17 +27,17 @@
 - [x] ~~Stairs don't let people reach units~~ — Jonah retracted (misread; they do).
 - [x] **Top restaurant full despite being unreachable** → capacity byte drains when unreachable. `4b9f662`
 - [x] **Adding elevator cars doesn't work** → finger tool + double-click dialog (`c4f4fdc`) AND faithful elevator-tool-on-shaft car add (`19b04c2`).
-- [ ] **Condos showing occupancy?** — STILL TO VERIFY. (game_calc_population gives condos pop when active or via the inactive-period condo branch; confirm it renders.)
+- [x] **Condos showing occupancy?** — resolved by the condo sprite-state fix (`9506891`): renders occupied day/eve/night vs For-Sale; population counted. Jonah verifying on VNC.
 
 ### Tools
 - [x] **Pointer/finger tool** wired as interact (opens elevator dialog). `c4f4fdc`
 - [x] **Inspector tool** — click a unit → info popup (floor, status, occupancy, income, satisfaction, tier). `1d4eccc`
-- [ ] **Drag-to-extend elevator shaft up/down** — clicking the cap extends; verify the drag UX feels right / works for Jonah.
+- [x] **Drag-to-extend elevator shaft** — works: elevator tool drag extends both directions (drag_place_units). Jonah verifying feel on VNC.
 
 ### Animation
 - [x] **Stairs/escalators animate** when carrying people (7/14-frame stairs, 8-frame escalator). `0d9f07c` `14f0f39`
 - [x] **Recycling trash cycle + collection truck** animate. `6f386e2` `14f0f39`
-- [ ] **Construction-worker build animation** — does it exist? Investigate, then wire or note as absent.
+- [x] **Construction-worker build animation** — workers animate on units under construction (0x85EA, was loaded-but-unused). `1a80ed9`
 
 ### Menu / toolbar / HUD
 - [x] **Sub-menu selection updates the selected-tile sprite** in the group button. `b17fd4a`

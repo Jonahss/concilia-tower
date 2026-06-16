@@ -24,7 +24,7 @@
 #define WINDOW_W    960
 #define WINDOW_H    720
 #define HUD_HEIGHT  0     /* No separate HUD — info window handles it */
-#define MENU_BAR_H  0     /* No menu bar — toolbox is the interface */
+#define MENU_BAR_H  18    /* Win3.1 menu bar across the top */
 #define MENU_ITEM_PAD 12  /* Horizontal padding for menu items (kept for dropdown code) */
 
 /* ---------- Sprite IDs for rendering ---------- */
@@ -444,6 +444,8 @@ typedef struct {
 #define ACT_SCREENSHOT   6
 #define ACT_QUIT         7
 #define ACT_SANTA        8
+#define ACT_MODE_CAMPAIGN 9
+#define ACT_MODE_SANDBOX  10
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -506,11 +508,14 @@ static const MenuItem menu_view[] = {
 };
 #define MENU_VIEW_COUNT 4
 
-/* File menu */
+/* Game menu — mode (radio) + quit */
 static const MenuItem menu_file[] = {
+    { "Campaign Mode",     ITEM_NONE,  ACT_MODE_CAMPAIGN },
+    { "Sandbox Mode",      ITEM_NONE,  ACT_MODE_SANDBOX },
+    { NULL, ITEM_NONE, ACT_NONE },     /* separator */
     { "Quit\tQ",           ITEM_NONE,  ACT_QUIT },
 };
-#define MENU_FILE_COUNT 1
+#define MENU_FILE_COUNT 4
 
 /* Top-level menus */
 typedef struct {
@@ -520,7 +525,7 @@ typedef struct {
 } TopMenu;
 
 static const TopMenu top_menus[] = {
-    { "File",       menu_file,        MENU_FILE_COUNT },
+    { "Game",       menu_file,        MENU_FILE_COUNT },
     { "Build Res.", menu_build_res,   MENU_BUILD_RES_COUNT },
     { "Build Com.", menu_build_com,   MENU_BUILD_COM_COUNT },
     { "Transport",  menu_build_trans, MENU_BUILD_TRANS_COUNT },
@@ -3493,6 +3498,8 @@ static void render_dropdown(void)
         if (tm->items[i].action == ACT_SPEED_2 && game.sim.speed == SPEED_FAST) checked = 1;
         if (tm->items[i].action == ACT_SPEED_3 && game.sim.speed == SPEED_TURBO) checked = 1;
         if (tm->items[i].action == ACT_DEBUG_TOGGLE && game.show_debug) checked = 1;
+        if (tm->items[i].action == ACT_MODE_CAMPAIGN && game.sim.mode == MODE_CAMPAIGN) checked = 1;
+        if (tm->items[i].action == ACT_MODE_SANDBOX && game.sim.mode == MODE_SANDBOX) checked = 1;
         
         if (checked) {
             draw_menu_text("\xe2\x9c\x93", drop_x + 6, iy + 2, is_hover); /* ✓ */
@@ -4113,6 +4120,8 @@ static void render(void)
     render_elv_dialog();
     render_inspect_popup();
     render_event_alert();
+    render_menu_bar();         /* Win3.1 top bar + its open dropdown */
+    render_dropdown();
     render_disaster_modal();   /* on top of everything — it's modal */
     render_certificate();      /* star-promotion celebration card */
 
@@ -4534,6 +4543,16 @@ static void execute_menu_item(const MenuItem *item)
     case ACT_QUIT: game.running = 0; break;
     case ACT_SANTA:
         if (!game.sim.santa.active) game_launch_santa(&game.sim, game.screen_w);
+        break;
+    case ACT_MODE_CAMPAIGN:
+    case ACT_MODE_SANDBOX:
+        game.sim.mode = (item->action == ACT_MODE_SANDBOX)
+                      ? MODE_SANDBOX : MODE_CAMPAIGN;
+        add_event_message(game.sim.mode == MODE_SANDBOX
+                          ? "Sandbox: everything unlocked"
+                          : "Campaign: star-gated unlocks");
+        if (game.tool_popup >= 0 && !tool_button_shown(game.tool_popup))
+            game.tool_popup = -1;
         break;
     default: break;
     }
@@ -5686,13 +5705,14 @@ int main(int argc, char *argv[])
     game.menu_bar_hover = -1;
     game.rainy_day = 0;
     
-    /* Default window positions (matching original SimTower layout) */
+    /* Default window positions (matching original SimTower layout) — shifted
+     * below the menu bar so nothing overlaps it. */
     game.map_x = 0;
-    game.map_y = 0;    /* Top left */
+    game.map_y = MENU_BAR_H;           /* Top left, under the bar */
     game.tool_x = 0;
-    game.tool_y = MAP_WIN_H;  /* Below minimap */
+    game.tool_y = MENU_BAR_H + MAP_WIN_H;  /* Below minimap */
     game.info_x = game.screen_w - INFO_BAR_W;
-    game.info_y = 0;   /* Top right */
+    game.info_y = MENU_BAR_H;          /* Top right, under the bar */
     game.win_dragging = 0;
     game.tool_popup = -1;
     game.demolish_mode = 0;
@@ -5700,6 +5720,7 @@ int main(int argc, char *argv[])
      * UI states for visual verification — TB_POPUP=<button index> opens a group's
      * pull-down; DEMOLISH=1 activates the bulldozer. */
     if (getenv("TB_POPUP")) game.tool_popup = atoi(getenv("TB_POPUP"));
+    if (getenv("MENU_OPEN")) game.menu_open = atoi(getenv("MENU_OPEN"));
     if (getenv("DEMOLISH")) game.demolish_mode = 1;
     if (getenv("STATS")) game.show_stats = 1;
     if (getenv("TUNING")) game.show_tuning = 1;
