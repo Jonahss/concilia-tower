@@ -395,8 +395,18 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
 
         case TENANT_CONSTRUCTION:
-            /* Under construction — decrement timer */
-            t->construction--;
+            /* Under construction — decrement on a GAME-TIME cadence, not every
+             * frame. The old code stepped construction every update_tenants
+             * call (every 4 frames), so an office (CONSTRUCTION_TIME 2) finished
+             * in ~0.13s and build time was tied to frame rate, not the sim
+             * clock. Gate the decrement to ~12 steps per in-game quarter
+             * (cdiv = ticks_per_quarter/12) so it's frame-rate independent and
+             * scales with game speed: office ~0.8s, hotel ~22s, at normal. */
+            {
+                int cdiv = sim->ticks_per_quarter / 24;
+                if (cdiv < 4) cdiv = 4;
+                if (sim->tick % cdiv < 4) t->construction--;
+            }
             if (t->construction <= 0) {
                 t->state = TENANT_MOVING_IN;
                 t->capacity = CAP_MIN;
@@ -870,11 +880,11 @@ void game_update(GameSim *sim, Tower *tower)
                 sim->expenses_this_quarter += upkeep;
             }
             
-            /* Santa: a once-a-year holiday flyby. The EXE has no calendar
-             * months (a "year" is just 4 quarters; SantaT's launch was never
-             * wired), so "Christmas" maps to the last day of each game year
-             * (year = 4 days; the year's final day is day % 4 == 0). */
-            if (tower->day > 0 && tower->day % 4 == 0 && !sim->santa.active) {
+            /* Santa: a rare holiday flyby. A game "year" is only 4 days, so
+             * firing every year (day % 4) put Santa on screen every ~3 minutes
+             * at normal speed — far too often. Make it a roughly-every-third-
+             * year Easter egg (day % 12) so it stays a treat. */
+            if (tower->day > 0 && tower->day % 12 == 0 && !sim->santa.active) {
                 game_launch_santa(sim, 960);
             }
             
@@ -1473,8 +1483,15 @@ void game_update_santa(GameSim *sim)
     if (!sim->santa.active) return;
     
     sim->santa.x -= 3;   /* Fly left (slower than original's 10 for visibility) */
-    sim->santa.y += 1;   /* Drift down slightly */
-    
+    /* Stay HIGH in the sky with a gentle bob, instead of drifting down low
+     * across the flight (the old y += 1 sank Santa to mid-screen by the end).
+     * Integer triangle wave — no math.h needed. */
+    {
+        int phase = (sim->santa.x >> 3) & 15;          /* 0..15 */
+        int bob = phase < 8 ? phase : 16 - phase;      /* 0..8..0 */
+        sim->santa.y = 14 + bob;                        /* stays high: 14..22 */
+    }
+
     if (sim->santa.x < -200) {
         sim->santa.active = 0;  /* Off screen */
     }

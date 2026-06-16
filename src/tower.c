@@ -141,6 +141,14 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         return 0;
     }
 
+    /* Elevator placement has NO lobby/adjacency/content requirement — verified
+     * against the binary (MakeElevator 11f8:0fea, globals.md #51/#52): a
+     * standard/service shaft can be placed on any floor in the buildable range,
+     * and the express-only sky-lobby anchor (below) is the single floor rule.
+     * The motor room / pit extend one floor above/below the served range,
+     * which is expected. (My earlier "must connect to the tower" gate was
+     * invented and wrong — Jonah caught it.) */
+
     /* Express shafts anchor at lobby levels: a NEW express shaft must
      * start on the ground floor, a basement floor, or a sky-lobby floor
      * (every 15th) — MakeElevator (11f8:0ff9) gates type 0 above ground
@@ -169,16 +177,22 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     
     /* Check for overlap on ALL floors this item occupies */
     if (!is_transport) {
+        int elev = item_is_elevator(type);
         for (int f = floor; f < floor + height; f++) {
             int fidx = floor_to_index(f);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
             for (int cx = x; cx < x + width; cx++) {
-                if (tower->grid[fidx][cx].type != ITEM_NONE) {
-                    printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
-                           tower_item_name(type), floor, x, f, cx,
-                           tower_item_name(tower->grid[fidx][cx].type));
-                    return 0;
-                }
+                ItemType occ = tower->grid[fidx][cx].type;
+                if (occ == ITEM_NONE) continue;
+                /* An elevator shaft passes THROUGH the lobby and plain floors —
+                 * the shaft shares those structural cells (this is how you run a
+                 * shaft up from the ground lobby). It still can't overlap rooms
+                 * or another shaft. */
+                if (elev && (occ == ITEM_LOBBY || occ == ITEM_FLOOR)) continue;
+                printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
+                       tower_item_name(type), floor, x, f, cx,
+                       tower_item_name(occ));
+                return 0;
             }
         }
     } else {
@@ -247,7 +261,9 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             return 0;
         }
     } else if (floor > 0) {
-        /* Above ground: MUST have support directly below */
+        /* Above ground: needs SOME support directly below (the floor-below has
+         * content somewhere under the footprint). Empty floorspace on a built
+         * floor stays freely buildable — Jonah's rule. */
         int has_support = 0;
         int below_idx = floor_to_index(floor - 1);
         if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
@@ -324,23 +340,30 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
         if (existing_lobby) {
-            /* Cells this segment newly covers — pure overlap over existing
-             * lobby adds nothing, so it's free (don't charge for re-placing). */
-            int new_cells = 0;
-            for (int cx = x; cx < x + width; cx++)
-                if (tower->grid[fidx][cx].type != ITEM_LOBBY) new_cells++;
-
-            /* Extend existing lobby to cover new segment */
+            /* Extend existing lobby to span [final_left, final_right). The
+             * original (OpenSkyscraper Game.cpp ICON_LOBBY) grows the single
+             * lobby item's size to cover a far click — the lobby is ONE
+             * CONTIGUOUS structure, never a span with holes. So fill EVERY
+             * cell in the final span as lobby, not just the clicked segment;
+             * leaving the gap empty was the bug (no floor support there →
+             * couldn't build straddling, and the endcap tiling broke). */
             int old_left = existing_lobby->x;
             int old_right = existing_lobby->x + existing_lobby->width;
             int new_left = x;
             int new_right = x + width;
             int final_left = (new_left < old_left) ? new_left : old_left;
             int final_right = (new_right > old_right) ? new_right : old_right;
+
+            /* Count cells that aren't lobby yet (the gap + the new segment),
+             * so we charge per newly-built segment rather than per click. */
+            int new_cells = 0;
+            for (int cx = final_left; cx < final_right; cx++)
+                if (tower->grid[fidx][cx].type != ITEM_LOBBY) new_cells++;
+
             existing_lobby->x = final_left;
             existing_lobby->width = final_right - final_left;
-            /* Fill new grid cells */
-            for (int cx = x; cx < x + width; cx++) {
+            /* Fill the WHOLE contiguous span as lobby. */
+            for (int cx = final_left; cx < final_right; cx++) {
                 TowerCell *cell = &tower->grid[fidx][cx];
                 cell->type = ITEM_LOBBY;
                 cell->tenant_id = existing_lobby->id;
@@ -348,10 +371,13 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->flags = 1;
             }
             if (new_cells > 0) {
-                tower->money -= cost;
-                tower->built_value += cost;
-                printf("Extended lobby on F%d: now x=%d w=%d (cost $%d, balance $%ld)\n",
-                       floor, final_left, existing_lobby->width, cost, tower->money);
+                /* $cost per width-sized segment newly covered (round up). */
+                int segs = (new_cells + width - 1) / width;
+                int charge = cost * segs;
+                tower->money -= charge;
+                tower->built_value += charge;
+                printf("Extended lobby on F%d: now x=%d w=%d (+%d cells, cost $%d, balance $%ld)\n",
+                       floor, final_left, existing_lobby->width, new_cells, charge, tower->money);
             }
             return existing_lobby->id;
         }

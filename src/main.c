@@ -1114,32 +1114,33 @@ static void render_tower(void)
                 int cap_w = 56;
                 int lobby_pw = tenant->width * CELL_W;
 
-                /* Faithful to the original (OpenSkyscraper loadLobbies): the
-                 * lobby tiles repeating [cap-pillar (56px) + body (256px)]
-                 * segments, the cap drawn AS-IS (it's a column separator, not a
-                 * mirrored building-edge wall). cap = chunk +272, body = chunk
-                 * +0. Tile from the left across the whole lobby width. */
-                int seg_w = cap_w + interior_w;          /* 56 + 256 = 312 */
-                for (int sxp = 0; sxp < lobby_pw; sxp += seg_w) {
-                    int cw = cap_w;
-                    if (sxp + cw > lobby_pw) cw = lobby_pw - sxp;
-                    if (cw > 0) {
-                        int csx = tx + sxp;
-                        if (!(csx + cw < 0 || csx > game.screen_w)) {
-                            SDL_Rect src_cap = { base + 272, 0, cw, sheet->h };
-                            SDL_Rect dst_cap = { csx, ty, cw, CELL_H };
-                            SDL_RenderCopy(game.renderer, sheet->texture, &src_cap, &dst_cap);
-                        }
-                    }
-                    int bxp = sxp + cap_w;
-                    if (bxp >= lobby_pw) continue;
+                /* Faithful to the original (OpenSkyscraper Lobby::render +
+                 * loadLobbies): the lobby is the interior BODY (chunk +0,
+                 * 256px) TILED across the whole width, with the facade
+                 * overlay (chunk +272, 56px) drawn exactly ONCE at the LEFT
+                 * edge — it is a single left-edge facade, NOT a per-segment
+                 * separator. (The old code tiled [facade+body] every 312px,
+                 * stamping the facade mid-lobby — those were the stray red
+                 * "endcap" strips.) The red entrance awnings at the two true
+                 * ends come separately from the 0x83E9 overlay pass. */
+                for (int sxp = 0; sxp < lobby_pw; sxp += interior_w) {
                     int bw = interior_w;
-                    if (bxp + bw > lobby_pw) bw = lobby_pw - bxp;
-                    int bsx = tx + bxp;
+                    if (sxp + bw > lobby_pw) bw = lobby_pw - sxp;
+                    int bsx = tx + sxp;
                     if (bsx + bw < 0 || bsx > game.screen_w) continue;
                     SDL_Rect src_body = { base, 0, bw, sheet->h };
                     SDL_Rect dst_body = { bsx, ty, bw, CELL_H };
                     SDL_RenderCopy(game.renderer, sheet->texture, &src_body, &dst_body);
+                }
+                /* Facade overlay — once, at the left edge, on top of the body. */
+                {
+                    int fw = cap_w;
+                    if (fw > lobby_pw) fw = lobby_pw;
+                    if (fw > 0 && !(tx + fw < 0 || tx > game.screen_w)) {
+                        SDL_Rect src_cap = { base + 272, 0, fw, sheet->h };
+                        SDL_Rect dst_cap = { tx, ty, fw, CELL_H };
+                        SDL_RenderCopy(game.renderer, sheet->texture, &src_cap, &dst_cap);
+                    }
                 }
                 continue;
             } else if (spr && frame_w_hint > 0) {
@@ -1555,13 +1556,12 @@ static void render_tower(void)
         }
     }
 
-    /* Fire escapes — both sides of every floor's extent, ground up to
-     * the build ceiling (11c0:02c0 over file floors 10..110: left
-     * piece at extent_left*8 - 24, right piece at extent_right*8;
-     * basements get none). */
+    /* Fire escapes — both sides of every floor's extent, ABOVE the ground
+     * floor up to the build ceiling. Jonah's call: no fire escapes on the
+     * ground floor (the lobby/entrance level); basements get none either. */
     if (game.fireladder) {
         int half_w = game.fireladder->w / 2;
-        for (int floor = 0; floor <= TOWER_MAX_FLOOR; floor++) {
+        for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
             int fidx = floor_to_index(floor);
             if (ovl_right[fidx] == 0) continue;     /* empty floor */
             int lx, ly, rx, ry;
@@ -2597,8 +2597,8 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define MAP_WIN_W   200       /* Map window (left side) */
 #define MAP_WIN_H   280       /* Map height (sky + ground) */
 
-#define TOOL_WIN_W  128       /* Faithful toolbox width (toolbox.rml: 128px = 4×32 icons) */
-#define SPEED_BTN_W 56        /* Single wide play/pause toggle */
+#define TOOL_WIN_W  72        /* Narrow toolbox to match the original (2-column item palette) */
+#define SPEED_BTN_W 64        /* Single wide play/pause toggle — fills the narrow window */
 #define SPEED_BTN_H 26
 #define TOOL_WIN_H  264       /* Fits play/pause + tools + 5-row icon grid + cost */
 
@@ -3042,7 +3042,7 @@ static void render_minimap(void)
 
 #define TOOL_BTN_SIZE 32    /* Match original 32×32 icon size */
 #define TOOL_BTN_PAD  0     /* Original buttons abut edge-to-edge (bevel is in the art) */
-#define TOOL_COLS   4       /* 4×32 = the faithful 128px window width */
+#define TOOL_COLS   2       /* 2-column item palette — matches the original toolbox */
 
 /* Tool button layout.
  * icon_idx = position in the items bitmap (from OpenSkyscraper Item headers).
@@ -3375,7 +3375,9 @@ static void render_toolbox(void)
             }
         }
 
-        if (tb->sub_count > 0) draw_pulldown_marker(bx, by);
+        /* Pull-down marker only when there's an actual choice — a group with
+         * just one unlocked sub-item acts as a plain button (no arrow/menu). */
+        if (tool_sub_visible_count(i) > 1) draw_pulldown_marker(bx, by);
     }
     
     /* Cost display at bottom */
@@ -4378,12 +4380,19 @@ static int toolbox_click(int mx, int my)
         tool_button_rect(i, &bx, &by);
         if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
             const ToolButton *tb = &tool_buttons[i];
-            if (tb->sub_count > 0) {
-                game.tool_popup = (game.tool_popup == i) ? -1 : i;  /* toggle */
+            if (tool_sub_visible_count(i) > 1) {
+                game.tool_popup = (game.tool_popup == i) ? -1 : i;  /* toggle menu */
+                game.build_type = tb->type;   /* primary (= sub[0] for a group) */
+            } else if (tb->sub_count > 0) {
+                /* Group with a single unlocked option — select it directly,
+                 * no pull-down (matches the hidden arrow). */
+                game.tool_popup = -1;
+                int vj = tool_sub_visible_index(i, 0);
+                game.build_type = (vj >= 0) ? tb->sub[vj] : tb->type;
             } else {
                 game.tool_popup = -1;
+                game.build_type = tb->type;
             }
-            game.build_type = tb->type;   /* primary (= sub[0] for a group) */
             game.demolish_mode = 0;
             game.finger_mode = game.inspect_mode = 0;
             printf("Build: %s\n", tower_item_name(game.build_type));
