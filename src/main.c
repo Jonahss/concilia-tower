@@ -309,6 +309,10 @@ typedef struct {
     int             demolish_mode;   /* Bulldozer active: clicks remove facilities */
     int             finger_mode;     /* Finger/pointer tool: clicks interact (open
                                       * elevator dialog, etc.) instead of building */
+    int             inspect_mode;    /* Inspector tool: clicks open a unit info popup */
+    int             inspect_open;    /* info popup showing */
+    uint16_t        inspect_tid;     /* tenant the popup is bound to */
+    int             inspect_x, inspect_y;  /* popup window position */
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
     
@@ -1605,6 +1609,7 @@ static void render_tower(void)
 /* ---------- Analytics window (F3) ---------- */
 
 #define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
+#define INSPECT_W      176    /* Inspector info popup width */
 static void draw_win31_titlebar(int x, int y, int w, const char *title);
 
 static void stats_plot(int gx, int gy, int gw, int gh,
@@ -3193,10 +3198,10 @@ static void render_toolbox(void)
          * (x=t*21, normal row y=0). */
         int tx = wx + (TOOL_WIN_W - 3 * 21) / 2;
         for (int t = 0; t < 3; t++) {
-            /* Bulldozer (t==0) draws pressed while demolishing; the finger tool
-             * (t==1) draws pressed while interact mode is on. */
+            /* Each tool draws pressed while its mode is active. */
             int pressed = (t == 0 && game.demolish_mode) ||
-                          (t == 1 && game.finger_mode);
+                          (t == 1 && game.finger_mode) ||
+                          (t == 2 && game.inspect_mode);
             int row_y = pressed ? 21 : 0;
             SDL_Rect src = { t * 21, row_y, 21, 21 };
             SDL_Rect dst = { tx + t * 23, tools_y, 21, 21 };
@@ -3917,6 +3922,96 @@ static void render_event_alert(void)
     }
 }
 
+/* Inspector info popup: a small Win3.1 window with the clicked unit's stats. */
+static void inspect_popup_metrics(int *lines)
+{
+    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
+    if (!t) { *lines = 0; return; }
+    int n = 2;   /* Floor + Status always shown */
+    int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
+               t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
+    int comm = (t->type==ITEM_RESTAURANT||t->type==ITEM_SHOP||t->type==ITEM_FAST_FOOD||
+                t->type==ITEM_CINEMA||t->type==ITEM_PARTY_HALL);
+    if (res || t->population > 0) n++;                       /* People */
+    int type_idx = (int)t->type;
+    if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0) n++;  /* Income */
+    if (res || comm) n++;                                   /* Satisfaction */
+    if (t->type==ITEM_OFFICE) n++;                          /* Tier */
+    if ((t->type==ITEM_HOTEL_SINGLE||t->type==ITEM_HOTEL_TWIN||
+         t->type==ITEM_HOTEL_SUITE) && t->dirty) n++;       /* housekeeping */
+    *lines = n;
+}
+
+static void render_inspect_popup(void)
+{
+    if (!game.inspect_open) return;
+    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
+    if (!t) { game.inspect_open = 0; return; }
+
+    static const char *STATE_NAME[] = { "Empty", "Building", "Moving in",
+        "Occupied", "Closing", "Vacant", "Stressed", "Abandoned" };
+    SDL_Color black = { 0, 0, 0, 255 };
+
+    char ln[8][40];
+    int n = 0, type_idx = (int)t->type;
+    int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
+               t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
+    int comm = (t->type==ITEM_RESTAURANT||t->type==ITEM_SHOP||t->type==ITEM_FAST_FOOD||
+                t->type==ITEM_CINEMA||t->type==ITEM_PARTY_HALL);
+    snprintf(ln[n++], 40, "Floor: %d", t->floor);
+    snprintf(ln[n++], 40, "Status: %s",
+             (t->state < 8) ? STATE_NAME[t->state] : "?");
+    if (res || t->population > 0)
+        snprintf(ln[n++], 40, "People: %d", t->population);
+    if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0)
+        snprintf(ln[n++], 40, "Income: $%d/qtr", TENANT_INCOME[type_idx]);
+    if (res || comm)
+        snprintf(ln[n++], 40, "Satisfaction: %s",
+                 t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");
+    if (t->type == ITEM_OFFICE)
+        snprintf(ln[n++], 40, "Tier: %s",
+                 t->cap_peak >= 0x38 ? "High" : t->cap_peak >= 0x30 ? "Mid" : "Low");
+    if ((t->type==ITEM_HOTEL_SINGLE||t->type==ITEM_HOTEL_TWIN||
+         t->type==ITEM_HOTEL_SUITE) && t->dirty)
+        snprintf(ln[n++], 40, "Needs housekeeping");
+
+    int wx = game.inspect_x, wy = game.inspect_y;
+    int body_h = 8 + n * 14 + 24;
+    draw_win31_titlebar(wx, wy, INSPECT_W, tower_item_name(t->type));
+    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, INSPECT_W, body_h };
+    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    SDL_RenderFillRect(game.renderer, &body);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &body);
+
+    int ly = wy + WIN_TITLEBAR_H + 6;
+    for (int i = 0; i < n; i++) { stats_label(wx + 8, ly, ln[i], black); ly += 14; }
+
+    SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &cb);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &cb);
+    stats_label(cb.x + 8, cb.y + 1, "Close", black);
+}
+
+/* Returns 1 if the click landed in the popup (consumed); closes on Close. */
+static int inspect_popup_click(int mx, int my)
+{
+    if (!game.inspect_open) return 0;
+    int lines = 0;
+    inspect_popup_metrics(&lines);
+    int body_h = 8 + lines * 14 + 24;
+    int wx = game.inspect_x, wy = game.inspect_y;
+    if (mx < wx || mx >= wx + INSPECT_W ||
+        my < wy || my >= wy + WIN_TITLEBAR_H + body_h)
+        return 0;
+    SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
+    if (mx >= cb.x && mx < cb.x + cb.w && my >= cb.y && my < cb.y + cb.h)
+        game.inspect_open = 0;
+    return 1;   /* clicks inside the popup never fall through */
+}
+
 static void render(void)
 {
     /* Cursor follows the active tool: crosshair while bulldozing, else arrow. */
@@ -3938,6 +4033,7 @@ static void render(void)
     render_stats_window();
     render_tuning_window();
     render_elv_dialog();
+    render_inspect_popup();
     render_event_alert();
     render_disaster_modal();   /* on top of everything — it's modal */
     render_certificate();      /* star-promotion celebration card */
@@ -4087,18 +4183,27 @@ static int toolbox_click(int mx, int my)
                 if (mx >= bxt && mx < bxt + 21) {
                     if (t == 0) {                 /* Bulldozer: toggle demolish mode */
                         game.demolish_mode = !game.demolish_mode;
-                        if (game.demolish_mode) { game.tool_popup = -1; game.finger_mode = 0; }
+                        if (game.demolish_mode) {
+                            game.tool_popup = -1;
+                            game.finger_mode = game.inspect_mode = 0;
+                        }
                         printf("Bulldozer %s\n", game.demolish_mode ? "ON" : "off");
                     } else if (t == 1) {          /* Finger/pointer: interact mode */
                         game.finger_mode = !game.finger_mode;
-                        game.demolish_mode = 0;
+                        game.demolish_mode = game.inspect_mode = 0;
                         if (game.finger_mode) {
                             game.build_type = ITEM_NONE;
                             game.tool_popup = -1;
                         }
                         printf("Finger tool %s\n", game.finger_mode ? "ON" : "off");
-                    } else {                      /* Inspector: not yet wired */
-                        game.demolish_mode = 0;
+                    } else {                      /* Inspector: click a unit for info */
+                        game.inspect_mode = !game.inspect_mode;
+                        game.demolish_mode = game.finger_mode = 0;
+                        if (game.inspect_mode) {
+                            game.build_type = ITEM_NONE;
+                            game.tool_popup = -1;
+                        }
+                        printf("Inspector %s\n", game.inspect_mode ? "ON" : "off");
                     }
                     return 1;
                 }
@@ -4116,7 +4221,7 @@ static int toolbox_click(int mx, int my)
                 game.build_type = g->sub[j];
                 game.tool_popup = -1;
                 game.demolish_mode = 0;
-                game.finger_mode = 0;
+                game.finger_mode = game.inspect_mode = 0;
                 printf("Build: %s\n", tower_item_name(game.build_type));
                 return 1;
             }
@@ -4136,7 +4241,7 @@ static int toolbox_click(int mx, int my)
             }
             game.build_type = tb->type;   /* primary (= sub[0] for a group) */
             game.demolish_mode = 0;
-            game.finger_mode = 0;
+            game.finger_mode = game.inspect_mode = 0;
             printf("Build: %s\n", tower_item_name(game.build_type));
             return 1;
         }
@@ -4708,6 +4813,8 @@ static void handle_event(SDL_Event *ev)
             
             /* Elevator dialog click (body, not title bar) */
             if (elv_dialog_click(ev->button.x, ev->button.y)) break;
+            /* Inspector info popup click (close button / swallow body clicks) */
+            if (inspect_popup_click(ev->button.x, ev->button.y)) break;
 
             /* Toolbox click (body, not title bar) */
             if (toolbox_click(ev->button.x, ev->button.y)) break;
@@ -4730,6 +4837,27 @@ static void handle_event(SDL_Event *ev)
                             printf("Demolish: %s\n", tower_item_name(ty));
                         else
                             printf("Can't demolish %s\n", tower_item_name(ty));
+                    }
+                }
+                break;
+            }
+
+            /* Inspector tool: click a unit to open its info popup. */
+            if (game.inspect_mode) {
+                int fidx = floor_to_index(game.mouse_floor);
+                if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
+                    game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
+                    uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
+                    if (tid) {
+                        game.inspect_open = 1;
+                        game.inspect_tid = tid;
+                        game.inspect_x = ev->button.x + 16;
+                        game.inspect_y = ev->button.y - 40;
+                        if (game.inspect_x + INSPECT_W > game.screen_w)
+                            game.inspect_x = game.screen_w - INSPECT_W - 8;
+                        if (game.inspect_y < 0) game.inspect_y = 8;
+                    } else {
+                        game.inspect_open = 0;   /* clicked empty space */
                     }
                 }
                 break;
