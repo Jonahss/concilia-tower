@@ -3072,9 +3072,57 @@ static int tool_grid_origin_y(void)
     return tools_y + 26;            /* grid_y */
 }
 
+/* A button is shown when it (or any of its sub-items) is currently unlocked. */
+static int tool_button_shown(int i)
+{
+    if (i < 0 || i >= TOOL_BTN_COUNT) return 0;
+    const ToolButton *tb = &tool_buttons[i];
+    if (item_unlocked(tb->type)) return 1;
+    for (int j = 0; j < tb->sub_count; j++)
+        if (item_unlocked(tb->sub[j])) return 1;
+    return 0;
+}
+
+/* Compacted grid slot for button i (skipping hidden buttons), or -1 if hidden.
+ * The whole toolbox flows up to fill the gaps, so it grows with the stars. */
+static int tool_visible_slot(int i)
+{
+    if (!tool_button_shown(i)) return -1;
+    int slot = 0;
+    for (int k = 0; k < i; k++) if (tool_button_shown(k)) slot++;
+    return slot;
+}
+
+static int toolbox_visible_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < TOOL_BTN_COUNT; i++) if (tool_button_shown(i)) n++;
+    return n;
+}
+
+/* The j-th VISIBLE (unlocked) sub-item of group i, or -1. */
+static int tool_sub_visible_index(int i, int vis_j)
+{
+    const ToolButton *g = &tool_buttons[i];
+    int k = 0;
+    for (int j = 0; j < g->sub_count; j++)
+        if (item_unlocked(g->sub[j]) && k++ == vis_j) return j;
+    return -1;
+}
+
+static int tool_sub_visible_count(int i)
+{
+    const ToolButton *g = &tool_buttons[i];
+    int n = 0;
+    for (int j = 0; j < g->sub_count; j++) if (item_unlocked(g->sub[j])) n++;
+    return n;
+}
+
 static void tool_button_rect(int i, int *bx, int *by)
 {
-    int col = i % TOOL_COLS, row = i / TOOL_COLS;
+    int slot = tool_visible_slot(i);
+    if (slot < 0) { *bx = *by = -10000; return; }   /* hidden: off-screen */
+    int col = slot % TOOL_COLS, row = slot / TOOL_COLS;
     int margin = (TOOL_WIN_W - TOOL_COLS * (TOOL_BTN_SIZE + TOOL_BTN_PAD)) / 2;
     *bx = game.tool_x + margin + col * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
     *by = tool_grid_origin_y() + row * (TOOL_BTN_SIZE + TOOL_BTN_PAD);
@@ -3139,6 +3187,8 @@ static void render_tool_popup(void)
     if (i < 0 || i >= TOOL_BTN_COUNT) return;
     const ToolButton *g = &tool_buttons[i];
     if (g->sub_count <= 0) return;
+    int nvis = tool_sub_visible_count(i);   /* only unlocked subs, compacted */
+    if (nvis <= 0) return;
 
     /* Sub-items use the same button-face grey as the toolbar (they're the same
      * button bitmaps in the original) — a pull-down menu is distinguished by a
@@ -3146,14 +3196,16 @@ static void render_tool_popup(void)
      * whole column first so it reads as a floating menu. */
     int x0, y0, xn, yn;
     tool_sub_rect(i, 0, &x0, &y0);
-    tool_sub_rect(i, g->sub_count - 1, &xn, &yn);
+    tool_sub_rect(i, nvis - 1, &xn, &yn);
     SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 255);
     SDL_Rect shadow = { x0 + 2, y0 + 2, TOOL_BTN_SIZE + 2, (yn - y0) + TOOL_BTN_SIZE + 2 };
     SDL_RenderFillRect(game.renderer, &shadow);
 
-    for (int j = 0; j < g->sub_count; j++) {
+    for (int vj = 0; vj < nvis; vj++) {
+        int j = tool_sub_visible_index(i, vj);
+        if (j < 0) continue;
         int bx, by;
-        tool_sub_rect(i, j, &bx, &by);
+        tool_sub_rect(i, vj, &bx, &by);
         SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
         SDL_Rect bg = { bx - 1, by - 1, TOOL_BTN_SIZE + 2, TOOL_BTN_SIZE + 2 };
         SDL_RenderFillRect(game.renderer, &bg);
@@ -3217,9 +3269,10 @@ static void render_toolbox(void)
         }
     }
     
-    /* Item buttons grid */
+    /* Item buttons grid — hidden (locked) buttons are skipped, the rest flow up. */
     int grid_y = tools_y + 26;
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
+        if (tool_visible_slot(i) < 0) continue;   /* locked in Campaign */
         int bx, by;
         tool_button_rect(i, &bx, &by);
         const ToolButton *tb = &tool_buttons[i];
@@ -4222,10 +4275,13 @@ static int toolbox_click(int mx, int my)
 
     /* If a pull-down is open, a click on one of its sub-items selects that item. */
     if (game.tool_popup >= 0 && game.tool_popup < TOOL_BTN_COUNT) {
+        int nvis = tool_sub_visible_count(game.tool_popup);
         const ToolButton *g = &tool_buttons[game.tool_popup];
-        for (int j = 0; j < g->sub_count; j++) {
+        for (int vj = 0; vj < nvis; vj++) {
+            int j = tool_sub_visible_index(game.tool_popup, vj);
+            if (j < 0) continue;
             int bx, by;
-            tool_sub_rect(game.tool_popup, j, &bx, &by);
+            tool_sub_rect(game.tool_popup, vj, &bx, &by);
             if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
                 game.build_type = g->sub[j];
                 game.tool_popup = -1;
@@ -4239,6 +4295,7 @@ static int toolbox_click(int mx, int my)
 
     /* Item buttons grid (groups toggle their pull-down; singles select directly). */
     for (int i = 0; i < TOOL_BTN_COUNT; i++) {
+        if (tool_visible_slot(i) < 0) continue;   /* locked in Campaign */
         int bx, by;
         tool_button_rect(i, &bx, &by);
         if (mx >= bx && mx < bx + TOOL_BTN_SIZE && my >= by && my < by + TOOL_BTN_SIZE) {
@@ -4906,10 +4963,13 @@ static void handle_event(SDL_Event *ev)
             }
             /* Click-and-hold pull-down: releasing over a sub-item selects it. */
             if (game.tool_popup >= 0 && game.tool_popup < TOOL_BTN_COUNT) {
+                int nvis = tool_sub_visible_count(game.tool_popup);
                 const ToolButton *g = &tool_buttons[game.tool_popup];
-                for (int j = 0; j < g->sub_count; j++) {
+                for (int vj = 0; vj < nvis; vj++) {
+                    int j = tool_sub_visible_index(game.tool_popup, vj);
+                    if (j < 0) continue;
                     int bx, by;
-                    tool_sub_rect(game.tool_popup, j, &bx, &by);
+                    tool_sub_rect(game.tool_popup, vj, &bx, &by);
                     if (ev->button.x >= bx && ev->button.x < bx + TOOL_BTN_SIZE &&
                         ev->button.y >= by && ev->button.y < by + TOOL_BTN_SIZE) {
                         game.build_type = g->sub[j];
