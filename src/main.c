@@ -1352,24 +1352,47 @@ static void render_tower(void)
             draw_shaft_digits(tx, ty, tw, t->floor);
     }
 
-    /* ====== PASS 3: Transport overlays (stairs, escalators) ====== */
+    /* ====== PASS 3: Transport overlays (stairs, escalators) ======
+     * Stairs (7 frames) and escalators (8 frames) are walk/ride animations:
+     * frame 0 = empty, the rest = people in motion. Cycle them only on a leg
+     * that's actually carrying someone, paused when the sim is. */
+    static unsigned transport_anim = 0;
+    if (game.sim.speed > 0) transport_anim++;
+
+    /* Mark the grid floors that currently have a walker mid-leg (the lower of
+     * the leg's two floors keys the stair/escalator that spans it). */
+    uint8_t walk_floor[TOWER_FLOOR_COUNT];
+    memset(walk_floor, 0, sizeof(walk_floor));
+    for (int i = 0; i < game.sim.people.people_high; i++) {
+        Person *p = &game.sim.people.people[i];
+        if (p->state != PERSON_WALKING) continue;
+        int lo = p->cur_floor < p->leg_floor ? p->cur_floor : p->leg_floor;
+        if (lo >= 0 && lo < TOWER_FLOOR_COUNT) walk_floor[lo] = 1;
+    }
+
     for (int i = 0; i < game.tower.tenant_count; i++) {
         Tenant *t = &game.tower.tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
-        
+
         int frame_w_hint = 0, item_floors = 1;
         uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
         spr_id = item_sprite_animated(t->type, spr_id);
         Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
-        
+
         int tx, ty;
         grid_to_screen(t->floor, t->x, &tx, &ty);
         int tw = t->width * CELL_W;
-        
+
         if (spr && frame_w_hint > 0) {
             int nframes = spr->w / frame_w_hint;
             if (nframes < 1) nframes = 1;
-            int frame_idx = t->state % nframes;
+            /* Empty unless someone's on this leg; then cycle the motion frames. */
+            int fidx_lo = floor_to_index(t->floor);
+            int busy = (fidx_lo >= 0 && fidx_lo < TOWER_FLOOR_COUNT &&
+                        walk_floor[fidx_lo]);
+            int frame_idx = 0;
+            if (busy && nframes > 1)
+                frame_idx = 1 + ((transport_anim / 4) % (nframes - 1));
             SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
             int draw_h = item_floors * CELL_H;
             int draw_y = ty - (item_floors - 1) * CELL_H;
