@@ -31,11 +31,12 @@
 
 ### Tools
 - [x] **Pointer/finger tool** wired as interact (opens elevator dialog). `c4f4fdc`
-- [ ] **Inspector tool** — still a stub. Click a unit → info popup. TODO.
+- [x] **Inspector tool** — click a unit → info popup (floor, status, occupancy, income, satisfaction, tier). `1d4eccc`
 - [ ] **Drag-to-extend elevator shaft up/down** — clicking the cap extends; verify the drag UX feels right / works for Jonah.
 
 ### Animation
-- [ ] **Stairs need people/movement animations.**
+- [x] **Stairs/escalators animate** when carrying people (7/14-frame stairs, 8-frame escalator). `0d9f07c` `14f0f39`
+- [x] **Recycling trash cycle + collection truck** animate. `6f386e2` `14f0f39`
 - [ ] **Construction-worker build animation** — does it exist? Investigate, then wire or note as absent.
 
 ### Menu / toolbar / HUD
@@ -74,10 +75,15 @@
 - [ ] **MOD: above-ground parking** — allow parking above ground (if not already), cheaper than underground.
 - [ ] **MOD: window washing** — install window-washing cranes on the roof; pay washers a quarterly fee; cranes animate up/down washing the tower's faces. Pairs with the views/windows/light-wells/bridges mod family (dirty windows → lower desirability?).
 
-## Sprite-state decode (Jonah decoding sheets, like he did for hotels)
-- [x] HOTEL single 0x84A9: door(0) + occupied/clean/dirty/roaches × day/night (frames 1–8). Wired `1e268da`.
-- [ ] OFFICE 0x85A8 (288×24, 9 frames of 32px): currently capacity-proportional GUESS. Sent Jonah the sheet to decode the real frame meanings (occupancy levels? day/night? vacant?).
-- [ ] CONDO, RESTAURANT/FAST FOOD (variant pairs: empty/busy/packed/closed), SHOP (3 fill frames × 11 variants): also currently guessed — decode when convenient.
+## Sprite-state decode — COMPLETE (Jonah decoded sheets, I wired by state)
+- [x] HOTEL: door + clean/occupied/dirty/roaches × day-night. `1e268da`
+- [x] OFFICE: day/night × window-variant-by-tier (cap_peak). `14fdb7c` `03633b4`
+- [x] CONDO: occupied day/eve/night + For-Sale day/night (5 frames). `9506891`
+- [x] MEDICAL / CINEMA / PARTY HALL / PARKING by state. `3273601`
+- [x] RECYCLING 5-frame trash cycle + truck; METRO night frame. `6f386e2` `14f0f39`
+- [x] STAIRS (both variants) + ESCALATOR animate. `0d9f07c` `14f0f39`
+- [x] RESTAURANT/FAST FOOD (empty/busy/packed/closed) + SHOP (3 fill frames): confirmed already-correct occupancy ramps.
+- Audit DONE. Only open sprite item: optional no-window office frames usage (tier mapping shipped; revisit if Jonah wants perimeter-based).
 
 ## NOW
 - Posted status table to Jonah. Cranking Batch 1c top-down, starting with the placement/build-validation cluster (bulldozer over-greedy is the most destructive bug) + the stairs-reachability cluster (most impactful for gameplay).

@@ -3023,6 +3023,14 @@ typedef struct {
  *  room — confirmed by Jonah + OS Condo.h.) */
 /* Plain (non-group) button — zero-fills the sub-menu fields. */
 #define TB(lbl, ty, ic, r, g, b) { lbl, ty, ic, r, g, b, {0}, {0}, 0 }
+/* Campaign gates items behind the star rating; Sandbox unlocks everything. */
+static int item_unlocked(ItemType type)
+{
+    if (game.sim.mode == MODE_SANDBOX) return 1;
+    if (type <= ITEM_NONE || type >= ITEM_TYPE_COUNT) return 1;
+    return ITEM_STAR_REQ[type] <= game.tower.star_rating;
+}
+
 static const ToolButton tool_buttons[] = {
     TB("LOB",  ITEM_LOBBY,          0,  210, 200, 160),
     TB("FLR",  ITEM_FLOOR,          1,  200, 200, 190),
@@ -4106,6 +4114,7 @@ static int elev_add_car_at(int x, int floor)
 static void drag_place_units(void)
 {
     if (game.build_type == ITEM_NONE) return;
+    if (!item_unlocked(game.build_type)) return;   /* locked in Campaign */
 
     int width = ITEM_WIDTH[game.build_type];
     int floor = game.drag_start_floor;
@@ -4921,7 +4930,8 @@ static void handle_event(SDL_Event *ev)
                     int px = item_is_elevator(game.build_type)
                                  ? elevator_drag_column()
                                  : game.drag_start_cell;
-                    if (!(item_is_elevator(game.build_type) &&
+                    if (item_unlocked(game.build_type) &&
+                        !(item_is_elevator(game.build_type) &&
                           elev_add_car_at(px, game.drag_start_floor)))
                         tower_place(&game.tower, game.build_type,
                                    game.drag_start_floor, px);
@@ -5610,6 +5620,16 @@ int main(int argc, char *argv[])
         game.elv_x = 600; game.elv_y = 160;
     }
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
+
+    /* Game mode. Default Sandbox for now (Campaign's empty-lot start lands in a
+     * follow-up); toggle with --campaign / --sandbox or CT_MODE=0|1. */
+    game.sim.mode = MODE_SANDBOX;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--campaign"))      game.sim.mode = MODE_CAMPAIGN;
+        else if (!strcmp(argv[i], "--sandbox"))  game.sim.mode = MODE_SANDBOX;
+    }
+    if (getenv("CT_MODE")) game.sim.mode = atoi(getenv("CT_MODE"));
+
     add_event_message("Welcome to ConcilliaTower!");
     add_event_message("Click to build your tower.");
     

@@ -165,6 +165,22 @@ static const int ITEM_COST[] = {
     [ITEM_RAMP] = 50000,
 };
 
+/* Star rating at which each item unlocks (Campaign mode). Dual-sourced
+ * (kiwizoid GameFAQs cost table + simtower.fandom). Sandbox ignores this. */
+static const int ITEM_STAR_REQ[] = {
+    [ITEM_NONE] = 1,
+    [ITEM_LOBBY] = 1, [ITEM_FLOOR] = 1, [ITEM_OFFICE] = 1, [ITEM_CONDO] = 1,
+    [ITEM_FAST_FOOD] = 1, [ITEM_STAIRS] = 1, [ITEM_ELEVATOR_SHAFT] = 1,
+    [ITEM_HOTEL_SINGLE] = 2, [ITEM_SECURITY] = 2, [ITEM_HOUSEKEEPING] = 2,
+    [ITEM_ELEVATOR_SERVICE] = 2,
+    [ITEM_HOTEL_TWIN] = 3, [ITEM_HOTEL_SUITE] = 3, [ITEM_RESTAURANT] = 3,
+    [ITEM_SHOP] = 3, [ITEM_CINEMA] = 3, [ITEM_PARTY_HALL] = 3,
+    [ITEM_ELEVATOR_EXPRESS] = 3, [ITEM_ESCALATOR] = 3, [ITEM_PARKING] = 3,
+    [ITEM_RECYCLING] = 3, [ITEM_MEDICAL] = 3, [ITEM_RAMP] = 3,
+    [ITEM_METRO] = 4,
+    [ITEM_CATHEDRAL] = 5,
+};
+
 /* Which items are underground-only */
 static const int ITEM_UNDERGROUND_ONLY[] = {
     [ITEM_NONE] = 0, [ITEM_LOBBY] = 0, [ITEM_FLOOR] = 0,

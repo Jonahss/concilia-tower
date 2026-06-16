@@ -356,6 +356,9 @@ static inline const StatSample *stats_at(const StatsHistory *h, int i)
     return &h->s[(h->head + i) % STATS_MAX];
 }
 
+#define MODE_CAMPAIGN  0   /* star-gated unlocks, starts on an empty lot */
+#define MODE_SANDBOX   1   /* everything unlocked from the start */
+
 /* The simulation state */
 typedef struct {
     /* Time */
@@ -371,6 +374,9 @@ typedef struct {
     
     /* Star rating */
     PromotionFlags promo;
+
+    /* Game mode: 0 = Campaign (star-gated unlocks), 1 = Sandbox (all unlocked) */
+    int           mode;
 
     /* --- TOWER wedding ceremony (ChurchT: OpenChurch/StartMarry/
      * CheckMarry) --- The 5-star -> TOWER promotion is a special event,
