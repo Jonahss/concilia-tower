@@ -66,8 +66,9 @@
 - 5★: Cathedral
 (PC v1.0 data. Promotion gates: 2→3 needs a Security office; 3→4 needs ≥2 suites+VIP+recycling+medical demand; 4→5 needs a Metro; 5→TOWER needs Cathedral+wedding.)
 
-## Batch 3 — menu bar
-- [ ] Enable the (coded but MENU_BAR_H=0) top menu bar. Shift top windows down to avoid overlap. Home for: Mode (Campaign/Sandbox), tuning params, analytics, speed, view.
+## Batch 3 (A) — menu bar — DONE
+- [x] Enabled the top menu bar (MENU_BAR_H=18 + render calls were missing too). Windows shifted below. Game/Build×4/Speed/View menus. Mode toggle -> Game menu (radio). `8816b9c`
+- [ ] Minor: grey out locked Build-menu items in Campaign (placement already blocks them).
 
 ## Backlog / research / MODS
 - [ ] Easter eggs (research original user guide — NOT in decomp): buried treasure, secret money-click spot, hidden grand lobby.

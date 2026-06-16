@@ -1274,12 +1274,29 @@ static void render_tower(void)
                     frame_idx = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING) ? 1 : 0;
 
-                /* Construction: show first frame with overlay */
-                if (tenant->state == TENANT_CONSTRUCTION) frame_idx = 0;
-                
-                SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
-                SDL_Rect dst = { tx, draw_y, tw, draw_h };
-                SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                /* Under construction: draw the dark construction-grid floor
+                 * (0x8E28, one floor tall, tileable) instead of the finished
+                 * interior — the workers (below) supply the activity. Falls back
+                 * to the normal sprite if the grid sprite isn't loaded. */
+                Sprite *cgrid = (tenant->state == TENANT_CONSTRUCTION)
+                              ? sprites_find(&game.sprites, SPR_CONST_GRID) : NULL;
+                if (cgrid && cgrid->w > 0) {
+                    for (int fr = 0; fr < item_floors; fr++) {
+                        int fy = draw_y + fr * CELL_H;
+                        for (int gx = tx; gx < tx + tw; gx += cgrid->w) {
+                            int gw = cgrid->w;
+                            if (gx + gw > tx + tw) gw = tx + tw - gx;
+                            SDL_Rect gs = { 0, 0, gw, cgrid->h };
+                            SDL_Rect gd = { gx, fy, gw, CELL_H };
+                            SDL_RenderCopy(game.renderer, cgrid->texture, &gs, &gd);
+                        }
+                    }
+                } else {
+                    if (tenant->state == TENANT_CONSTRUCTION) frame_idx = 0;
+                    SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
+                    SDL_Rect dst = { tx, draw_y, tw, draw_h };
+                    SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+                }
 
                 /* Recycling collection truck (0x892E): pulls up to empty the
                  * center when the trash cycle is at its fullest, then it's gone
@@ -1346,9 +1363,9 @@ static void render_tower(void)
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_CONSTRUCTION) {
-                    /* Under construction: a faint amber wash plus little workers
-                     * busy on the unit (0x85EA, 3-frame animation). */
-                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 45);
+                    /* The construction-grid floor (drawn above) is the look; just
+                     * a whisper of amber warmth, then the workers on top. */
+                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 22);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
                     SDL_RenderFillRect(game.renderer, &overlay);
 
