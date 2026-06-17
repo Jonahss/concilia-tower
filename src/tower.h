@@ -198,13 +198,23 @@ static const int ITEM_UNDERGROUND_ONLY[] = {
     [ITEM_RAMP] = 1,    /* Underground only */
 };
 
+/* TowerCell.flags bits. Only two are used today; named so the grid code
+ * reads as prose instead of bare 1/2 literals. (flags stays a uint8_t so the
+ * grid memory and native save layout are unchanged.) */
+#define CELL_OCCUPIED           0x01   /* bit 0: a tenant occupies this cell */
+#define CELL_TRANSPORT_OVERLAY  0x02   /* bit 1: a stair/escalator overlay sits here */
+
 /* A single cell in the tower grid */
 typedef struct {
     ItemType type;
     uint16_t tenant_id;    /* Which tenant instance owns this cell (0 = none) */
     uint8_t  cell_index;   /* Position within the tenant (0 = leftmost) */
-    uint8_t  flags;        /* Bit flags: occupied, lit, dirty, etc. */
+    uint8_t  flags;        /* CELL_* bit flags (occupied, transport overlay) */
 } TowerCell;
+
+static inline int cell_has_transport_overlay(const TowerCell *c) {
+    return (c->flags & CELL_TRANSPORT_OVERLAY) != 0;
+}
 
 /* Tenant instance — represents one placed item.
  *

@@ -39,7 +39,7 @@ void tower_init(Tower *tower)
         cell->type = ITEM_LOBBY;
         cell->tenant_id = lobby_id;
         cell->cell_index = x - lobby_x;
-        cell->flags = 1; /* occupied */
+        cell->flags = CELL_OCCUPIED;
     }
     
     printf("Tower initialized: $%ld, %d star(s)\n", tower->money, tower->star_rating);
@@ -205,10 +205,10 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         int ov_lower = 0, ov_upper = 0;
         if (lf >= 0 && lf < TOWER_FLOOR_COUNT)
             for (int cx = x; cx < x + width; cx++)
-                if (tower->grid[lf][cx].flags & 2) ov_lower = 1;
+                if (cell_has_transport_overlay(&tower->grid[lf][cx])) ov_lower = 1;
         if (uf >= 0 && uf < TOWER_FLOOR_COUNT)
             for (int cx = x; cx < x + width; cx++)
-                if (tower->grid[uf][cx].flags & 2) ov_upper = 1;
+                if (cell_has_transport_overlay(&tower->grid[uf][cx])) ov_upper = 1;
         if (ov_lower && ov_upper) {
             printf("  [reject] %s at F%d x%d: overlaps an existing stair/escalator\n",
                    tower_item_name(type), floor, x);
@@ -311,7 +311,7 @@ static void fill_floor_gaps(Tower *tower, int floor)
             cell->type = ITEM_FLOOR;
             cell->tenant_id = 0;
             cell->cell_index = 0;
-            cell->flags = 1;
+            cell->flags = CELL_OCCUPIED;
         }
     }
 }
@@ -368,7 +368,7 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->type = ITEM_LOBBY;
                 cell->tenant_id = existing_lobby->id;
                 cell->cell_index = cx - final_left;
-                cell->flags = 1;
+                cell->flags = CELL_OCCUPIED;
             }
             if (new_cells > 0) {
                 /* $cost per width-sized segment newly covered (round up). */
@@ -429,13 +429,13 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
-                cell->flags = 1;
+                cell->flags = CELL_OCCUPIED;
             }
         } else {
             /* Mark transport presence with a flag but keep existing cell data */
             for (int cx = x; cx < x + width; cx++) {
                 TowerCell *cell = &tower->grid[fidx][cx];
-                cell->flags |= 2; /* bit 1 = has transport overlay */
+                cell->flags |= CELL_TRANSPORT_OVERLAY;
             }
         }
     }
@@ -478,18 +478,18 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
         for (int cx = t->x; cx < t->x + t->width; cx++) {
             TowerCell *cell = &tower->grid[idx][cx];
             if (is_transport) {
-                cell->flags &= ~2;                /* drop overlay, keep cell */
+                cell->flags &= ~CELL_TRANSPORT_OVERLAY;  /* drop overlay, keep cell */
             } else if (t->type != ITEM_FLOOR && f >= 0) {
                 /* Bulldozing a facility removes the TENANT but leaves the build
                  * floor behind (Jonah's ask: "delete tenants, not the floor"). */
                 cell->type = ITEM_FLOOR;
                 cell->tenant_id = 0;
                 cell->cell_index = 0;
-                cell->flags = (cell->flags & 2) | 1;  /* preserve any overlay */
+                cell->flags = (cell->flags & CELL_TRANSPORT_OVERLAY) | CELL_OCCUPIED;  /* preserve any overlay */
             } else {
                 /* Explicitly removing a FLOOR tile (or an underground cell) ->
                  * back to bare dirt, but don't clobber a transport overlay. */
-                uint8_t keep_overlay = cell->flags & 2;
+                uint8_t keep_overlay = cell->flags & CELL_TRANSPORT_OVERLAY;
                 memset(cell, 0, sizeof(*cell));
                 cell->flags = keep_overlay;
             }
@@ -558,11 +558,11 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
-                cell->flags = 1;
+                cell->flags = CELL_OCCUPIED;
             }
         } else {
             for (int cx = x; cx < x + width; cx++) {
-                tower->grid[fidx][cx].flags |= 2;
+                tower->grid[fidx][cx].flags |= CELL_TRANSPORT_OVERLAY;
             }
         }
     }
@@ -604,12 +604,12 @@ uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
         for (int cx = x; cx < x + width; cx++) {
             TowerCell *cell = &tower->grid[fidx][cx];
             if (is_transport) {
-                cell->flags |= 2;
+                cell->flags |= CELL_TRANSPORT_OVERLAY;
             } else {
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
-                cell->flags = 1;
+                cell->flags = CELL_OCCUPIED;
             }
         }
     }
