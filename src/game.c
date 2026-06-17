@@ -281,8 +281,7 @@ static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
      * restaurant would animate to "packed" at dinnertime despite zero pop —
      * the "full unreachable restaurant" Jonah spotted.) */
     if (!reachable) {
-        if (t->capacity > CAP_STEP) t->capacity -= CAP_STEP;
-        else t->capacity = CAP_EMPTY;
+        t->capacity = cap_drain_step(t->capacity);
         return;
     }
 
@@ -314,14 +313,13 @@ static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
         switch (tod) {
         case TOD_DAWN:
         case TOD_MORNING:
-            if (t->capacity < ceil) t->capacity += CAP_STEP;
-            if (t->capacity > ceil) t->capacity = ceil;
+            t->capacity = cap_step_up_to(t->capacity, ceil);
             break;
         case TOD_AFTERNOON:
             /* Peak — hold at current level */
             break;
         case TOD_EVENING:
-            if (t->capacity > floor) t->capacity -= CAP_STEP;
+            t->capacity = cap_step_down_to(t->capacity, floor);
             break;
         case TOD_NIGHT:
             t->capacity = CAP_EMPTY;
@@ -332,14 +330,13 @@ static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
         /* Hotels: fill at evening, peak at night, empty at morning */
         switch (tod) {
         case TOD_EVENING:
-            if (t->capacity < ceil) t->capacity += CAP_STEP;
-            if (t->capacity > ceil) t->capacity = ceil;
+            t->capacity = cap_step_up_to(t->capacity, ceil);
             break;
         case TOD_NIGHT:
             /* Peak — hold */
             break;
         case TOD_DAWN:
-            if (t->capacity > floor) t->capacity -= CAP_STEP;
+            t->capacity = cap_step_down_to(t->capacity, floor);
             break;
         case TOD_MORNING:
         case TOD_AFTERNOON:

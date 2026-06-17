@@ -132,6 +132,24 @@ static inline int capacity_to_frame(uint8_t cap) {
     return (cap - CAP_MIN) / CAP_STEP;  /* 0x10→0, 0x18→1, 0x20→2, 0x28→3, 0x30→4, 0x38→5, 0x40→6 */
 }
 
+/* Live-occupancy byte transitions: one daily animation step toward a target,
+ * clamped. The byte only ever holds multiples of CAP_STEP, so these are the
+ * exact `+= / -= CAP_STEP` arithmetic the day/night fill curve always used —
+ * named so the update logic reads as prose. */
+static inline uint8_t cap_step_up_to(uint8_t cap, uint8_t ceil) {
+    if (cap < ceil) cap += CAP_STEP;
+    if (cap > ceil) cap = ceil;
+    return cap;
+}
+static inline uint8_t cap_step_down_to(uint8_t cap, uint8_t floor) {
+    return (cap > floor) ? (uint8_t)(cap - CAP_STEP) : cap;
+}
+/* Drain one step toward empty regardless of tier floor (an unreachable venue
+ * with no patrons): step down until the last occupied frame, then go vacant. */
+static inline uint8_t cap_drain_step(uint8_t cap) {
+    return (cap > CAP_STEP) ? (uint8_t)(cap - CAP_STEP) : CAP_EMPTY;
+}
+
 /* Construction times from TenantMake (GetConstructionTime) */
 static const int CONSTRUCTION_TIME[] = {
     [ITEM_NONE] = 0,
