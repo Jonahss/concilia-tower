@@ -206,8 +206,16 @@ typedef struct {
     uint8_t  flags;        /* Bit flags: occupied, lit, dirty, etc. */
 } TowerCell;
 
-/* Tenant instance — represents one placed item */
+/* Tenant instance — represents one placed item.
+ *
+ * NOTE: game_save() (game.c) writes the whole Tower struct, tenants included,
+ * as a raw byte image guarded by sizeof(Tower). Do NOT reorder these fields
+ * without bumping SAVE_VERSION — a reorder keeps the same size, so old saves
+ * would pass the size check and then read every field from the wrong offset.
+ * The fields below are grouped by section-comment only; their order is the
+ * save layout. */
 typedef struct {
+    /* --- Identity & placement --- */
     uint16_t id;           /* Unique ID */
     ItemType type;
     int      floor;        /* Which floor */
@@ -215,6 +223,9 @@ typedef struct {
     int      width;        /* Width in cells */
     int      height;       /* Height in floors */
     uint8_t  state;        /* Lifecycle state (TenantState enum) */
+
+    /* --- Live occupancy (live byte + persistent tier; see the cap_* and
+     *     occupancy_tier helpers in game.h) --- */
     uint8_t  capacity;     /* LIVE capacity byte — drives sprite frame selection.
                             * From TenantMake: the byte packs a persistent tier
                             * plus a daily oscillation. This field is the live,
@@ -231,6 +242,7 @@ typedef struct {
                             * occupancy, raised by the happy-tenant upgrade.
                             * 0 = not peak-managed (retail, services, condos).
                             * Reconstructed from the live byte's tier on import. */
+    /* --- Construction & simulation state --- */
     int      construction; /* Construction ticks remaining (0 = built).
                             * From TenantMake: office=2, condo=3, restaurant=48,
                             * hotel=56, cathedral=240, etc. */
@@ -239,17 +251,22 @@ typedef struct {
     int      complaints;   /* Strike count (3 = forced action). From MainteT. */
     int      zone;         /* Commercial zone (0-6, floors/15). From JudgeT. */
     int      upgrade_day;  /* Last upgrade day (3-day cadence). From MainteT. */
+
+    /* --- Episodic / daily state (hotel rooms, fire) --- */
     uint8_t  hosted;       /* Hotel room: guests stayed overnight */
     uint8_t  dirty;        /* Hotel room: needs housekeeping before it can re-rent */
     uint8_t  burned;       /* Destroyed by fire — renders as rubble until rebuilt */
     uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
+
+    /* --- Rent --- */
     uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —
                               the map's Rent overlay (file tenant +0x0F;
                               JudgeT adjusts it in the EXE) */
 
-    /* .TDT round-trip (twr.c): slot in the file's 512-entry retail
-     * subtype table, stored +1 so 0 = none. Set on import from tenant
-     * byte +0x06; allocated at export for retail built in the port. */
+    /* --- .TDT round-trip side data (preserved verbatim across import/export) --- */
+    /* Slot in the file's 512-entry retail subtype table, stored +1 so
+     * 0 = none. Set on import from tenant byte +0x06; allocated at
+     * export for retail built in the port. */
     uint16_t retail_ref;
     /* Raw file-tenant bytes +0x0C,+0x0D,+0x0E,+0x10,+0x11 — meaning
      * unknown, preserved verbatim so exports of imported towers keep
