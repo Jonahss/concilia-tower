@@ -1089,7 +1089,7 @@ uint8_t game_init_cap_peak(ItemType type, int star)
 void game_office_dynamics(GameSim *sim, Tower *tower)
 {
     (void)sim;
-    uint8_t office_top = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : 0x38;
+    uint8_t office_top = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : CAP_PEAK_HIGH_CAPPED;
 
     /* 1. Growth: content offices climb a tier. */
     for (int i = 0; i < tower->tenant_count; i++) {

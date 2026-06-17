@@ -1203,7 +1203,7 @@ static void render_tower(void)
                      * (Jonah's call; top tier = 0x38 <4★ / 0x40 at 4★+.) */
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
-                    int top_tier = (tenant->cap_peak >= 0x38);
+                    int top_tier = (occupancy_tier(tenant->cap_peak) == OCC_TIER_HIGH);
                     frame_idx = (top_tier ? 0 : 2) + (night ? 1 : 0);
                 } else if (tenant->type == ITEM_CONDO && nframes >= 5) {
                     /* Condo sheet (0x8628..0x862c) = occupied day/evening/night
@@ -4108,8 +4108,7 @@ static void render_inspect_popup(void)
         snprintf(ln[n++], 40, "Satisfaction: %s",
                  t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");
     if (t->type == ITEM_OFFICE)
-        snprintf(ln[n++], 40, "Tier: %s",
-                 t->cap_peak >= 0x38 ? "High" : t->cap_peak >= 0x30 ? "Mid" : "Low");
+        snprintf(ln[n++], 40, "Tier: %s", occupancy_tier_name(t->cap_peak));
     if ((t->type==ITEM_HOTEL_SINGLE||t->type==ITEM_HOTEL_TWIN||
          t->type==ITEM_HOTEL_SUITE) && t->dirty)
         snprintf(ln[n++], 40, "Needs housekeeping");

@@ -69,9 +69,34 @@ typedef enum {
  * cycles 0x10..0x20, a mid-tier 0x28..0x30, a thriving one 0x38..0x40. The
  * tier is the persistent "how successful is this office" level; the ±0x08
  * within it is just the day/night fill. cap_peak stores that tier's top. */
-#define CAP_PEAK_LOW   0x20   /* new / modest office */
-#define CAP_PEAK_MID   0x30   /* established */
-#define CAP_PEAK_HIGH  0x40   /* thriving / forced-up / gentrified (0x38 if <4★) */
+#define CAP_PEAK_LOW         0x20   /* new / modest office */
+#define CAP_PEAK_MID         0x30   /* established */
+#define CAP_PEAK_HIGH_CAPPED 0x38   /* office top tier when below 4★ (MakeTenant star cap) */
+#define CAP_PEAK_HIGH        0x40   /* thriving / forced-up / gentrified (0x38 if <4★) */
+
+/* The three persistent occupancy tiers a cap_peak can sit in. The top tier is
+ * reached at either 0x38 (offices capped below 4★) or 0x40 (4★+ / unmanaged
+ * full) — both read as HIGH. Used for rendering (window variant) and the debug
+ * label; the exact numeric peak still drives income/headcount scaling. */
+typedef enum {
+    OCC_TIER_LOW = 0,   /* new / modest      (peak < CAP_PEAK_MID) */
+    OCC_TIER_MID,       /* established       (CAP_PEAK_MID..0x37)  */
+    OCC_TIER_HIGH,      /* thriving / exec   (peak >= CAP_PEAK_HIGH_CAPPED) */
+} OccupancyTier;
+
+static inline OccupancyTier occupancy_tier(uint8_t cap_peak) {
+    if (cap_peak >= CAP_PEAK_HIGH_CAPPED) return OCC_TIER_HIGH;
+    if (cap_peak >= CAP_PEAK_MID)         return OCC_TIER_MID;
+    return OCC_TIER_LOW;
+}
+
+static inline const char *occupancy_tier_name(uint8_t cap_peak) {
+    switch (occupancy_tier(cap_peak)) {
+    case OCC_TIER_HIGH: return "High";
+    case OCC_TIER_MID:  return "Mid";
+    default:            return "Low";
+    }
+}
 
 /* The tier top for an arbitrary capacity byte — used to reconstruct cap_peak
  * from imported .TDT towers, where the byte carries the combined value. */
