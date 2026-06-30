@@ -44,8 +44,11 @@
 /* Floor/ceiling color source — 96×36, extract column at x=16 for floor color */
 #define SPR_FLOOR_SRC   0x83e8
 
-/* Office: 0x85A8 — 288×24 = 4 frames of 72px (Jonah's decode):
- * 0 day, 1 night, 2 day-with-windows, 3 night-with-windows. */
+/* Office interior sheets (each frame 72px wide, 24px tall):
+ *   0x85a8/0x85a9/0x85aa — 288×24 = 4 frames = two furniture variants each,
+ *                          every variant a lit/unlit pair (six variants total).
+ *   0x85ab              — 144×24 = 2 frames = the VACANT office, lit/unlit.
+ * Variant/lit/vacant selection lives in the ITEM_OFFICE render branch. */
 #define SPR_OFFICE_BASE 0x85a8
 
 /* Condo: 0x8628+ — 128×24 */
@@ -1191,20 +1194,37 @@ static void render_tower(void)
                         frame_idx = night ? 2 : 1;   /* guest in the room */
                     else
                         frame_idx = night ? 4 : 3;   /* clean, vacant */
-                } else if (tenant->type == ITEM_OFFICE && nframes >= 4) {
-                    /* Office sheet 0x85A8 = 4 frames (Jonah's decode): day,
-                     * night, day-with-windows, night-with-windows — a time-of-
-                     * day + window variant, NOT an occupancy ramp (the old
-                     * proportional map turned a busy office into night-windows).
-                     * Window variant by office TIER, read from the persistent
-                     * half of the capacity dual-use byte (cap_peak): the top-tier
-                     * upgraded "executive" offices use the plain frames (0/1),
-                     * everything below keeps the windowed early-game look (2/3).
-                     * (Jonah's call; top tier = 0x38 <4★ / 0x40 at 4★+.) */
+                } else if (tenant->type == ITEM_OFFICE) {
+                    /* Office interior — the FULL variant set, decoded from the
+                     * four office sheets and cross-checked against OpenSkyscraper
+                     * (SimTowerLoader::loadOffice + Office::updateSprite):
+                     *   0x85a8 / 0x85a9 / 0x85aa : 4 frames each = TWO furniture
+                     *       variants apiece, every variant a lit/unlit (day/night)
+                     *       pair → six occupied variants in all.
+                     *   0x85ab : 2 frames = the VACANT office (bare windows, no
+                     *       desks), lit/unlit — shown until a tenant leases it.
+                     * OS picks index_y = occupied ? variant : 6 and
+                     * index_x = lit ? 0 : 1; the port mirrors that with a stable
+                     * per-tenant variant (cosmetic, like the retail/parking
+                     * variants), the empty sheet before move-in, and day/night by
+                     * time-of-day. Supersedes the earlier tier-based guess, which
+                     * predated finding sheets 0x85a9..0x85ab (it only had 0x85a8
+                     * and mistook its second furniture pair for a tier variant). */
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
-                    int top_tier = (occupancy_tier(tenant->cap_peak) == OCC_TIER_HIGH);
-                    frame_idx = (top_tier ? 0 : 2) + (night ? 1 : 0);
+                    int leased = (tenant->state >= TENANT_MOVING_IN &&
+                                  tenant->state != TENANT_ABANDONED);
+                    uint16_t office_sheet;
+                    if (!leased) {
+                        office_sheet = 0x85ab;             /* bare vacant room */
+                        frame_idx = night ? 1 : 0;
+                    } else {
+                        int variant = tenant->id % 6;      /* stable furniture pick */
+                        office_sheet = 0x85a8 + variant / 2;
+                        frame_idx = (variant % 2) * 2 + (night ? 1 : 0);
+                    }
+                    Sprite *osheet = sprites_find(&game.sprites, office_sheet);
+                    if (osheet) { spr = osheet; nframes = spr->w / frame_w_hint; }
                 } else if (tenant->type == ITEM_CONDO && nframes >= 5) {
                     /* Condo sheet (0x8628..0x862c) = occupied day/evening/night
                      * (0/1/2) + For-Sale day/night (3/4) (Jonah's decode + OS
