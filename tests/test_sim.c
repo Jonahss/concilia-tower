@@ -882,18 +882,35 @@ static void test_tenant_pairing(void)
     CHECK(tb->state == TENANT_STRESSED, "no content same-floor neighbour -> no rescue");
 }
 
-/* VIP visit gates star-4 / star-5 promotion (LevelUp 0xB92D). */
-static void test_vip_gate(void)
+/* Star requirements per LevelUp 1148:007e (byte-verified 2026-07-09):
+ * 3->4 = suite + recycling adequate + medical + VIP verdict;
+ * 4->5 = metro + recycling adequate + medical, NO VIP re-check. */
+static void test_star_requirements(void)
 {
-    printf("VIP star gate (LevelUp 0xB92D):\n");
+    printf("star requirements (LevelUp 1148:007e):\n");
     fresh();
-    sim.promo.has_recycling = 1;
-    sim.promo.has_metro = 1;
-    sim.promo.hotel_quarters = 4;
+    sim.promo.has_suite = 1;
+    sim.promo.recycling_adequate = 1;
+    sim.promo.has_medical = 1;
     sim.promo.vip_visited = 0;
     CHECK(!game_check_promotion(&sim, &tw, 4), "no star-4 without a satisfied VIP");
     sim.promo.vip_visited = 1;
     CHECK(game_check_promotion(&sim, &tw, 4), "star-4 allowed once the VIP is satisfied");
+    sim.promo.has_suite = 0;
+    CHECK(!game_check_promotion(&sim, &tw, 4), "no star-4 without a suite (0xB92B)");
+    sim.promo.has_suite = 1;
+    sim.promo.has_metro = 1;
+    CHECK(game_check_promotion(&sim, &tw, 4) && game_check_promotion(&sim, &tw, 5),
+          "metro doesn't gate 3->4; 4->5 passes with metro+recycling+medical");
+    sim.promo.vip_visited = 0;
+    CHECK(game_check_promotion(&sim, &tw, 5),
+          "4->5 has NO VIP re-check (binary reads neither 0xB923 nor 0xB92B)");
+    sim.promo.has_metro = 0;
+    CHECK(!game_check_promotion(&sim, &tw, 5), "no star-5 without a metro station");
+    sim.promo.has_metro = 1;
+    sim.promo.recycling_adequate = 0;
+    CHECK(!game_check_promotion(&sim, &tw, 5) && !game_check_promotion(&sim, &tw, 4),
+          "inadequate recycling blocks both 3->4 and 4->5 (dynamic flag)");
 }
 
 /* Persistent occupancy: cap_peak growth, gentrification, hotel upgrade. */
@@ -1209,7 +1226,7 @@ int main(void)
     test_retail_competition();
     test_tenant_pairing();
     test_office_dynamics();
-    test_vip_gate();
+    test_star_requirements();
     test_event_decisions();
     test_twr_import();
     test_twr_export();

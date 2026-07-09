@@ -1,0 +1,20 @@
+In function ‘add_event_message’,
+    inlined from ‘disaster_do_ransom’ at src/main.c:3907:5:
+src/main.c:2697:5: warning: ‘strncpy’ output may be truncated copying 47 bytes from a string of length 63 [-Wstringop-truncation]
+ 2697 |     strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘add_event_message’,
+    inlined from ‘disaster_do_proceed’ at src/main.c:3896:5:
+src/main.c:2697:5: warning: ‘strncpy’ output may be truncated copying 47 bytes from a string of length 63 [-Wstringop-truncation]
+ 2697 |     strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘add_event_message’,
+    inlined from ‘main’ at src/main.c:6072:17:
+src/main.c:2697:5: warning: ‘strncpy’ output may be truncated copying 47 bytes from a string of length 47 [-Wstringop-truncation]
+ 2697 |     strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘add_event_message’,
+    inlined from ‘main’ at src/main.c:6088:17:
+src/main.c:2697:5: warning: ‘strncpy’ output may be truncated copying 47 bytes from a string of length 47 [-Wstringop-truncation]
+ 2697 |     strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

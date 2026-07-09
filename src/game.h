@@ -179,15 +179,21 @@ static const int CONSTRUCTION_TIME[] = {
     [ITEM_HOUSEKEEPING] = 40,
 };
 
-/* Promotion flags — from decompiled seg_1148 (offsets 0xB922-0xB92D) */
+/* Promotion flags — from decompiled seg_1148 (offsets 0xB922-0xB92D).
+ * Flag bank byte-verified 2026-07-09 (decomp referee_b924_b92c report):
+ * the old field comments here had the globals scrambled. */
 typedef struct {
-    int has_security;       /* 0xB92A — security office built */
-    int has_recycling;      /* 0xB92B — recycling center built */
-    int has_metro;          /* 0xB92C — metro station built */
-    int has_medical;        /* 0xB3E8 >= 0 — medical center built */
-    int hotel_quarters;     /* 0xB3A1 — number of hotel quarters (suite count?) */
-    int vip_visited;        /* 0xB92D — VIP has visited */
-    int has_cathedral;      /* cathedral built (the TOWER wedding venue) */
+    int has_security;        /* 0xB92A — security office built */
+    int has_suite;           /* 0xB92B — a hotel suite exists (VIP prerequisite) */
+    int recycling_adequate;  /* 0xB92C — TrashT: centers keep up with population
+                              * (>= 2500 pop per center -> inadequate, trucks
+                              * stop, star 4/5 blocked). Dynamic, can flip back. */
+    int has_metro;           /* 0xB3E8 >= 0 — metro station built */
+    int has_medical;         /* medical center built; stands in for 0xB92D
+                              * medical_adequate (daily-armed flag; MedicalT's
+                              * exact inadequacy trigger not yet decoded) */
+    int vip_visited;         /* 0xB923 — VIP verdict favorable (gates 3->4 ONLY) */
+    int has_cathedral;       /* cathedral built (the TOWER wedding venue) */
 } PromotionFlags;
 
 /* Star rating thresholds — from decompiled seg_1140 (LevelT)

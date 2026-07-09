@@ -156,21 +156,29 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
 {
     memset(&sim->promo, 0, sizeof(sim->promo));
     
+    int recycling_centers = 0;
+
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         switch (t->type) {
         case ITEM_SECURITY:  sim->promo.has_security = 1;  break;
-        case ITEM_RECYCLING: sim->promo.has_recycling = 1; break;
+        case ITEM_RECYCLING: recycling_centers++;          break;
         case ITEM_METRO:     sim->promo.has_metro = 1;     break;
         case ITEM_MEDICAL:   sim->promo.has_medical = 1;   break;
         case ITEM_CATHEDRAL: sim->promo.has_cathedral = 1; break;
         case ITEM_HOTEL_SUITE:
-            sim->promo.hotel_quarters++;
+            sim->promo.has_suite = 1;
             break;
         default: break;
         }
     }
-    
+
+    /* TrashT (seg_1088): adequate while population stays under 2500 per
+     * recycling center; inadequate flips trucks off and blocks star 4/5. */
+    sim->promo.recycling_adequate =
+        recycling_centers > 0 &&
+        tower->population / recycling_centers < 2500;
+
     sim->tower_width = game_measure_width(tower);
 }
 
@@ -245,18 +253,22 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
         /* Need security office */
         return sim->promo.has_security;
     case 4:
-        /* Recycling + metro + hotel suites ≥ 4 + a satisfied VIP visit
-         * (LevelUp 0xB92D requires VIP for both 3→4 and 4→5). */
-        return sim->promo.has_recycling &&
-               sim->promo.has_metro &&
-               sim->promo.hotel_quarters >= 4 &&
+        /* LevelUp 1148:007e, 3->4 branch (byte-verified 2026-07-09):
+         * suite (0xB92B) + recycling adequate (0xB92C) + VIP verdict
+         * (0xB923) + medical adequate (0xB92D). Metro is NOT required
+         * here — the old table had metro/recycling swapped and invented
+         * a "4 suites" count; one suite is the requirement. */
+        return sim->promo.has_suite &&
+               sim->promo.recycling_adequate &&
+               sim->promo.has_medical &&
                sim->promo.vip_visited;
     case 5:
-        /* Need medical + metro + hotel suites ≥ 4 + a satisfied VIP visit */
-        return sim->promo.has_medical &&
-               sim->promo.has_metro &&
-               sim->promo.hotel_quarters >= 4 &&
-               sim->promo.vip_visited;
+        /* 4->5 branch: metro ([0xB3E8] >= 0) + recycling adequate +
+         * medical adequate. NO VIP re-check and no suite re-check —
+         * the binary reads neither 0xB923 nor 0xB92B here. */
+        return sim->promo.has_metro &&
+               sim->promo.recycling_adequate &&
+               sim->promo.has_medical;
     case 6:
         /* TOWER: special event, not automatic */
         return 0;
