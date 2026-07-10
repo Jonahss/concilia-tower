@@ -55,6 +55,7 @@ void game_init(GameSim *sim)
     sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_NORMAL];
     sim->hour = 7;  /* Start at 7am */
     sim->time_of_day = TOD_MORNING;
+    sim->hotel_pass_day = -1;   /* so the day-0 5PM pass still fires */
     people_init(&sim->people);
 }
 
@@ -80,7 +81,11 @@ int game_calc_population(GameSim *sim, Tower *tower)
                 t->population = 0;
                 continue;
             }
-            if (t->dirty) {   /* dirty hotel room = no guests tonight */
+            /* A hotel room that isn't open for booking gets no guests
+             * tonight — but already-hosted guests stay their night out
+             * (the EXE only gates NEW check-ins, UniPeple 1220:3032). */
+            if (item_is_hotel_room(t->type) && !t->open_for_booking &&
+                !t->hosted) {
                 t->population = 0;
                 continue;
             }
@@ -386,7 +391,9 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             reachable = (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                          (is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]));
             if (!reachable) is_active = 0;
-            if (is_hotel && t->dirty) is_active = 0;
+            /* Hotel rooms only open for the night if the demand pass armed
+             * them; hosted guests ride out their stay regardless. */
+            if (is_hotel && !t->open_for_booking && !t->hosted) is_active = 0;
         }
         
         /* State machine */
@@ -468,9 +475,16 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 t->state = TENANT_VACANT;
                 /* Don't zero capacity here — let update_capacity handle the fade */
 
-                /* Checkout: the room needs housekeeping before it re-rents */
+                /* Checkout: the room turns dirty and closes for booking
+                 * unconditionally (MoneyT 1178:0ed1 writes the dirty band,
+                 * 1178:0f14 clears the booking flag — even a room the
+                 * roaches hit while occupied lands at DIRTY here, which is
+                 * the only way an infested room ever recovers without
+                 * demolition: its pre-roach guests leave, it comes out
+                 * dirty, and a maid can reach it again). */
                 if (is_hotel && t->hosted) {
-                    t->dirty = 1;
+                    t->condition = ROOM_DIRTY;
+                    t->open_for_booking = 0;
                     t->hosted = 0;
                 }
             }
@@ -639,7 +653,8 @@ void game_update_reachability(GameSim *sim, Tower *tower)
         int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
         if (!(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]))
             unreach++;
-        if (t->dirty) dirty++;
+        if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
+            dirty++;
     }
     sim->unreachable_tenants = unreach;
     sim->dirty_rooms = dirty;
@@ -649,7 +664,11 @@ void game_update_reachability(GameSim *sim, Tower *tower)
  * After checkout, hotel rooms stay dirty (and unrentable) until a
  * housekeeping unit cleans them. Housekeepers work morning/afternoon, travel
  * the service network, and each unit handles a limited number of rooms per
- * day — too few units and rooms sit dirty, losing the night's income. */
+ * day — too few units and rooms sit dirty, losing the night's income.
+ * Maids clean DIRTY rooms only: the EXE's room picker matches the dirty
+ * band exactly (MainteT 1150:00b4/00c9), so an INFESTED room is never on
+ * their list. Cleaning also does NOT reset the room's neglect counter —
+ * only a check-in does. */
 #define HK_ROOMS_PER_DAY 12
 
 static void update_housekeeping(GameSim *sim, Tower *tower)
@@ -673,14 +692,163 @@ static void update_housekeeping(GameSim *sim, Tower *tower)
         /* Clean one reachable dirty room per pass (paces the work out) */
         for (int j = 0; j < tower->tenant_count; j++) {
             Tenant *room = &tower->tenants[j];
-            if (!room->dirty) continue;
+            if (!item_is_hotel_room(room->type) ||
+                room->condition != ROOM_DIRTY) continue;
             int rf = floor_to_index(room->floor);
             if (rf < 0 || rf >= TOWER_FLOOR_COUNT || !sim->reach_service[rf])
                 continue;
-            room->dirty = 0;
+            room->condition = ROOM_CLEAN;   /* neglect_days deliberately kept */
             hk->cleaned_today++;
             break;
         }
+    }
+}
+
+/* --- The daily 5PM hotel pass ---
+ * Ported from the TimeT 17:00 dispatch (ft 0x640): roach spread
+ * (ExpandoBadHotel 1130:01e2) runs FIRST, then JudgeAllHotel's neglect
+ * fuse (HotelNeglectCheck 1130:0e5c) and demand arm/disarm (1130:0f57),
+ * in that order. Byte evidence: referee_84day_hotelbit_2026-07-09.md and
+ * referee_infested_checkin_2026-07-10.md in the decomp repo.
+ *
+ * The EXE also re-arms rooms at the 4:59AM JudgeTenant sweep; the port
+ * folds arming into this single daily pass — same net cadence (a room's
+ * booking verdict changes at most once per day either way). */
+
+/* The tenant physically abutting a room on one side, or NULL. Roaches only
+ * cross to a touching hotel room — any gap, office, or corridor stops that
+ * side (the EXE checks the adjacent floor-slot record's type). */
+static Tenant *abutting_tenant(Tower *tower, const Tenant *t, int side)
+{
+    int x = (side < 0) ? t->x - 1 : t->x + t->width;
+    TowerCell *c = tower_cell(tower, t->floor, x);
+    if (!c || !c->tenant_id) return NULL;
+    return tower_tenant(tower, c->tenant_id);
+}
+
+/* Stamp one spread victim (ExpandoBadHotel 1130:0283-02a9): the room turns
+ * infested, closes for booking, and its satisfaction is marked ruined
+ * (the EXE writes eval mark 0xFF — the black room in the eval overlay).
+ * Occupancy is NOT touched: guests already inside stay until checkout,
+ * which then lands the room at DIRTY (see the checkout comment above). */
+static void infest_room(Tenant *v)
+{
+    if (!v || !item_is_hotel_room(v->type)) return;
+    if (v->state == TENANT_EMPTY || v->state == TENANT_CONSTRUCTION) return;
+    v->condition = ROOM_INFESTED;
+    v->open_for_booking = 0;
+    v->demand_category = 0;
+    v->stress = 100;
+}
+
+/* Guest-stress bar that disarms a room: EXE tuning [0xDD78], star-scaled —
+ * 150 at stars 1-3, 200 at 4+ (same two values as the judge thresholds;
+ * R4 verified this consumer). [0xDD76] = 80 splits "happy" from "ok". */
+#define DEMAND_HAPPY_BAR 80
+
+void game_hotel_demand_pass(GameSim *sim, Tower *tower)
+{
+    (void)sim;
+
+    /* Phase 1 — roach spread, one room per side per day. Sources are
+     * snapshotted before stamping so a room infested today doesn't spread
+     * further today. (The EXE's in-place loop reads as if a fresh stamp
+     * could chain rightward, but both referees byte-derived the net
+     * cadence as one-per-side-per-day; the port implements the cadence.
+     * Flagged as a micro loose end in the decomp notes.) */
+    static uint16_t sources[MAX_TENANTS];
+    int nsources = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (item_is_hotel_room(t->type) && t->condition == ROOM_INFESTED)
+            sources[nsources++] = (uint16_t)i;
+    }
+    for (int s = 0; s < nsources; s++) {
+        Tenant *src = &tower->tenants[sources[s]];
+        infest_room(abutting_tenant(tower, src, -1));
+        infest_room(abutting_tenant(tower, src, +1));
+    }
+
+    /* Phase 2 — neglect fuse, and TODAY'S demand category for every clean
+     * room. The EXE splits this the same way: JudgeAllHotel pass 1 runs
+     * the per-room eval (whose verdict lands in +0x15) plus the neglect
+     * check, and only THEN does pass 2 read the categories to arm/disarm —
+     * so the pairing rescue below always sees today's verdicts, never a
+     * mix of today's and yesterday's. */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (!item_is_hotel_room(t->type)) continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
+            continue;
+
+        if (t->condition != ROOM_CLEAN) {
+            /* Neglect fuse (HotelNeglectCheck 1130:0e5c): a dirty room
+             * still flagged open is closed and forgiven; an already-closed
+             * one burns a fuse day, and on exactly the 3rd it turns
+             * infested. Cleaning doesn't reset the fuse; check-in does. */
+            if (t->open_for_booking) {
+                t->open_for_booking = 0;
+                t->demand_category = 0;
+                t->neglect_days = 0;
+            } else if (t->condition == ROOM_DIRTY) {
+                t->neglect_days++;
+                if (t->neglect_days == 3) {
+                    t->condition = ROOM_INFESTED;
+                    t->stress = 100;
+                    printf("🪳 Cockroaches! Room on floor %d was left dirty "
+                           "3 days (day %d)\n", t->floor, tower->day);
+                }
+            }
+            continue;
+        }
+
+        /* Demand verdict: average the guests' banked elevator stress,
+         * adjust for the room rate, compare to the star-scaled bar. (The
+         * EXE also adds a noise penalty here; unported until the NoiseT
+         * return polarity is settled — see decomp loose ends.) */
+        int avg = t->guest_stress_trips
+                    ? t->guest_stress_total / t->guest_stress_trips : 0;
+        if (t->rent_class == 0)      avg += 30;   /* High rate: pickier guests */
+        else if (t->rent_class == 2) avg -= 30;   /* Low rate: forgiving */
+        else if (t->rent_class == 3) avg = 0;     /* Very low: always fills */
+        if (avg < 0) avg = 0;
+
+        int bar = (tower->star_rating >= 4) ? TUNING.judge_stressed
+                                            : TUNING.judge_moderate;
+        t->demand_category = (avg >= bar) ? 0
+                           : (avg >= DEMAND_HAPPY_BAR) ? 1 : 2;
+    }
+
+    /* Phase 3 — arm/disarm (JudgeAllHotel pass 2, 1130:0f57): category
+     * 1/2 rooms open for tonight; a category-0 room is rescued if a happy
+     * (category 2) same-type room on its floor vouches for it — both
+     * settle at category 1 — and is closed for booking otherwise. */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (!item_is_hotel_room(t->type) || t->condition != ROOM_CLEAN)
+            continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
+            continue;
+
+        if (t->demand_category == 0) {
+            Tenant *pair = NULL;
+            for (int j = 0; j < tower->tenant_count && !pair; j++) {
+                Tenant *r = &tower->tenants[j];
+                if (r != t && r->type == t->type && r->floor == t->floor &&
+                    item_is_hotel_room(r->type) && r->condition == ROOM_CLEAN &&
+                    r->demand_category == 2)
+                    pair = r;
+            }
+            if (!pair) {
+                t->open_for_booking = 0;
+                continue;
+            }
+            pair->demand_category = 1;
+            t->demand_category = 1;
+        }
+        t->open_for_booking = 1;
+        t->guest_stress_total = 0;   /* fresh sample window (EXE @105a) */
+        t->guest_stress_trips = 0;
     }
 }
 
@@ -726,6 +894,13 @@ void game_update(GameSim *sim, Tower *tower)
     {
         int h = game_lobby_height(tower);
         sim->people.lobby_bonus = (h >= 3) ? 50 : (h == 2) ? 25 : 0;
+    }
+
+    /* The 5PM hotel pass: roach spread, neglect fuse, demand arm/disarm
+     * (TimeT fires it at ft 0x640 = 17:00 sharp; latched once per day) */
+    if (sim->hour >= 17 && sim->hotel_pass_day != tower->day) {
+        sim->hotel_pass_day = tower->day;
+        game_hotel_demand_pass(sim, tower);
     }
 
     /* People + elevators run every tick — cars and queues are the game */
@@ -1138,7 +1313,8 @@ void game_office_dynamics(GameSim *sim, Tower *tower)
     /* 3. Hotel / suite room upgrade for happy, clean rooms. */
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (t->state != TENANT_OCCUPIED || t->stress > 10 || t->dirty) continue;
+        if (t->state != TENANT_OCCUPIED || t->stress > 10 ||
+            t->condition != ROOM_CLEAN) continue;
         uint8_t cap = t->cap_peak;
         if ((t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN) && cap < 0x18)
             t->cap_peak = cap + CAP_STEP;
@@ -1513,7 +1689,8 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 1u
+#define SAVE_VERSION 2u   /* v2: hotel condition/demand fields in Tenant,
+                             hotel_pass_day in GameSim */
 
 int game_save(const GameSim *sim, const Tower *tower, const char *path)
 {

@@ -558,8 +558,10 @@ static void add_penalty(Person *p, int amount)
 }
 
 /* Deliver banked frustration to the home tenant on arrival.
- * Thresholds 150/200 are the probable JudgeTenant pair from the tuning
- * resource (0xDD8A/0xDD8E) — consumers not yet verified in the decomp. */
+ * Thresholds 150/200 come from the tuning resource (0xDD8A/0xDD8E). One
+ * consumer is now byte-verified: the hotel demand bar [0xDD78] is this
+ * same pair, star-selected (150 at stars 1-3, 200 at 4+) — R4 referee
+ * 2026-07-09. The office/condo-side consumers remain unverified. */
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
     Tenant *t = tower_tenant(tower, p->home_tenant);
@@ -572,6 +574,15 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
         if (felt >= TUNING.judge_stressed)      t->stress += 15;
         else if (felt >= TUNING.judge_moderate) t->stress += 5;
         if (t->stress > 100) t->stress = 100;
+        /* Hotel rooms also bank the raw felt stress for the 5PM demand
+         * verdict (the EXE keeps this per-guest, +0x0E/+0x09, and averages
+         * at the pass — the port aggregates at the room). */
+        if (item_is_hotel_room(t->type) &&
+            t->guest_stress_trips < 0xFFFF) {
+            unsigned tot = t->guest_stress_total + (unsigned)felt;
+            t->guest_stress_total = (uint16_t)(tot > 0xFFFF ? 0xFFFF : tot);
+            t->guest_stress_trips++;
+        }
     }
     ps->wait_total += p->wait_accum;
     ps->wait_samples++;
@@ -646,12 +657,14 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         return;
     }
     deliver_stress(ps, tower, p);
-    /* Hotel guests checking in mark the room as hosted (housekeeping loop) */
+    /* Hotel guests checking in mark the room hosted (housekeeping loop)
+     * and reset its neglect fuse — check-in is the ONLY thing that resets
+     * the fuse (HotelCheckIn 1178:0e65 zeroes tenure; maids never do). */
     Tenant *t = tower_tenant(tower, p->home_tenant);
-    if (t && !p->going_home &&
-        (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
-         t->type == ITEM_HOTEL_SUITE))
+    if (t && !p->going_home && item_is_hotel_room(t->type)) {
         t->hosted = 1;
+        t->neglect_days = 0;
+    }
     p->state = PERSON_AT_DEST;
 }
 
@@ -910,14 +923,14 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
     return slot + 1;
 }
 
-/* Lowest floor with a dirty hotel room (housekeeper dispatch target) */
+/* Lowest floor with a DIRTY hotel room (housekeeper dispatch target).
+ * Infested rooms are not on the maids' list — they never clean those
+ * (MainteT's picker matches the dirty band exactly). */
 static int find_dirty_room_floor(Tower *tower)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (t->dirty && (t->type == ITEM_HOTEL_SINGLE ||
-                         t->type == ITEM_HOTEL_TWIN ||
-                         t->type == ITEM_HOTEL_SUITE)) {
+        if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY) {
             int f = floor_to_index(t->floor);
             if (f >= 0 && f < TOWER_FLOOR_COUNT) return f;
         }
@@ -1033,11 +1046,12 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->state != TENANT_OCCUPIED) continue;
+        /* Hotel guests spawn only for rooms the 5PM demand pass armed —
+         * the EXE's +0x14 booking gate (UniPeple 1220:3032). This is what
+         * keeps dirty and infested rooms guest-free: they can never arm. */
         int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING) ||
-                      ((t->type == ITEM_HOTEL_SINGLE ||
-                        t->type == ITEM_HOTEL_TWIN ||
-                        t->type == ITEM_HOTEL_SUITE) && tod == TOD_EVENING &&
-                       !t->dirty);
+                      (item_is_hotel_room(t->type) && tod == TOD_EVENING &&
+                       t->open_for_booking);
         /* venue patrons: lunch/shopping crowd, then the evening crowd */
         int patron = ((t->type == ITEM_FAST_FOOD || t->type == ITEM_SHOP) &&
                       tod == TOD_AFTERNOON) ||

@@ -196,6 +196,14 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
                 ten->twr_unk[2] = t[0x0e];
                 ten->twr_unk[3] = t[0x10];
                 ten->twr_unk[4] = t[0x11];
+                /* Hotel room condition rides in the status byte's band
+                 * (+0x0B: >=0x38 infested, >=0x28 dirty — the EXE
+                 * round-trips it verbatim, so real saves carry roaches) */
+                if (item_is_hotel_room(it)) {
+                    if (t[0x0b] >= 0x38)      ten->condition = ROOM_INFESTED;
+                    else if (t[0x0b] >= 0x28) ten->condition = ROOM_DIRTY;
+                    else                      ten->condition = ROOM_CLEAN;
+                }
                 if (under_construction) {
                     ten->state = TENANT_CONSTRUCTION;
                     ten->construction = 8;
@@ -630,6 +638,13 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             if (r->ten && r->ten->retail_ref)
                 t[6] = (uint8_t)(r->ten->retail_ref - 1);
             if (r->ten) {
+                /* Hotel rooms: write the condition band back into the
+                 * status byte (day variants; no people are exported, so
+                 * every room goes out as a vacant band) */
+                if (item_is_hotel_room(r->ten->type))
+                    t[0x0b] = (r->ten->condition == ROOM_INFESTED) ? 0x38
+                            : (r->ten->condition == ROOM_DIRTY)    ? 0x28
+                            : 0x18;
                 t[0x0c] = r->ten->twr_unk[0];
                 t[0x0d] = r->ten->twr_unk[1];
                 t[0x0e] = r->ten->twr_unk[2] ? r->ten->twr_unk[2] : 1;

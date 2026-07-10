@@ -1178,18 +1178,20 @@ static void render_tower(void)
 
                 int frame_idx;
                 if (is_hotel && nframes >= 9) {
-                    /* Hotel room sheet = door (frame 0) + 8 room frames decoded
-                     * by Jonah as state×time-of-day pairs (day, night):
+                    /* Hotel room sheet = door (frame 0) + 8 room frames as
+                     * state×time-of-day pairs (day, night):
                      *   1/2 occupied · 3/4 clean · 5/6 dirty · 7/8 cockroaches.
-                     * So frame is picked by room STATE, not an occupancy ramp
-                     * (the old proportional map sent a packed room to the
-                     * cockroach frame). */
+                     * This is exactly the EXE's status byte: frame = +0x0B/8,
+                     * so the band pairs (0x28/0x30 dirty, 0x38/0x40 infested)
+                     * ARE these day/night frames. The old "dirty + 2
+                     * complaints -> roaches" rule here was an inference; the
+                     * real trigger is the room's condition (R4 referee). */
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
-                    if (tenant->dirty && tenant->complaints >= 2)
-                        frame_idx = night ? 8 : 7;   /* long-neglected -> roaches (inferred) */
-                    else if (tenant->dirty)
-                        frame_idx = night ? 6 : 5;   /* checked out, needs housekeeping */
+                    if (tenant->condition == ROOM_INFESTED)
+                        frame_idx = night ? 8 : 7;   /* cockroaches */
+                    else if (tenant->condition == ROOM_DIRTY)
+                        frame_idx = night ? 6 : 5;   /* needs housekeeping */
                     else if (tenant->capacity > CAP_EMPTY)
                         frame_idx = night ? 2 : 1;   /* guest in the room */
                     else
@@ -2991,11 +2993,12 @@ static void render_minimap(void)
             case 2:  r = 60;  g = 210; b = 60;  break;   /* Low */
             case 3:  r = 60;  g = 220; b = 230; break;   /* Very Low */
             }
-        } else { /* mode 3: dirty hotel rooms */
-            int is_hotel = (t->type == ITEM_HOTEL_SINGLE ||
-                            t->type == ITEM_HOTEL_TWIN ||
-                            t->type == ITEM_HOTEL_SUITE);
-            if (is_hotel && t->dirty) { r = 230; g = 40; b = 40; }
+        } else { /* mode 3: hotel housekeeping (dirty amber, infested red) */
+            if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
+                { r = 230; g = 150; b = 40; }
+            else if (item_is_hotel_room(t->type) &&
+                     t->condition == ROOM_INFESTED)
+                { r = 230; g = 40; b = 40; }
             else { r = 70; g = 70; b = 70; }
         }
 
@@ -4096,8 +4099,7 @@ static void inspect_popup_metrics(int *lines)
     if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0) n++;  /* Income */
     if (res || comm) n++;                                   /* Satisfaction */
     if (t->type==ITEM_OFFICE) n++;                          /* Tier */
-    if ((t->type==ITEM_HOTEL_SINGLE||t->type==ITEM_HOTEL_TWIN||
-         t->type==ITEM_HOTEL_SUITE) && t->dirty) n++;       /* housekeeping */
+    if (item_is_hotel_room(t->type) && t->condition != ROOM_CLEAN) n++;
     *lines = n;
 }
 
@@ -4129,8 +4131,12 @@ static void render_inspect_popup(void)
                  t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");
     if (t->type == ITEM_OFFICE)
         snprintf(ln[n++], 40, "Tier: %s", occupancy_tier_name(t->cap_peak));
-    if ((t->type==ITEM_HOTEL_SINGLE||t->type==ITEM_HOTEL_TWIN||
-         t->type==ITEM_HOTEL_SUITE) && t->dirty)
+    /* The original's info line #26 "Room is too dirty" only fires for
+     * INFESTED rooms (InfoComment 1108:06ef gates >= 0x38); merely-dirty
+     * rooms get no comment. The port is a little kinder and names both. */
+    if (item_is_hotel_room(t->type) && t->condition == ROOM_INFESTED)
+        snprintf(ln[n++], 40, "Room is too dirty (roaches!)");
+    else if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
         snprintf(ln[n++], 40, "Needs housekeeping");
 
     int wx = game.inspect_x, wy = game.inspect_y;

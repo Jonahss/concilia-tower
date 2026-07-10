@@ -487,6 +487,11 @@ typedef struct {
     /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
     int           last_stress_day;
 
+    /* Day the 5PM hotel pass (roach spread → neglect fuse → demand
+     * arm/disarm) last ran. The EXE fires it from TimeT at frame_time
+     * 0x640 = 17:00 sharp (calls 1130:01e2 then 1130:0109). */
+    int           hotel_pass_day;
+
     /* Transport reachability (recomputed from the tower layout each tick).
      * public  = tenants/visitors commuting from the ground entrance
      * service = staff (housekeeping/security), may also use service elevators */
@@ -560,6 +565,12 @@ void game_judge_tenants(GameSim *sim, Tower *tower);
 /* Every-3-day pass: a content tenant eases a stressed same-type floor-mate
  * (MainteT tenant pairing — breaks move-out cascades). */
 void game_tenant_pairing(GameSim *sim, Tower *tower);
+
+/* The daily 5PM hotel pass, in the EXE's order: roach spread
+ * (ExpandoBadHotel 1130:01e2), then the neglect fuse (HotelNeglectCheck
+ * 1130:0e5c), then demand arm/disarm (JudgeAllHotel pass 2, 1130:0f57).
+ * game_update calls this once per day at 17:00; exposed for tests. */
+void game_hotel_demand_pass(GameSim *sim, Tower *tower);
 
 /* Every-3-day pass: persistent-occupancy dynamics keyed on cap_peak —
  * thriving offices grow a tier, a thriving (top-tier) office spreads success

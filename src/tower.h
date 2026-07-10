@@ -216,6 +216,30 @@ static inline int cell_has_transport_overlay(const TowerCell *c) {
     return (c->flags & CELL_TRANSPORT_OVERLAY) != 0;
 }
 
+/* Hotel room condition — the port's explicit version of the EXE's packed
+ * status-byte bands (tenant +0x0B: clean 0x18/0x20, dirty 0x28/0x30,
+ * infested 0x38/0x40; the pair is only the day/night sprite variant).
+ * Decoded by the 2026-07-09 referees (referee_84day_hotelbit +
+ * referee_infested_checkin):
+ *   - checkout always makes the room DIRTY (MoneyT 1178:0eac)
+ *   - housekeepers clean DIRTY rooms only — they never touch INFESTED
+ *     (MainteT 1150:00b4/00c9 match {0x28,0x30} exactly)
+ *   - 3 daily passes spent dirty-and-unrented -> INFESTED (JudgeT 1130:0e5c)
+ *   - INFESTED spreads to adjacent hotel rooms, one per side per day,
+ *     clean and occupied alike (JudgeT ExpandoBadHotel 1130:01e2)
+ *   - dirty and infested rooms take NO new guests (the booking flag below
+ *     can never arm for them), so demolition is the only infestation cure */
+typedef enum {
+    ROOM_CLEAN = 0,
+    ROOM_DIRTY,
+    ROOM_INFESTED
+} RoomCondition;
+
+static inline int item_is_hotel_room(ItemType t) {
+    return t == ITEM_HOTEL_SINGLE || t == ITEM_HOTEL_TWIN ||
+           t == ITEM_HOTEL_SUITE;
+}
+
 /* Tenant instance — represents one placed item.
  *
  * NOTE: game_save() (game.c) writes the whole Tower struct, tenants included,
@@ -264,9 +288,40 @@ typedef struct {
 
     /* --- Episodic / daily state (hotel rooms, fire) --- */
     uint8_t  hosted;       /* Hotel room: guests stayed overnight */
-    uint8_t  dirty;        /* Hotel room: needs housekeeping before it can re-rent */
+    uint8_t  condition;    /* Hotel room: RoomCondition (clean/dirty/infested) */
     uint8_t  burned;       /* Destroyed by fire — renders as rubble until rebuilt */
     uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
+
+    /* --- Hotel demand model (EXE tenant bytes +0x14/+0x15/+0x17, decoded
+     *     by referee_infested_checkin_2026-07-10) --- */
+    uint8_t  open_for_booking; /* EXE +0x14 — "this room takes guests tonight".
+                                * THE booking gate: a parked guest's sim arm
+                                * returns immediately when it's 0 (UniPeple
+                                * 1220:3032), so a room that never arms never
+                                * rents. Armed/disarmed by the daily 5PM pass;
+                                * cleared by checkout, roach spread, and the
+                                * neglect pass. Nothing in the EXE can arm a
+                                * dirty or infested room. */
+    uint8_t  demand_category;  /* EXE +0x15 — yesterday-evening's demand verdict:
+                                * 2 = guests happy (avg stress < 80)
+                                * 1 = acceptable   (avg stress < the star bar)
+                                * 0 = stressed out (avg stress >= 150/200) —
+                                *     disarmed unless a same-floor category-2
+                                *     room vouches for it (the pairing rescue,
+                                *     JudgeT 1130:0f57). */
+    uint8_t  neglect_days;     /* EXE +0x17 — consecutive 5PM passes spent
+                                * dirty-and-unrented; at exactly 3 the room
+                                * turns INFESTED. Reset by check-in only —
+                                * a maid cleaning the room does NOT reset it
+                                * (byte-verified wrinkle: EndClean never
+                                * touches it, only HotelCheckIn does). */
+    /* Guest elevator-stress accumulator feeding the demand verdict. The EXE
+     * keeps this per-person (+0x0E total / +0x09 periods) and averages the
+     * room's guests at 5PM; the port banks the same "felt" wait-stress
+     * (post lobby-forgiveness, people.c deliver_stress) per ROOM and resets
+     * when the room re-arms — same signal, one aggregation level up. */
+    uint16_t guest_stress_total;
+    uint16_t guest_stress_trips;
 
     /* --- Rent --- */
     uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —

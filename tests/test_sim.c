@@ -152,13 +152,99 @@ static void test_housekeeping(void)
     CHECK(saw_cleaned, "housekeeping cleaned a checked-out room");
     CHECK(saw_hosted_again, "cleaned room hosted guests again");
 
-    /* Remove housekeeping: after the next checkout the room sticks dirty */
+    /* Remove housekeeping: after the next checkout the room sticks dirty —
+     * and after 3 daily passes spent dirty-and-unrented the roaches move
+     * in (JudgeT HotelNeglectCheck: the neglect fuse trips at exactly 3) */
     tower_remove(&tw, hk);
-    for (int i = 0; i < 480 * 3; i++) game_update(&sim, &tw);
-    CHECK(room->dirty, "without housekeeping the room stays dirty");
-    CHECK(sim.dirty_rooms == 1, "dirty room counted in stats");
-    CHECK(room->state != TENANT_OCCUPIED || sim.time_of_day != TOD_NIGHT,
-          "dirty room takes no guests");
+    for (int i = 0; i < 480 * 2; i++) game_update(&sim, &tw);
+    CHECK(room->condition != ROOM_CLEAN,
+          "without housekeeping the room stays dirty");
+    CHECK(!room->open_for_booking, "dirty room is closed for booking");
+    run_days(4);
+    CHECK(room->condition == ROOM_INFESTED,
+          "3 days of neglect -> cockroach infestation");
+}
+
+static void test_hotel_infestation(void)
+{
+    printf("hotel infestation (spread & cure):\n");
+    fresh();
+    /* Three singles in a row (they abut), then a gap, then a fourth */
+    uint16_t r1 = place(ITEM_HOTEL_SINGLE, 1, BX);        /* 4 cells wide */
+    uint16_t r2 = place(ITEM_HOTEL_SINGLE, 1, BX + 4);
+    uint16_t r3 = place(ITEM_HOTEL_SINGLE, 1, BX + 8);
+    uint16_t r4 = place(ITEM_HOTEL_SINGLE, 1, BX + 14);   /* gap at +12/+13 */
+    place(ITEM_STAIRS, 0, BX + 20);
+    Tenant *a = tenant(r1), *b = tenant(r2), *c = tenant(r3), *d = tenant(r4);
+    if (!a || !b || !c || !d) { printf("  FAIL placement\n"); fails++; return; }
+    /* Hotel construction (56 ticks, decremented every 4th tick) outlasts
+     * day 0's 5PM pass, so the first pass that sees the finished rooms is
+     * day 1's — run two days. */
+    run_days(2);
+
+    CHECK(a->open_for_booking && d->open_for_booking,
+          "fresh clean rooms are armed by the 5PM pass");
+
+    /* Plant roaches in the middle room and run one pass directly */
+    b->condition = ROOM_INFESTED;
+    b->open_for_booking = 0;
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->condition == ROOM_INFESTED && c->condition == ROOM_INFESTED,
+          "roaches spread to both abutting rooms in one pass");
+    CHECK(d->condition == ROOM_CLEAN,
+          "roaches do not jump the gap to a detached room");
+    CHECK(!a->open_for_booking && !c->open_for_booking,
+          "spread victims are closed for booking");
+
+    /* Maids never fix infestation */
+    place(ITEM_HOUSEKEEPING, 1, BX + 24);
+    run_days(3);
+    CHECK(b->condition == ROOM_INFESTED,
+          "housekeeping never cleans an infested room");
+    CHECK(!b->open_for_booking && b->population == 0,
+          "infested room takes no guests, ever");
+
+    /* Demolition is the only cure */
+    tower_remove(&tw, r2);
+    CHECK(tenant(r2) == NULL, "demolition removes the infested room");
+}
+
+static void test_hotel_demand(void)
+{
+    printf("hotel demand (booking flag):\n");
+    fresh();
+    uint16_t r1 = place(ITEM_HOTEL_SINGLE, 1, BX);
+    uint16_t r2 = place(ITEM_HOTEL_SINGLE, 1, BX + 4);
+    place(ITEM_STAIRS, 0, BX + 12);
+    Tenant *a = tenant(r1), *b = tenant(r2);
+    if (!a || !b) { printf("  FAIL placement\n"); fails++; return; }
+    run_days(1);
+
+    /* Stressed guests (avg >= 150 at 1 star) close the room at the pass —
+     * unless a happy same-floor room vouches for it (the pairing rescue) */
+    a->condition = ROOM_CLEAN;  b->condition = ROOM_CLEAN;
+    a->guest_stress_total = 600; a->guest_stress_trips = 2;  /* avg 300 */
+    b->guest_stress_total = 0;   b->guest_stress_trips = 4;  /* avg 0 */
+    b->demand_category = 0;      /* stale: the pass must recompute it */
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(b->open_for_booking, "happy room re-arms at the pass");
+    CHECK(a->open_for_booking,
+          "stressed room is rescued by a happy same-floor pairing");
+    CHECK(a->demand_category == 1 && b->demand_category == 1,
+          "pairing settles both rooms at category 1");
+
+    /* Without a happy floor-mate, the stressed room is disarmed */
+    a->guest_stress_total = 600; a->guest_stress_trips = 2;
+    b->guest_stress_total = 400; b->guest_stress_trips = 2;  /* avg 200: bad */
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(!a->open_for_booking && !b->open_for_booking,
+          "stressed rooms with no happy pair are closed for booking");
+
+    /* Very-low room rate always fills (the EXE zeroes its demand score) */
+    a->guest_stress_total = 600; a->guest_stress_trips = 2;
+    a->rent_class = 3;
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->open_for_booking, "very-low room rate always books");
 }
 
 /* --- people/elevator pipeline (people.c) --- */
@@ -477,7 +563,7 @@ static void test_patrons_and_staff(void)
     place(ITEM_ELEVATOR_SERVICE, 2, 250);
     CHECK(base && room && hk && svc, "hotel stack + housekeeping + service shaft placed");
     force_occupied(base); force_occupied(room); force_occupied(hk);
-    tenant(room)->dirty = 1;
+    tenant(room)->condition = ROOM_DIRTY;
     people_rebuild_transport(&sim.people, &tw);
 
     int dispatched = 0, rode = 0;
@@ -992,7 +1078,7 @@ static void test_office_dynamics(void)
     Tenant *ht = &tw.tenants[tw.tenant_count++];
     *ht = (Tenant){0};
     ht->type = ITEM_HOTEL_SINGLE; ht->floor = 5; ht->state = TENANT_OCCUPIED;
-    ht->stress = 0; ht->dirty = 0; ht->cap_peak = 0x10;
+    ht->stress = 0; ht->condition = ROOM_CLEAN; ht->cap_peak = 0x10;
     game_office_dynamics(&sim, &tw);
     CHECK(ht->cap_peak == 0x18, "a happy clean hotel room upgrades 0x10 -> 0x18");
     game_office_dynamics(&sim, &tw);
@@ -1002,7 +1088,7 @@ static void test_office_dynamics(void)
     Tenant *dr = &tw.tenants[tw.tenant_count++];
     *dr = (Tenant){0};
     dr->type = ITEM_HOTEL_SINGLE; dr->floor = 6; dr->state = TENANT_OCCUPIED;
-    dr->stress = 0; dr->dirty = 1; dr->cap_peak = 0x10;
+    dr->stress = 0; dr->condition = ROOM_DIRTY; dr->cap_peak = 0x10;
     game_office_dynamics(&sim, &tw);
     CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
 }
@@ -1215,6 +1301,8 @@ int main(void)
     test_unreachable_empty();
     test_elevators();
     test_housekeeping();
+    test_hotel_infestation();
+    test_hotel_demand();
     test_commute_elevator();
     test_metro_visitors();
     test_parking_bypass();
