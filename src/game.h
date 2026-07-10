@@ -497,6 +497,11 @@ typedef struct {
     
     /* Stats */
     int           max_population;   /* Peak population reached */
+    int           standing_population; /* time-of-day-independent count:
+                                          everyone who lives/works here (hotel
+                                          guests only while hosted) — what the
+                                          EXE's population global measures and
+                                          what star promotion reads */
     int           tenants_occupied; /* Currently occupied tenant count */
     int           tenants_total;    /* Total placed tenants */
     

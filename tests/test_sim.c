@@ -873,7 +873,7 @@ static void test_wedding(void)
     printf("TOWER wedding (5-star -> TOWER special event):\n");
     fresh();
     tw.star_rating = 5;
-    tw.population = 15000;
+    tw.population = 15000; sim.standing_population = 15000;
     sim.promo.has_cathedral = 1;
     sim.promo.vip_visited = 1;
 
@@ -893,13 +893,13 @@ static void test_wedding(void)
     /* requirements are real requirements */
     fresh();
     tw.star_rating = 5;
-    tw.population = 15000;
+    tw.population = 15000; sim.standing_population = 15000;
     sim.promo.has_cathedral = 0;           /* no venue */
     sim.promo.vip_visited = 1;
     game_wedding_daily(&sim, &tw);
     CHECK(!sim.wedding.active, "no cathedral, no wedding");
     sim.promo.has_cathedral = 1;
-    tw.population = 14999;
+    tw.population = 14999; sim.standing_population = 14999;
     game_wedding_daily(&sim, &tw);
     CHECK(!sim.wedding.active, "below 15,000 population, no wedding");
 }
@@ -975,6 +975,10 @@ static void test_star_requirements(void)
 {
     printf("star requirements (LevelUp 1148:007e):\n");
     fresh();
+    /* 3->4 and 4->5 only evaluate on weekday evenings (time_period >= 4,
+     * not weekend) — open the window so the requirement checks can pass. */
+    sim.hour = 17;
+    sim.quarter = QUARTER_WEEKDAY3;
     sim.promo.has_suite = 1;
     sim.promo.recycling_adequate = 1;
     sim.promo.has_medical = 1;
@@ -997,6 +1001,24 @@ static void test_star_requirements(void)
     sim.promo.recycling_adequate = 0;
     CHECK(!game_check_promotion(&sim, &tw, 5) && !game_check_promotion(&sim, &tw, 4),
           "inadequate recycling blocks both 3->4 and 4->5 (dynamic flag)");
+    sim.promo.recycling_adequate = 1;
+    sim.promo.vip_visited = 1;
+
+    /* The weekday-evening window (LevelUp @00de/@00e5, @011e/@0125). */
+    sim.hour = 12;
+    CHECK(!game_check_promotion(&sim, &tw, 4) && !game_check_promotion(&sim, &tw, 5),
+          "midday: 3->4 and 4->5 wait for the evening");
+    sim.hour = 2;
+    CHECK(game_check_promotion(&sim, &tw, 4),
+          "the window runs through the night (time_period >= 4 wraps to 7AM)");
+    sim.hour = 17;
+    sim.quarter = QUARTER_WEEKEND;
+    CHECK(!game_check_promotion(&sim, &tw, 4) && !game_check_promotion(&sim, &tw, 5),
+          "no big promotions on the weekend");
+    sim.promo.has_security = 1;
+    CHECK(game_check_promotion(&sim, &tw, 3),
+          "2->3 has no clock gate (binary checks only security)");
+    sim.quarter = QUARTER_WEEKDAY3;
 }
 
 /* Persistent occupancy: cap_peak growth, gentrification, hotel upgrade. */
@@ -1319,6 +1341,35 @@ static void test_bomb_blast(void)
     CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
 }
 
+/* The hourly star evaluation (game_update wiring): promotions land on the
+ * hour, using the STANDING population (workers count while employed, not
+ * while present) so the count survives the evening window. */
+static void test_promotion_cadence(void)
+{
+    printf("hourly star evaluation via game_update:\n");
+    fresh();
+    TUNING.star_pop[0] = 10;                 /* shrink the star-2 threshold */
+    tower_import_item(&tw, ITEM_FLOOR, -1, 100, 30);  /* width gate: > 25 */
+    fplace(ITEM_STAIRS, 0, 150);             /* entrance floor -> floor 1 */
+    for (int i = 0; i < 3; i++) {
+        uint16_t id = fplace(ITEM_OFFICE, 1, 100 + i * 9);
+        Tenant *t = tenant(id);
+        t->state = TENANT_OCCUPIED;
+        t->cap_peak = CAP_PEAK_LOW;
+    }
+    tw.star_rating = 1;
+    int promoted_hour = -1;
+    for (int i = 0; i < (720 * 4 * 2)  /* two normal-speed days */ && tw.star_rating < 2; i++) {
+        game_update(&sim, &tw);
+        if (tw.star_rating == 2) promoted_hour = sim.hour;
+    }
+    CHECK(tw.star_rating == 2, "tower promotes via the hourly evaluation");
+    CHECK(promoted_hour >= 0, "promotion observed during the update loop");
+    CHECK(sim.standing_population >= 10,
+          "standing population counts office workers around the clock");
+    tuning_reset();
+}
+
 /* Flavor mechanics: grand-lobby height (drives the WaitT wait-forgiveness
  * bonus) and medical emergencies (only with a medical center, no penalty). */
 static void test_flavor(void)
@@ -1443,6 +1494,7 @@ int main(void)
     test_tenant_pairing();
     test_office_dynamics();
     test_star_requirements();
+    test_promotion_cadence();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

@@ -65,6 +65,7 @@ void game_init(GameSim *sim)
 int game_calc_population(GameSim *sim, Tower *tower)
 {
     int pop = 0;
+    int standing = 0;
     int occupied = 0;
     
     for (int i = 0; i < tower->tenant_count; i++) {
@@ -94,22 +95,38 @@ int game_calc_population(GameSim *sim, Tower *tower)
 
         /* Check if this tenant type is active at current time of day */
         int type_idx = (int)t->type;
+        int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
+        /* Office headcount scales with established occupancy (cap_peak):
+         * a thriving office (0x40) holds twice a new one's (0x20) staff.
+         * Hotels are excluded — a room's guest count is fixed by room
+         * type (1/2/3); their cap_peak growth shows up in revenue, not
+         * heads (and 1-3 guests can't scale meaningfully in ints). */
+        if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
+            base_pop = base_pop * t->cap_peak / CAP_PEAK_LOW;
+        /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
+        if (t->state == 1) base_pop /= 2;  /* moving in */
+
+        if (t->state >= 1) {
+            /* STANDING population: everyone who lives or works here,
+             * regardless of the hour — the EXE's population global counts
+             * person records tied to tenants, so an office's workers count
+             * at midnight too. Hotel guests are the exception: they only
+             * exist while hosted. This is the number star promotion reads
+             * (otherwise the weekday-EVENING window could never see an
+             * office tower's population). */
+            if (item_is_hotel_room(t->type)) {
+                if (TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day])
+                    standing += base_pop;
+            } else {
+                standing += base_pop;
+            }
+        }
+
         if (type_idx < ITEM_TYPE_COUNT && TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day]) {
-            /* Active — contribute population based on state */
+            /* Active — people are physically present right now */
             if (t->state >= 1) {  /* At least MOVING_IN */
-                int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
-                /* Office headcount scales with established occupancy (cap_peak):
-                 * a thriving office (0x40) holds twice a new one's (0x20) staff.
-                 * Hotels are excluded — a room's guest count is fixed by room
-                 * type (1/2/3); their cap_peak growth shows up in revenue, not
-                 * heads (and 1-3 guests can't scale meaningfully in ints). */
-                if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
-                    base_pop = base_pop * t->cap_peak / CAP_PEAK_LOW;
-                /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
-                int effective_pop = base_pop;
-                if (t->state == 1) effective_pop = base_pop / 2;  /* moving in */
-                t->population = effective_pop;
-                pop += effective_pop;
+                t->population = base_pop;
+                pop += base_pop;
                 occupied++;
             }
         } else {
@@ -125,6 +142,7 @@ int game_calc_population(GameSim *sim, Tower *tower)
     }
     
     tower->population = pop;
+    sim->standing_population = standing;
     sim->tenants_occupied = occupied;
     if (pop > sim->max_population) sim->max_population = pop;
     
@@ -183,7 +201,7 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
      * recycling center; inadequate flips trucks off and blocks star 4/5. */
     sim->promo.recycling_adequate =
         recycling_centers > 0 &&
-        tower->population / recycling_centers < 2500;
+        sim->standing_population / recycling_centers < 2500;
 
     sim->tower_width = game_measure_width(tower);
 }
@@ -197,8 +215,10 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
     int current = tower->star_rating;
     if (current >= 6) return current;  /* Already TOWER */
     
-    /* Population threshold check */
-    int pop = tower->population;
+    /* Population threshold check — the STANDING count (workers count
+     * while employed, not while present), else the evening-only promotion
+     * window would never see an office tower's daytime population. */
+    int pop = sim->standing_population;
     int next_star = current + 1;
     
     if (next_star > 6) return current;
@@ -240,13 +260,27 @@ void game_wedding_daily(GameSim *sim, Tower *tower)
         printf("\xf0\x9f\x92\x92 The wedding is over — "
                "WELCOME TO TOWER! \xf0\x9f\x8f\x86\n");
     } else if (!sim->wedding.done && tower->star_rating == 5 &&
-               tower->population >= STAR_POP_THRESHOLD[5] &&
+               sim->standing_population >= STAR_POP_THRESHOLD[5] &&
                sim->promo.has_cathedral && sim->promo.vip_visited) {
         sim->wedding.active = 1;
         sim->wedding.day = tower->day;
         printf("\xf0\x9f\x92\x92 A wedding is being held at the "
                "cathedral today! (Day %d)\n", tower->day);
     }
+}
+
+/* The 3->4 and 4->5 branches of levelup_check also gate on the CLOCK:
+ * time_period >= 4 (5:00 PM onward, running through the night to the 7AM
+ * reset) and is_weekend != 1 (LevelUp @00de/@00e5 and @011e/@0125) — big
+ * promotions only land on weekday evenings. The 2->3 branch has no clock
+ * gate; early promotions come any time. Mapped to this sim's calendar:
+ * evening-or-night hours, outside the weekend quarter (the port runs the
+ * EXE's WD1/WD2/WE day-cycle as quarters within its 24h day, so the
+ * weekend quarter plays the EXE's weekend day). */
+static int promotion_window_open(const GameSim *sim)
+{
+    int evening_or_later = (sim->hour >= 17 || sim->hour < 7);
+    return evening_or_later && sim->quarter != QUARTER_WEEKEND;
 }
 
 int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
@@ -256,25 +290,29 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
     case 1: return 1;  /* Starting star, always OK */
     case 2: return 1;  /* Just need population */
     case 3:
-        /* Need security office */
+        /* Need security office (no clock gate at 2->3) */
         return sim->promo.has_security;
     case 4:
         /* LevelUp 1148:007e, 3->4 branch (byte-verified 2026-07-09):
          * suite (0xB92B) + recycling adequate (0xB92C) + VIP verdict
-         * (0xB923) + medical adequate (0xB92D). Metro is NOT required
-         * here — the old table had metro/recycling swapped and invented
-         * a "4 suites" count; one suite is the requirement. */
+         * (0xB923) + medical adequate (0xB92D) + the weekday-evening
+         * window. Metro is NOT required here — the old table had
+         * metro/recycling swapped and invented a "4 suites" count; one
+         * suite is the requirement. */
         return sim->promo.has_suite &&
                sim->promo.recycling_adequate &&
                sim->promo.has_medical &&
-               sim->promo.vip_visited;
+               sim->promo.vip_visited &&
+               promotion_window_open(sim);
     case 5:
         /* 4->5 branch: metro ([0xB3E8] >= 0) + recycling adequate +
-         * medical adequate. NO VIP re-check and no suite re-check —
-         * the binary reads neither 0xB923 nor 0xB92B here. */
+         * medical adequate + the weekday-evening window. NO VIP re-check
+         * and no suite re-check — the binary reads neither 0xB923 nor
+         * 0xB92B here. */
         return sim->promo.has_metro &&
                sim->promo.recycling_adequate &&
-               sim->promo.has_medical;
+               sim->promo.has_medical &&
+               promotion_window_open(sim);
     case 6:
         /* TOWER: special event, not automatic */
         return 0;
@@ -853,6 +891,38 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
     }
 }
 
+/* Star evaluation — the EXE's LevelT re-checks continuously; the clock
+ * gates inside levelup_check (weekday evenings for 3->4/4->5) are what
+ * decide when a promotion LANDS. Called hourly from game_update so an
+ * eligible tower promotes at the first open-window hour — 5PM on a
+ * weekday — instead of at the old once-a-day midnight check. */
+static void evaluate_star_rating(GameSim *sim, Tower *tower)
+{
+    scan_promotion_flags(sim, tower);
+
+    int new_rating = game_check_star_rating(sim, tower);
+    if (new_rating > tower->star_rating) {
+        tower->star_rating = new_rating;
+        sim->pending_star_up = new_rating;
+        if (new_rating == 6) {
+            printf("\xf0\x9f\x8f\x86 TOWER STATUS ACHIEVED!\n");
+        } else {
+            printf("\xe2\xad\x90 Promoted to %d star%s! Population: %d\n",
+                   new_rating, new_rating > 1 ? "s" : "",
+                   sim->standing_population);
+        }
+        /* Promotion bonus (LevelUp seg42:020f -> MoneyT AwardMoney):
+         * the EXE pays $200k/$300k/$500k on reaching star 2/3/4.
+         * No bonus decoded for star 5 or TOWER. */
+        if (new_rating >= 2 && new_rating <= 4) {
+            int bonus = TUNING.star_bonus[new_rating - 2];
+            tower->money += bonus;
+            sim->income_this_quarter += bonus;
+            printf("\xf0\x9f\x92\xb0 Promotion bonus: $%d\n", bonus);
+        }
+    }
+}
+
 /* --- Main simulation update --- */
 
 void game_update(GameSim *sim, Tower *tower)
@@ -882,6 +952,11 @@ void game_update(GameSim *sim, Tower *tower)
         sim->time_of_day = hour_to_tod(sim->hour);
     }
     
+    /* Star evaluation, hourly — the weekday-evening window inside
+     * game_check_promotion picks WHICH hours a 3->4/4->5 can land on. */
+    if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0)
+        evaluate_star_rating(sim, tower);
+
     /* Schedule clock for the elevator tables (EXE 0xB3A0/0xB3A1: the
      * weekend day-type + the 7 periods that slice the day) */
     sim->people.sched_day = (sim->quarter == QUARTER_WEEKEND);
@@ -1080,31 +1155,9 @@ void game_update(GameSim *sim, Tower *tower)
             printf("🌅 Day %d begins! Pop: %d, Stars: %d, Money: $%ld\n",
                    tower->day, tower->population, tower->star_rating, tower->money);
             
-            /* Check star rating once per day */
+            /* Wedding check at dawn (ChurchT) — wants fresh promo flags */
             scan_promotion_flags(sim, tower);
-
             game_wedding_daily(sim, tower);
-
-            int new_rating = game_check_star_rating(sim, tower);
-            if (new_rating > tower->star_rating) {
-                tower->star_rating = new_rating;
-                sim->pending_star_up = new_rating;
-                if (new_rating == 6) {
-                    printf("🏆🏆🏆 TOWER STATUS ACHIEVED! 🏆🏆🏆\n");
-                } else {
-                    printf("⭐ Promoted to %d star%s! Population: %d\n",
-                           new_rating, new_rating > 1 ? "s" : "", tower->population);
-                }
-                /* Promotion bonus (LevelUp seg42:020f → MoneyT AwardMoney):
-                 * the EXE pays $200k/$300k/$500k on reaching star 2/3/4.
-                 * No bonus decoded for star 5 or TOWER. */
-                if (new_rating >= 2 && new_rating <= 4) {
-                    int bonus = TUNING.star_bonus[new_rating - 2];
-                    tower->money += bonus;
-                    sim->income_this_quarter += bonus;
-                    printf("💰 Promotion bonus: $%d\n", bonus);
-                }
-            }
         }
     }
     
@@ -1834,7 +1887,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 3u   /* v3: scheduled-disaster EventState (per-floor
+#define SAVE_VERSION 4u   /* v4: standing_population (star checks read the
+                           * time-independent count).
+                           * v3: scheduled-disaster EventState (per-floor
                            * fire fronts, chopper) + disaster_sched_day.
                            * v2: hotel condition/demand fields in Tenant,
                              hotel_pass_day in GameSim */
