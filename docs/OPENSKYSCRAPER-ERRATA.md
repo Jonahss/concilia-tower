@@ -194,12 +194,44 @@ canon (and is live-editable in ConcilliaTower's F4 panel).
   frames. (OS knows this one — their loadAnimatedBitmap does the same
   swap — listed here because it's nowhere documented.)
 
+## Disasters are SCHEDULED, and the fire model is fronts + a $500k chopper
+
+Decoded 2026-07-09/10 (TimeT seg_1200 dispatcher map, FireT seg_10e8,
+EventT seg_10c8 — byte-verified referees):
+
+- **Fires are on a calendar**: TimeT's 10:00 AM block starts one every
+  84th day (`day % 0x54 == 0x53`, "a fire every 7 game-years"), gated on
+  star > 2, a security office, **and no cathedral** (0xB3EC < 0) — build
+  the cathedral and fires stop forever. Nothing is random per-tick.
+- **Bomb threats every 60th day** (`day % 0x3C == 0x3B`), only at stars
+  2/3/4 — the ransom switch (0xDE1C/1E/20 = $200k/$300k/$1M) has no other
+  case, so 5-star towers never get one. Refusing arms the bomb; it
+  detonates at exactly 1:00 PM (frame 0x4B0) unless a guard reaches it.
+  The dialog never reveals the floor (the floor-naming variant is gated
+  on the cut fire-department global 0xB3EA — dead code).
+- **Fire = per-floor left/right fronts**, not a radius: each front
+  destroys the cell it stands on and advances 1 cell every 7 frames
+  (tuning 0xDDD0); each floor ABOVE the origin ignites at the origin cell
+  80 frames later (0xDDD2) — fire never spreads downward. A front dies at
+  the floor extent's edge; unfought fires hard-stop at 9:00 PM (frame
+  2000).
+- **The firefighting helicopter is real and purchasable**: right after
+  ignition, dialog 0xBC4 offers choppers for $500,000 (tuning 0xDE14).
+  Pay and 0xB418 (mislabeled "fire_spread_count" — it's the chopper x)
+  starts at the origin floor's right edge and sweeps left 1 cell/frame,
+  dousing every front to its right (FireT 0450/0856).
+- **"Fire department" is a cut feature**: global 0xB3EA has no gameplay
+  writer in all 80 segments — every branch keyed on it (spread-delay
+  timer, floor-revealing bomb dialog) is dead code.
+
+OS models disasters as random events and has no chopper/front mechanics.
+
 ## Open questions being dug (will confirm or add entries)
 
 - **0x87EC**: the red variant of the shaft floor digits — purpose unknown
   (OS loads it but never renders row 1).
-- Tuning words 0xde10/12/14 (3000/1500/5000) and 0xde1c/1e/20
-  (2000/3000/10000): loaded but consumers not yet found.
+- Tuning words 0xde10/12 (change-movie costs, found) — 0xde14/1c/1e/20
+  settled above (chopper + bomb ransoms).
 
 ## The construction crane: left-parked, 7-cell minimum, hidden at the top
 

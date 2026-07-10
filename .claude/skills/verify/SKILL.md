@@ -45,6 +45,17 @@ ffmpeg -y -i /tmp/simtower_screenshot.bmp out.png
   then n×18-byte tenant records (`t[4]`=type: 3/4/5 hotel single/twin/
   suite; `t[0x0b]`=status byte: 0x18 clean, 0x28 dirty, 0x38 infested),
   then `skip 0xbc`.
+- **`concilliatower-vnc.service` (systemd, Restart=always) owns a simtower
+  on :99** — pkill it and systemd respawns a plain instance (no CT_ env)
+  that steals your captures. `sudo systemctl stop concilliatower-vnc`
+  before a verification session, `sudo systemctl restart` after (stopping
+  it also tears down Xvfb :99 — bring your own). And **use `pkill -x
+  simtower`**, not `-f "simtower.*"` — the -f pattern matches your own
+  shell and kills it (exit 144).
+- **The disaster modal eats F12** (it's fully modal). Screenshot it from
+  outside: `ffmpeg -f x11grab -video_size 960x720 -i :99 -frames:v 1 out.png`.
+  Buttons at y≈413: free path x≈392, paid path x≈566. Keys: d/Enter = free,
+  p/y = pay.
 - **xdotool key events** leave a build tool armed and can spam
   harmless `[reject] Office at ...` placement lines in the log —
   ignore them (or investigate someday).

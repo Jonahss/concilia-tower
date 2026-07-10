@@ -936,24 +936,11 @@ static void draw_shaft_digits(int tx, int ty, int w, int wf)
  * decoration. Mirrors the file's floor records: every floor a
  * non-transport tenant covers, including multi-floor continuations.
  * right is EXCLUSIVE; right == 0 marks an empty floor. */
-static int ovl_left[TOWER_FLOOR_COUNT], ovl_right[TOWER_FLOOR_COUNT];
+static int16_t ovl_left[TOWER_FLOOR_COUNT], ovl_right[TOWER_FLOOR_COUNT];
 
 static void floor_map_extents(void)
 {
-    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) {
-        ovl_left[i] = TOWER_WIDTH;
-        ovl_right[i] = 0;
-    }
-    for (int i = 0; i < game.tower.tenant_count; i++) {
-        const Tenant *t = &game.tower.tenants[i];
-        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
-        for (int f = t->floor; f < t->floor + t->height; f++) {
-            int fi = floor_to_index(f);
-            if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
-            if (t->x < ovl_left[fi]) ovl_left[fi] = t->x;
-            if (t->x + t->width > ovl_right[fi]) ovl_right[fi] = t->x + t->width;
-        }
-    }
+    tower_floor_extents(&game.tower, ovl_left, ovl_right);
 }
 
 static void render_tower(void)
@@ -3703,57 +3690,52 @@ static void render_events(void)
     int floor_y = lobby_sy - (evt_floor * CELL_H);
 
     if (game.sim.event.type == EVENT_FIRE) {
-        int fl = game.sim.event.fire_left;
-        int fr = game.sim.event.fire_right;
-        int fx = lobby_sx + fl * CELL_W;
-        int fw = (fr - fl + 1) * CELL_W;
-
-        /* 4-frame flame animation (FireT animates frame = b3de%4); each frame
-         * is 96x36 = a 12-cell front. Tile across [fl,fr], clip the last. */
+        /* Per-floor fronts (FireT): each active front is one 96x36 flame
+         * strip (12 cells) at its position — the burned-out span between
+         * the fronts shows as rubble via the tenants' burned flags, not
+         * as a wall of flame. 4-frame animation (frame = b3de % 4). */
         Sprite *flame = game.fire_frames[(game.sim.frame / 3) % 4];
-        if (flame && flame->texture) {
-            for (int x = fx; x < fx + fw; x += flame->w) {
-                int seg_w = (x + flame->w <= fx + fw) ? flame->w : (fx + fw - x);
-                SDL_Rect src = { 0, 0, seg_w, flame->h };
-                SDL_Rect dst = { x, floor_y + CELL_H - flame->h, seg_w, flame->h };
-                SDL_RenderCopy(game.renderer, flame->texture, &src, &dst);
+        for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
+            int16_t fl = game.sim.event.fire_left[fi];
+            int16_t fr = game.sim.event.fire_right[fi];
+            if (fl < 0 && fr < 0) continue;
+            int fy = lobby_sy - (index_to_floor(fi) * CELL_H);
+            for (int front = 0; front < 2; front++) {
+                int cell = front == 0 ? fl : fr;
+                if (cell < 0) continue;
+                if (front == 1 && fr == fl) continue;   /* fresh ignition: one strip */
+                int fx = lobby_sx + cell * CELL_W;
+                if (flame && flame->texture) {
+                    SDL_Rect dst = { fx, fy + CELL_H - flame->h,
+                                     flame->w, flame->h };
+                    SDL_RenderCopy(game.renderer, flame->texture, NULL, &dst);
+                } else {
+                    int flicker = (game.sim.frame % 6 < 3) ? 200 : 255;
+                    SDL_SetRenderDrawColor(game.renderer, flicker, flicker/4, 0, 120);
+                    SDL_Rect fire_rect = { fx, fy, FIRE_FRONT_CELLS * CELL_W, CELL_H };
+                    SDL_RenderFillRect(game.renderer, &fire_rect);
+                }
             }
-        } else {
-            int flicker = (game.sim.frame % 6 < 3) ? 200 : 255;
-            SDL_SetRenderDrawColor(game.renderer, flicker, flicker/4, 0, 120);
-            SDL_Rect fire_rect = { fx, floor_y, fw, CELL_H };
-            SDL_RenderFillRect(game.renderer, &fire_rect);
         }
 
-        /* Firefighting helicopter (sprite 0x8F6D) — air support for high-rise
-         * blazes that ground crews can't reach. The decomp is silent on the
-         * chopper (only that a fire dept extends the burn timer), so this is a
-         * port-authored cosmetic: it flies in from the right, hovers over the
-         * fire dropping water, and leaves when the blaze is out. */
+        /* The firefighting helicopter (0x8F6D) — the real thing: paid for
+         * with the $500k offer, sweeping right-to-left above the origin
+         * floor, dousing every front to its right (10e8:0450/0856). */
         Sprite *heli = game.fire_chopper;
-        if (heli && heli->texture && evt_floor >= 8) {
-            int fire_cx  = fx + fw / 2;
-            int elapsed  = game.sim.event.duration - game.sim.event.timer;
-            int start_x  = game.screen_w + heli->w;
-            int target_x = fire_cx - heli->w / 2;
-            /* ease in over the first ~90 ticks (×256 fixed point, no float) */
-            int prog = elapsed * 256 / 90;
-            if (prog > 256) prog = 256;
-            int hx  = start_x + (target_x - start_x) * prog / 256;
+        if (game.sim.event.chopper_x > 0) {
+            int hx = lobby_sx + game.sim.event.chopper_x * CELL_W;
             int bob = (game.sim.frame % 16 < 8) ? 0 : 2;
-            int hy  = floor_y - CELL_H - heli->h - 6 + bob;
-            SDL_Rect hd = { hx, hy, heli->w, heli->h };
-            SDL_RenderCopy(game.renderer, heli->texture, NULL, &hd);
-
-            /* Water drops once it's on station over the fire. */
-            if (prog >= 250) {
-                int span = floor_y - (hy + heli->h);
-                if (span < 1) span = 1;
+            int hy = floor_y - 2 * CELL_H + bob;
+            if (heli && heli->texture) {
+                SDL_Rect hd = { hx, hy - heli->h, heli->w, heli->h };
+                SDL_RenderCopy(game.renderer, heli->texture, NULL, &hd);
+                /* water streaming down onto the floors below */
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 SDL_SetRenderDrawColor(game.renderer, 90, 160, 230, 200);
                 for (int d = 0; d < 3; d++) {
-                    int dy = (game.sim.frame * 5 + d * 17) % span;
-                    SDL_Rect drop = { fire_cx - 6 + d * 6, hy + heli->h + dy, 2, 6 };
+                    int dy = (game.sim.frame * 5 + d * 17) % (2 * CELL_H);
+                    SDL_Rect drop = { hx + heli->w / 2 - 6 + d * 6,
+                                      hy + dy, 2, 6 };
                     SDL_RenderFillRect(game.renderer, &drop);
                 }
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
@@ -3782,9 +3764,10 @@ static void render_events(void)
  * (alert sprites 0xA714 fire / 0xA710 terrorist, decoded from EventT/FireT). */
 /* ---------- Disaster decision modal (EventT dialog) ----------
  * When a disaster is proposed (sim->event.pending), the game pauses and this
- * modal asks the player what to do. Faithful to the decomp: the bomb threat is
- * a real choice (deploy security and risk a blast, or pay it off); the fire is
- * informational only (acknowledge — crews respond, you ride it out). */
+ * modal asks the player what to do. Both are real paid choices in the EXE:
+ * a fire offers firefighting helicopters for $500,000 (10e8:0147 — decline
+ * and it burns until it hits the floor edges, or 9PM); a bomb threat can be
+ * paid off at a star-scaled ransom, or security hunts it until 1PM. */
 
 #define DMODAL_W 360
 #define DMODAL_H 156
@@ -3861,18 +3844,19 @@ static void render_disaster_modal(void)
         snprintf(line, sizeof line, "Fire has broken out on floor %d!",
                  game.sim.event.target_floor);
         draw_text(line, text_x, ty, black); ty += 24;
-        draw_text("Fire crews are on the way -", text_x, ty, black); ty += 18;
-        draw_text("brace for damage as it spreads.", text_x, ty, black);
+        draw_text("Hire firefighting helicopters for", text_x, ty, black); ty += 18;
+        draw_text("$500,000 - or let it burn itself out?", text_x, ty, black);
     } else {
-        snprintf(line, sizeof line, "A bomb has been planted on floor %d.",
-                 game.sim.event.target_floor);
-        draw_text(line, text_x, ty, black); ty += 24;
+        /* The EXE's threat dialog names the price but NOT the floor —
+         * with no fire department, you pay blind (dialog 0xBCE). */
+        draw_text("A bomb has been planted in the tower.", text_x, ty, black); ty += 24;
         draw_text("Send security to hunt for it (they may", text_x, ty, black); ty += 18;
         draw_text("fail and it detonates) - or pay it off.", text_x, ty, black);
     }
 
     if (is_fire) {
-        draw_modal_button(disaster_btn_rect(1), "OK");
+        draw_modal_button(disaster_btn_rect(0), "Let It Burn");
+        draw_modal_button(disaster_btn_rect(1), "Helicopters $500,000");
     } else {
         draw_modal_button(disaster_btn_rect(0), "Deploy Security");
         char pay[48];
@@ -3887,26 +3871,28 @@ static void disaster_close(void)
     game.sim.speed = game.disaster_saved_speed;
 }
 
-/* Face the event: deploy security (bomb) / acknowledge (fire). The risky path. */
+/* The free path: let the fire burn / send guards after the bomb. */
 static void disaster_do_proceed(void)
 {
     int is_fire = (game.sim.event.type == EVENT_FIRE);
     int fl = game.sim.event.target_floor;
     game_event_proceed(&game.sim, &game.tower);
     char b[64];
-    if (is_fire) snprintf(b, sizeof b, "FIRE on floor %d! Crews responding.", fl);
+    if (is_fire) snprintf(b, sizeof b, "FIRE on floor %d - burning freely!", fl);
     else         snprintf(b, sizeof b, "Security deployed - hunting the bomb!");
     add_event_message(b);
     disaster_close();
 }
 
-/* Bomb only: pay the threat off — guaranteed safe, at a star-scaled cost. */
+/* The paid path: $500k helicopters (fire) / the star-scaled ransom (bomb). */
 static void disaster_do_ransom(void)
 {
+    int is_fire = (game.sim.event.type == EVENT_FIRE);
     int cost = game.sim.event.ransom_cost;
     game_event_ransom(&game.sim, &game.tower);
     char b[64];
-    snprintf(b, sizeof b, "Paid off the threat - $%d. Crisis averted.", cost);
+    if (is_fire) snprintf(b, sizeof b, "Helicopters dispatched - $%d.", cost);
+    else         snprintf(b, sizeof b, "Paid off the threat - $%d. Crisis averted.", cost);
     add_event_message(b);
     disaster_close();
 }
@@ -3915,29 +3901,21 @@ static void disaster_do_ransom(void)
 static int disaster_modal_click(int mx, int my)
 {
     if (!game.disaster_modal) return 0;
-    int is_fire = (game.sim.event.type == EVENT_FIRE);
-    if (is_fire) {
-        if (point_in_rect(mx, my, disaster_btn_rect(1))) disaster_do_proceed();
-    } else {
-        if (point_in_rect(mx, my, disaster_btn_rect(0)))      disaster_do_proceed();
-        else if (point_in_rect(mx, my, disaster_btn_rect(1))) disaster_do_ransom();
-    }
+    /* Both disasters: button 0 = the free path, button 1 = the paid one. */
+    if (point_in_rect(mx, my, disaster_btn_rect(0)))      disaster_do_proceed();
+    else if (point_in_rect(mx, my, disaster_btn_rect(1))) disaster_do_ransom();
     return 1;   /* fully modal: consume every click while open */
 }
 
 /* Keyboard shortcuts while the modal is up. */
 static void disaster_modal_key(SDL_Keycode k)
 {
-    if (game.sim.event.type == EVENT_FIRE) {
-        if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE ||
-            k == SDLK_ESCAPE)
-            disaster_do_proceed();
-    } else {
-        if (k == SDLK_d || k == SDLK_RETURN || k == SDLK_KP_ENTER)
-            disaster_do_proceed();
-        else if (k == SDLK_p || k == SDLK_y)
-            disaster_do_ransom();
-    }
+    /* Both disasters are two-choice now: d/Enter/Esc = the free path
+     * (let it burn / deploy security), p/y = pay (helicopters / ransom). */
+    if (k == SDLK_d || k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_ESCAPE)
+        disaster_do_proceed();
+    else if (k == SDLK_p || k == SDLK_y)
+        disaster_do_ransom();
 }
 
 /* Draw text horizontally centered on cx. */
@@ -3957,7 +3935,11 @@ static void draw_text_centered(const char *text, int cx, int y, SDL_Color color)
 static void render_fire_glow(void)
 {
     if (!game.sim.event.active || game.sim.event.type != EVENT_FIRE) return;
-    int spread = game.sim.event.fire_right - game.sim.event.fire_left + 1;
+    /* size = how many floors have a live front */
+    int spread = 0;
+    for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++)
+        if (game.sim.event.fire_left[fi] >= 0 || game.sim.event.fire_right[fi] >= 0)
+            spread += 12;
     if (spread < 1) spread = 1;
     int a = 12 + spread;                 /* bigger fire -> stronger glow */
     if (a > 64) a = 64;
@@ -5903,34 +5885,31 @@ int main(int argc, char *argv[])
         game.map_mode = atoi(getenv("CT_MAP_MODE")) & 3;
     if (getenv("CT_WEDDING"))          /* demo: run the TOWER ceremony */
         game.sim.wedding.active = 1;
-    if (getenv("CT_FIRE")) {           /* demo: force a fire (arg = floor) */
-        game.sim.event.active = 1;
-        game.sim.event.type = EVENT_FIRE;
-        game.sim.event.target_floor = atoi(getenv("CT_FIRE"));
-        game.sim.event.target_slot = TOWER_WIDTH / 2;
-        game.sim.event.fire_left  = TOWER_WIDTH / 2 - 12;
-        game.sim.event.fire_right = TOWER_WIDTH / 2 + 12;
-        /* finite so it extinguishes and leaves rubble; CT_FIRE_TICKS overrides */
-        game.sim.event.duration = game.sim.event.timer =
-            getenv("CT_FIRE_TICKS") ? atoi(getenv("CT_FIRE_TICKS")) : 250;
+    if (getenv("CT_FIRE")) {           /* demo: force a fire (arg = floor) —
+                                        * goes through StartFire's real gates
+                                        * (star>2, security, no cathedral),
+                                        * like the EXE's debug-menu caller */
+        game_start_fire(&game.sim, &game.tower, atoi(getenv("CT_FIRE")));
+        if (!game.sim.event.active)
+            printf("CT_FIRE: StartFire gates refused it (star>2? security? "
+                   "cathedral built? floor extent >= 32 cells?)\n");
     }
-    if (getenv("CT_BOMB")) {           /* demo: force a bomb threat (arg = floor) */
-        game.sim.event.active = 1;
-        game.sim.event.type = EVENT_BOMB;
-        game.sim.event.target_floor = atoi(getenv("CT_BOMB"));
-        game.sim.event.target_slot = TOWER_WIDTH / 2;
-        game.sim.event.duration = game.sim.event.timer = 100000;
+    if (getenv("CT_BOMB")) {           /* demo: force a bomb threat (arg = floor);
+                                        * gates: security + star 2/3/4 */
+        game_offer_bomb(&game.sim, &game.tower, atoi(getenv("CT_BOMB")));
+        if (!game.sim.event.pending)
+            printf("CT_BOMB: TryStartEvent gates refused it (security? star 2-4?)\n");
     }
     if (getenv("CT_MODAL")) {          /* demo: open the disaster decision modal */
         const char *which = getenv("CT_MODAL");
         int is_fire = (which[0] == 'f' || which[0] == 'F');
         game.sim.event = (EventState){0};
         game.sim.event.type = is_fire ? EVENT_FIRE : EVENT_BOMB;
+        game.sim.event.active = is_fire;   /* a pending fire is already burning */
         game.sim.event.pending = 1;
         game.sim.event.target_floor = 12;
         game.sim.event.target_slot = TOWER_WIDTH / 2;
-        game.sim.event.duration = game.sim.event.timer = is_fire ? 800 : 600;
-        game.sim.event.ransom_cost = 60000;
+        game.sim.event.ransom_cost = is_fire ? FIRE_CHOPPER_COST : 300000;
         game.disaster_modal = 1;
         game.disaster_saved_speed = SPEED_NORMAL;
         game.sim.speed = SPEED_PAUSED;
@@ -6099,8 +6078,8 @@ int main(int argc, char *argv[])
             else if (prev_pop < 300 && game.tower.population >= 300) add_event_message("Population reached 300!");
             else if (prev_pop < 1000 && game.tower.population >= 1000) add_event_message("Population reached 1,000!");
             
-            /* Event announcements */
-            if (game.sim.event.active && game.sim.event.timer == game.sim.event.duration) {
+            /* Event announcements (edge: went active this tick) */
+            if (game.sim.event.active && !prev_event_active) {
                 if (game.sim.event.type == EVENT_FIRE) add_event_message("FIRE! Fire in the tower!");
                 else if (game.sim.event.type == EVENT_BOMB) add_event_message("BOMB THREAT reported!");
             }

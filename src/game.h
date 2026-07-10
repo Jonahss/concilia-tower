@@ -321,37 +321,78 @@ typedef struct {
     int total_commercial;  /* Sum of above */
 } ZoneData;
 
-/* --- Event system (from EventT seg_10c8 + FireT seg_10e8) ---
- * Random disasters: bomb threats and fires.
- * Bomb: security guards race to find it; explodes if they fail.
- * Fire: spreads left and right per tick; burns until extinguished.
- * Both destroy tenants in a blast/burn radius. */
+/* --- Disasters (EventT seg_10c8 + FireT seg_10e8) ---
+ * SCHEDULED, not random (byte-verified 2026-07-09/10 referees + the TimeT
+ * dispatcher map): TimeT's 10:00 AM block starts a fire every 84th day
+ * ("a fire every 7 game-years", day % 84 == 83) and offers a bomb threat
+ * every 60th day (day % 60 == 59). Both require a security office — a
+ * tower without one never sees either disaster.
+ *
+ * FIRE (StartFire 10e8:0029): also needs star > 2 and NO cathedral
+ * ([0xB3EC] < 0) — building the cathedral retires fires for good. The
+ * origin floor is uniform in [first floor above the ground lobby .. top
+ * built floor]; the floor's tenant extent must be at least 32 cells wide,
+ * and the fire ignites 32 cells in from its right edge. It burns as
+ * per-floor left/right FRONTS: each front destroys the cell it stands on
+ * and advances 1 cell every 7 EXE frames (tuning 0xDDD0); each floor
+ * above the origin ignites at the same cell 80 EXE frames later (0xDDD2)
+ * — fire never spreads DOWN. A front dies at the floor-extent edge; the
+ * fire ends when no fronts remain, or hard-stops at 9:00 PM (EXE frame
+ * 2000). The player's one lever is the helicopter offer (10e8:0147,
+ * shown right after ignition): pay $500,000 (tuning 0xDE14) and a chopper
+ * sweeps right-to-left from the origin floor's right edge, 1 cell per EXE
+ * frame (0xDDD4), dousing every front to its right. (The EXE also has a
+ * "fire department" branch keyed on global 0xB3EA, but nothing in the
+ * binary ever builds one — the facility was cut, so that branch is dead.)
+ *
+ * BOMB (TryStartEvent 10c8:006e): only at star 2/3/4 — the ransom switch
+ * has no case for other stars, so 5-star towers never get bomb threats.
+ * Ransom $200k/$300k/$1M by star (tuning 0xDE1C/1E/20). Pay: threat ends.
+ * Refuse: the bomb arms and detonates at 1:00 PM (EXE frame 0x4B0)
+ * unless security reaches it first. The blast destroys everything
+ * touching floors [target-2 .. target+3] × cells [target-20 .. target+20]
+ * (DestroyTenants 10c8:02bd). Detonation charges no cash — the loss is
+ * the buildings themselves. */
 typedef enum {
     EVENT_NONE = 0,
-    EVENT_BOMB,        /* Bomb threat — guard must reach target in time */
-    EVENT_FIRE,        /* Fire — spreads and burns */
+    EVENT_BOMB,        /* Bomb threat — pay it off, or guards race the clock */
+    EVENT_FIRE,        /* Fire — advancing fronts, helicopters for hire */
 } EventType;
 
-/* Blast radius from EventT: 6 floors × 40 slots */
-#define BOMB_BLAST_FLOORS  6
-#define BOMB_BLAST_SLOTS   40
+/* Blast box from DestroyTenants (10c8:02bd) */
+#define BOMB_BLAST_FLOORS_DOWN  2    /* floors [target-2 .. target+3] */
+#define BOMB_BLAST_FLOORS_UP    3
+#define BOMB_BLAST_HALF_CELLS   20   /* cells  [target-20 .. target+20] */
 
-/* Fire spread rate: 2 slots per tick in each direction */
-#define FIRE_SPREAD_RATE   2
+/* Fire pacing — the EXE's own tuning values, in EXE frame units */
+#define FIRE_FRONT_CELLS    12   /* a flame front is 12 cells (one 96px strip) */
+#define FIRE_SPREAD_FRAMES  7    /* front advances 1 cell / 7 frames (0xDDD0) */
+#define FIRE_FLOOR_FRAMES   80   /* next floor up ignites +80 frames (0xDDD2) */
+#define FIRE_END_FRAME      1760 /* ignition (10AM, ft 240) -> hard stop at ft 2000 = 9PM */
+#define FIRE_CHOPPER_COST   500000  /* helicopter response (0xDE14 = 5000, x$100) */
 
 typedef struct {
     EventType type;
     int       active;
-    int       pending;         /* Proposed — paused, awaiting the player's modal choice */
-    int       target_floor;
-    int       target_slot;
-    int       timer;           /* Ticks until resolution */
-    int       duration;        /* Total event duration */
-    int       fire_left;       /* Fire spread: leftmost burning slot */
-    int       fire_right;      /* Fire spread: rightmost burning slot */
-    int       caught;          /* Security guard caught the bomb? */
-    int       damage_cost;     /* Total $ damage from event */
-    int       ransom_cost;     /* Bomb: $ to pay off the threat (star-scaled) */
+    int       pending;         /* modal open: fire = helicopter offer, bomb = pay/deploy.
+                                  The EXE dialogs are modal, so nothing advances
+                                  until the player answers. */
+    int       target_floor;    /* fire origin floor / bomb floor */
+    int       target_slot;     /* fire origin cell / bomb cell */
+    int       caught;          /* bomb: neutralized (guard find or ransom paid) */
+    int       damage_cost;     /* $ of buildings destroyed (informational —
+                                  the EXE never charges cash for the damage) */
+    int       ransom_cost;     /* bomb pay-off by star / fire helicopter fee */
+    /* Fire: per-floor advancing fronts, paced in EXE frame units.
+     * TimeT's clock is non-uniform: 320 frames/game-hour from 10AM-1PM
+     * (ft 240->1200), then 100/hour to 9PM — so the fire visibly races
+     * before lunch and crawls after. fire_accum carries the remainder
+     * (one frame per ticks-per-hour of accumulated frames-per-hour). */
+    int       fire_frame;      /* EXE frames since ignition; >= 1760 = 9PM stop */
+    int       fire_accum;
+    int16_t   fire_left[TOWER_FLOOR_COUNT];   /* leftmost burning cell, -1 = none */
+    int16_t   fire_right[TOWER_FLOOR_COUNT];  /* right front cell (flames span +12) */
+    int       chopper_x;       /* > 0: helicopter at this cell, flying left */
 } EventState;
 
 /* --- Santa system (from SantaT seg_11b8) ---
@@ -492,6 +533,10 @@ typedef struct {
      * 0x640 = 17:00 sharp (calls 1130:01e2 then 1130:0109). */
     int           hotel_pass_day;
 
+    /* Day the 10AM disaster dispatch (fire every 84th day, bomb offer
+     * every 60th — TimeT ft 0xF0 block) last ran. */
+    int           disaster_sched_day;
+
     /* Transport reachability (recomputed from the tower layout each tick).
      * public  = tenants/visitors commuting from the ground entrance
      * service = staff (housekeeping/security), may also use service elevators */
@@ -582,21 +627,33 @@ void game_office_dynamics(GameSim *sim, Tower *tower);
  * level (TenantMake MakeTenant). 0 = not peak-managed. */
 uint8_t game_init_cap_peak(ItemType type, int star);
 
-/* --- Events (EventT + FireT) --- */
+/* --- Disasters (EventT + FireT) --- */
 
-/* Try to start a random event. Conditions from decompilation:
- * - Star > 2, security exists, daytime, no active event */
-void game_try_event(GameSim *sim, Tower *tower);
+/* TimeT's 10:00 AM dispatch: a fire every 84th day, a bomb threat every
+ * 60th (fire first — an active fire blocks the bomb offer, like the EXE's
+ * game-flags gate). Called once per day when the clock reaches 10AM. */
+void game_schedule_disasters(GameSim *sim, Tower *tower);
 
-/* Update active event (spread fire, count down bomb timer) */
+/* StartFire (10e8:0029). forced_floor <= 0 = the EXE's uniform random pick
+ * (disaster floors are always above the ground lobby, never basements);
+ * otherwise ignite that floor (still subject to every gate — this mirrors
+ * the EXE, whose debug-menu caller goes through the same checks). */
+void game_start_fire(GameSim *sim, Tower *tower, int forced_floor);
+
+/* TryStartEvent (10c8:006e): open the bomb-threat offer. forced_floor as above. */
+void game_offer_bomb(GameSim *sim, Tower *tower, int forced_floor);
+
+/* Advance the active disaster one tick (fire fronts + chopper, bomb clock).
+ * No-op while `pending` — the EXE's dialogs are modal. */
 void game_update_event(GameSim *sim, Tower *tower);
 
-/* Resolve event: bomb explodes or fire extinguished */
+/* Bomb detonation (ResolveEvent(0) + DestroyTenants) */
 void game_resolve_event(GameSim *sim, Tower *tower);
 
-/* Player's response to a pending event (chosen via the disaster modal).
- * proceed: let it run — deploy security (bomb) / acknowledge (fire), the risky path.
- * ransom:  bomb only — pay off the threat for a star-scaled fee; no blast. */
+/* Player's answer to the pending modal.
+ * proceed: the free path — let the fire burn / send guards after the bomb.
+ * ransom:  the paid path — $500k helicopters (fire) / the star-scaled
+ *          pay-off (bomb, no blast). */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
 

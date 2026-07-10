@@ -403,6 +403,13 @@ static inline int index_to_floor(int index)
     return index + TOWER_MIN_FLOOR;
 }
 
+/* Per-floor extents of the floor map — the left/right pair the EXE keeps in
+ * its per-floor records: every cell a non-transport tenant covers, including
+ * multi-floor continuations. Arrays are indexed by floor index and must hold
+ * TOWER_FLOOR_COUNT entries; right is EXCLUSIVE, right == 0 marks an empty
+ * floor. Anchors overlay decorations, the crane, and disaster targeting. */
+void tower_floor_extents(const Tower *tower, int16_t *left, int16_t *right);
+
 /* Initialize a new tower with lobby on floor 0 */
 void tower_init(Tower *tower);
 

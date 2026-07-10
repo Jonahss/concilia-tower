@@ -691,3 +691,21 @@ void tower_build_demo(Tower *tower)
     
     printf("\n=== Demo tower complete: %d items placed ===\n\n", tower->tenant_count - 1);
 }
+
+void tower_floor_extents(const Tower *tower, int16_t *left, int16_t *right)
+{
+    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) {
+        left[i] = TOWER_WIDTH;
+        right[i] = 0;
+    }
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+        for (int f = t->floor; f < t->floor + t->height; f++) {
+            int fi = floor_to_index(f);
+            if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
+            if (t->x < left[fi]) left[fi] = t->x;
+            if (t->x + t->width > right[fi]) right[fi] = t->x + t->width;
+        }
+    }
+}

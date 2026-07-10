@@ -1093,14 +1093,179 @@ static void test_office_dynamics(void)
     CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
 }
 
-/* Disaster decision model (EventT modal): a proposed event waits as `pending`
- * until the player chooses — deploy security / pay off a bomb / acknowledge a
- * fire. game_try_event must never run an event without that decision. */
-static void test_event_decisions(void)
+/* Direct placement for disaster geometry — tower_import_item skips cost
+ * and adjacency validation but fills the grid, which the fire needs. */
+static uint16_t fplace(ItemType ty, int floor, int x)
 {
-    printf("disaster decisions (EventT modal: deploy/pay/acknowledge):\n");
+    return tower_import_item(&tw, ty, floor, x, ITEM_WIDTH[ty]);
+}
 
-    /* Pending bomb -> pay ransom: money down, recorded expense, no blast. */
+/* Scheduled disasters (TimeT 10AM dispatch, byte-verified 2026-07-09/10):
+ * a fire every 84th day (star>2 + security + NO cathedral), a bomb offer
+ * every 60th (stars 2/3/4 only; ransom $200k/$300k/$1M). */
+static void test_disaster_schedule(void)
+{
+    printf("scheduled disasters (fire day%%84==83, bomb day%%60==59):\n");
+
+    /* Every floor in the pick range [above lobby .. top] valid, so the
+     * uniform floor pick can't whiff (the EXE never retries a bad pick). */
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 2, 140);
+    for (int f = 2; f <= 5; f++)
+        for (int i = 0; i < 4; i++)
+            fplace(ITEM_OFFICE, f, 100 + i * 9);  /* extent [100,136) */
+
+    tw.day = 82;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_NONE, "day 82: nothing scheduled");
+
+    tw.day = 83;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_FIRE && sim.event.active,
+          "day 83 (the 84th): a fire starts");
+    CHECK(sim.event.pending && sim.event.ransom_cost == FIRE_CHOPPER_COST,
+          "the $500,000 helicopter offer is pending");
+    {
+        int fi = floor_to_index(sim.event.target_floor);
+        int16_t L[TOWER_FLOOR_COUNT], R[TOWER_FLOOR_COUNT];
+        tower_floor_extents(&tw, L, R);
+        CHECK(sim.event.target_slot == R[fi] - 32,
+              "ignition 32 cells in from the right extent");
+        CHECK(sim.event.fire_left[fi] == sim.event.target_slot &&
+              sim.event.fire_right[fi] == sim.event.target_slot,
+              "both fronts start at the ignition cell");
+    }
+
+    /* Building the cathedral retires fires for good. */
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 2, 140);
+    for (int i = 0; i < 4; i++)
+        fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    fplace(ITEM_CATHEDRAL, 90, 100);
+    tw.day = 83;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_NONE, "a cathedral retires fires");
+
+    /* Star 2: no fires yet — but bomb threats exist, at $200k. */
+    fresh();
+    tw.star_rating = 2;
+    fplace(ITEM_SECURITY, 2, 140);
+    for (int f = 2; f <= 5; f++)
+        for (int i = 0; i < 4; i++)
+            fplace(ITEM_OFFICE, f, 100 + i * 9);
+    tw.day = 83;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_NONE, "star 2: no fires");
+    tw.day = 59;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_BOMB && sim.event.pending && !sim.event.active,
+          "day 59 (the 60th): bomb offer pending, not armed");
+    CHECK(sim.event.ransom_cost == 200000, "star 2 ransom = $200k");
+    {
+        int fi = floor_to_index(sim.event.target_floor);
+        int16_t L[TOWER_FLOOR_COUNT], R[TOWER_FLOOR_COUNT];
+        tower_floor_extents(&tw, L, R);
+        CHECK(sim.event.target_slot >= L[fi] && sim.event.target_slot <= R[fi] - 4,
+              "bomb cell within [left extent, right extent - 4]");
+    }
+
+    /* Star 5: five-star towers never get bomb threats. */
+    fresh();
+    tw.star_rating = 5;
+    fplace(ITEM_SECURITY, 2, 140);
+    for (int i = 0; i < 4; i++)
+        fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    tw.day = 59;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_NONE, "star 5: no bomb threats");
+
+    /* No security office: no disasters at all. */
+    fresh();
+    tw.star_rating = 3;
+    for (int i = 0; i < 4; i++)
+        fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    tw.day = 83;
+    game_schedule_disasters(&sim, &tw);
+    CHECK(sim.event.type == EVENT_NONE, "no security = no disasters");
+}
+
+/* Fire mechanics (FireT 0304/0450/0856): fronts destroy and advance every
+ * 7th frame, floors above ignite +80 frames, never downward; fronts die at
+ * the extent edges; the paid chopper sweeps right-to-left dousing. */
+static void test_fire_spread(void)
+{
+    printf("fire spread (fronts, up-only, edges) + the $500k chopper:\n");
+
+    /* Geometry: floors 4/5/6 each hold offices at 100/109/118/127
+     * (extent [100,136)). Fire forced on floor 5 -> ignition cell 104. */
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 2, 60);
+    uint16_t off4  = fplace(ITEM_OFFICE, 4, 100);
+    for (int i = 1; i < 4; i++) fplace(ITEM_OFFICE, 4, 100 + i * 9);
+    uint16_t off5a = fplace(ITEM_OFFICE, 5, 100);
+    for (int i = 1; i < 4; i++) fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    for (int i = 0; i < 4; i++) fplace(ITEM_OFFICE, 6, 100 + i * 9);
+
+    game_start_fire(&sim, &tw, 5);
+    CHECK(sim.event.type == EVENT_FIRE && sim.event.active, "forced fire starts");
+    int fi4 = floor_to_index(4), fi5 = floor_to_index(5), fi6 = floor_to_index(6);
+    CHECK(sim.event.target_slot == 104, "floor 5 extent [100,136): ignition at 104");
+
+    game_event_proceed(&sim, &tw);        /* let it burn */
+    sim.hour = 11;                        /* pre-1PM pace: 320 frames/hour */
+
+    game_update_event(&sim, &tw);         /* one tick ~ 2.7 frames (320/hr, 120 ticks/hr) */
+    CHECK(tenant(off5a) != NULL, "sanity: origin-floor office exists");
+    CHECK(sim.event.fire_left[fi6] < 0 && sim.event.fire_right[fi6] < 0,
+          "floor above not yet ignited");
+
+    for (int i = 0; i < 35; i++) game_update_event(&sim, &tw);   /* past frame 80 */
+    CHECK(sim.event.fire_left[fi6] >= 0 || sim.event.fire_right[fi6] >= 0,
+          "floor above ignites on the 80-frame schedule");
+    CHECK(sim.event.fire_left[fi4] < 0 && sim.event.fire_right[fi4] < 0,
+          "fire never spreads downward");
+
+    for (int i = 0; i < 2000 && sim.event.active; i++)
+        game_update_event(&sim, &tw);
+    CHECK(!sim.event.active, "fire burns out at the floor edges");
+    CHECK(tenant(off5a)->state == TENANT_ABANDONED && tenant(off5a)->burned,
+          "burned offices leave rubble");
+    CHECK(tenant(off4)->state != TENANT_ABANDONED, "floor below survives untouched");
+
+    /* Same layout, but pay for helicopters this time. */
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 2, 60);
+    for (int i = 0; i < 3; i++) fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    uint16_t off5d = fplace(ITEM_OFFICE, 5, 127);
+
+    game_start_fire(&sim, &tw, 5);
+    long money0 = tw.money;
+    game_event_ransom(&sim, &tw);         /* hire the choppers */
+    CHECK(tw.money == money0 - FIRE_CHOPPER_COST, "helicopters cost $500,000");
+    CHECK(!sim.event.pending && sim.event.active, "fire still burns while they fly");
+    CHECK(sim.event.chopper_x == 136 - 12, "chopper starts at right extent - 12");
+
+    sim.hour = 11;
+    for (int i = 0; i < 500 && sim.event.active; i++)
+        game_update_event(&sim, &tw);
+    CHECK(!sim.event.active && sim.event.chopper_x == 0,
+          "chopper sweep + edge burn-out end the fire");
+    CHECK(tenant(off5d)->state != TENANT_ABANDONED,
+          "the doused right front never reached the rightmost office");
+}
+
+/* Bomb resolution (ResolveEvent(0) + DestroyTenants 10c8:02bd): blast box =
+ * floors [t-2 .. t+3] x cells [t-20 .. t+20], any overlap destroys; the EXE
+ * charges no cash for the damage. */
+static void test_bomb_blast(void)
+{
+    printf("bomb blast box + pay/deploy decisions:\n");
+
+    /* Pay path: money down, recorded, no blast. */
     fresh();
     long money0 = tw.money;
     long exp0 = sim.expenses_this_quarter;
@@ -1108,87 +1273,50 @@ static void test_event_decisions(void)
     sim.event.type = EVENT_BOMB;
     sim.event.pending = 1;
     sim.event.target_floor = 10;
-    sim.event.duration = 600;
-    sim.event.timer = 600;
-    sim.event.ransom_cost = 35000;
+    sim.event.ransom_cost = 300000;
     game_event_ransom(&sim, &tw);
-    CHECK(tw.money == money0 - 35000, "paying ransom deducts the fee");
-    CHECK(sim.expenses_this_quarter == exp0 + 35000, "ransom recorded as an expense");
-    CHECK(!sim.event.pending && !sim.event.active, "ransom clears the event");
-    CHECK(sim.event.caught == 1, "ransom = no detonation");
+    CHECK(tw.money == money0 - 300000, "paying the ransom deducts the fee");
+    CHECK(sim.expenses_this_quarter == exp0 + 300000, "ransom recorded as an expense");
+    CHECK(!sim.event.pending && !sim.event.active, "paying ends the threat");
+    CHECK(sim.event.caught == 1, "paid = no detonation");
 
-    /* Pending bomb -> deploy security: risky path goes active, for free. */
+    /* Deploy path: refusing is what arms the bomb. */
     fresh();
     sim.event = (EventState){0};
     sim.event.type = EVENT_BOMB;
     sim.event.pending = 1;
-    sim.event.duration = 600;
     money0 = tw.money;
     game_event_proceed(&sim, &tw);
-    CHECK(sim.event.active && !sim.event.pending, "deploy security activates the bomb event");
-    CHECK(sim.event.timer == 600, "bomb countdown starts from full duration");
+    CHECK(sim.event.active && !sim.event.pending, "refusing arms the bomb");
     CHECK(tw.money == money0, "deploying security is free");
 
-    /* Pending fire -> acknowledge: activates, no choice, no charge. */
+    /* Blast geometry, resolved directly (the guard race is stochastic). */
     fresh();
-    sim.event = (EventState){0};
-    sim.event.type = EVENT_FIRE;
-    sim.event.pending = 1;
-    sim.event.duration = 800;
-    money0 = tw.money;
-    game_event_proceed(&sim, &tw);
-    CHECK(sim.event.active && !sim.event.pending, "acknowledging a fire activates it");
-    CHECK(tw.money == money0, "fire acknowledgement is free");
-
-    /* A fire has no payoff option: ransom just proceeds without charging. */
-    fresh();
-    sim.event = (EventState){0};
-    sim.event.type = EVENT_FIRE;
-    sim.event.pending = 1;
-    sim.event.duration = 800;
-    money0 = tw.money;
-    game_event_ransom(&sim, &tw);
-    CHECK(sim.event.active && tw.money == money0, "fire has no ransom - it just proceeds");
-
-    /* game_try_event proposes (pending) but never runs an event on its own. */
-    fresh();
-    tw.money = 100000000L;
-    tw.star_rating = 4;
-    sim.time_of_day = TOD_AFTERNOON;
-    /* Inject a guard + an occupied high office directly (skip placement
-     * prerequisites — we only need try_event's conditions satisfied). */
-    Tenant *sec = &tw.tenants[tw.tenant_count++];
-    *sec = (Tenant){0};
-    sec->type = ITEM_SECURITY; sec->floor = 5; sec->state = TENANT_OCCUPIED;
-    Tenant *off = &tw.tenants[tw.tenant_count++];
-    *off = (Tenant){0};
-    off->type = ITEM_OFFICE; off->floor = 8; off->state = TENANT_OCCUPIED;
-    int activated_without_decision = 0;
-    int got_pending = 0;
-    for (int i = 0; i < 20000 && !got_pending; i++) {
-        game_try_event(&sim, &tw);
-        if (sim.event.active && !sim.event.pending) activated_without_decision = 1;
-        if (sim.event.pending) got_pending = 1;
-    }
-    CHECK(got_pending, "try_event eventually proposes a disaster");
-    CHECK(!activated_without_decision, "try_event never activates without a decision");
-
-    /* A detonating bomb leaves rubble (burned), same as fire. */
-    fresh();
+    uint16_t in_up    = fplace(ITEM_OFFICE, 13, 110); /* t+3: in */
+    uint16_t out_up   = fplace(ITEM_OFFICE, 14, 110); /* t+4: out */
+    uint16_t in_down  = fplace(ITEM_OFFICE,  8, 110); /* t-2: in */
+    uint16_t out_down = fplace(ITEM_OFFICE,  7, 110); /* t-3: out */
+    uint16_t in_edge  = fplace(ITEM_OFFICE, 10, 122); /* overlaps cell 130 */
+    uint16_t out_side = fplace(ITEM_OFFICE, 10, 131); /* starts at 131: out */
     sim.event = (EventState){0};
     sim.event.type = EVENT_BOMB;
     sim.event.active = 1;
-    sim.event.caught = 0;
     sim.event.target_floor = 10;
-    sim.event.target_slot = 50;
-    sim.event.timer = 0;
-    Tenant *victim = &tw.tenants[tw.tenant_count++];
-    *victim = (Tenant){0};
-    victim->type = ITEM_OFFICE; victim->floor = 10; victim->x = 45; victim->width = 4;
-    victim->state = TENANT_OCCUPIED;
+    sim.event.target_slot = 110;          /* blast cells [90 .. 130] */
+    money0 = tw.money;
     game_resolve_event(&sim, &tw);
-    CHECK(victim->state == TENANT_ABANDONED && victim->burned,
-          "bomb blast leaves rubble (burned)");
+    CHECK(tenant(in_up)->state == TENANT_ABANDONED &&
+          tenant(in_down)->state == TENANT_ABANDONED,
+          "floors t-2 .. t+3 are inside the blast");
+    CHECK(tenant(out_up)->state != TENANT_ABANDONED &&
+          tenant(out_down)->state != TENANT_ABANDONED,
+          "floors beyond the box survive");
+    CHECK(tenant(in_edge)->state == TENANT_ABANDONED && tenant(in_edge)->burned,
+          "any overlap with the cell range destroys (and leaves rubble)");
+    CHECK(tenant(out_side)->state != TENANT_ABANDONED,
+          "a tenant fully right of cell t+20 survives");
+    CHECK(tw.money == money0, "detonation charges no cash - the loss is the buildings");
+    CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
 }
 
 /* Flavor mechanics: grand-lobby height (drives the WaitT wait-forgiveness
@@ -1315,7 +1443,9 @@ int main(void)
     test_tenant_pairing();
     test_office_dynamics();
     test_star_requirements();
-    test_event_decisions();
+    test_disaster_schedule();
+    test_fire_spread();
+    test_bomb_blast();
     test_twr_import();
     test_twr_export();
     test_wedding();

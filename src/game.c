@@ -56,6 +56,7 @@ void game_init(GameSim *sim)
     sim->hour = 7;  /* Start at 7am */
     sim->time_of_day = TOD_MORNING;
     sim->hotel_pass_day = -1;   /* so the day-0 5PM pass still fires */
+    sim->disaster_sched_day = -1;
     people_init(&sim->people);
 }
 
@@ -926,12 +927,16 @@ void game_update(GameSim *sim, Tower *tower)
      * From JudgeT: commercial tenants accumulate stress from competition */
     if (sim->tick % 120 == 0 && sim->tick > 0) {
         game_judge_tenants(sim, tower);
-        
-        /* Try starting a random event (fires, bombs) */
-        game_try_event(sim, tower);
 
-        /* Or a medical emergency (only with a medical center, no disaster) */
+        /* A medical emergency, sometimes (needs a medical center, no disaster) */
         game_try_medical(sim, tower);
+    }
+
+    /* The 10AM disaster dispatch: a fire every 84th day, a bomb threat
+     * every 60th (TimeT ft 0xF0 block; latched once per day). */
+    if (sim->hour >= 10 && sim->disaster_sched_day != tower->day) {
+        sim->disaster_sched_day = tower->day;
+        game_schedule_disasters(sim, tower);
     }
 
     /* Update active events (fire spread, bomb countdown) */
@@ -1465,202 +1470,342 @@ void game_launch_santa(GameSim *sim, int screen_w)
 }
 
 /* ================================================================
- * Random Events (from EventT seg_10c8 + FireT seg_10e8)
+ * Disasters (EventT seg_10c8 + FireT seg_10e8)
  * ================================================================
- * Events trigger at star > 2 with security present.
- * Bomb: timed countdown, guard races to defuse. Blast radius = 6 floors × 40 slots.
- * Fire: spreads left/right per tick. Burns until timer expires. */
+ * Scheduled, not random — see the EventState comment in game.h for the
+ * full byte-verified model. TimeT's 10AM dispatch calls
+ * game_schedule_disasters once per day; fires recur every 84th day and
+ * bomb threats every 60th. */
 
-void game_try_event(GameSim *sim, Tower *tower)
+static int tower_has_security(const Tower *tower)
 {
-    if (sim->event.active) return;
-    
-    /* From decompiled: fires only at star > 2, with security, during daytime */
-    if (tower->star_rating < 3) return;
-    if (sim->time_of_day == TOD_NIGHT || sim->time_of_day == TOD_DAWN) return;
-    
-    /* Check security exists */
-    int has_security = 0;
-    for (int i = 0; i < tower->tenant_count; i++) {
+    for (int i = 0; i < tower->tenant_count; i++)
         if (tower->tenants[i].type == ITEM_SECURITY &&
-            tower->tenants[i].state != TENANT_ABANDONED) {
-            has_security = 1;
-            break;
-        }
-    }
-    if (!has_security) return;
-    
-    /* Random chance: ~1% per evaluation (every 120 ticks) */
-    if ((rand() % 100) != 0) return;
-    
-    /* Pick random floor with tenants */
-    int max_floor = 0;
-    for (int i = 0; i < tower->tenant_count; i++) {
-        if (tower->tenants[i].floor > max_floor &&
-            tower->tenants[i].state == TENANT_OCCUPIED)
-            max_floor = tower->tenants[i].floor;
-    }
-    if (max_floor < 2) return;
-    
-    int target_floor = 1 + (rand() % max_floor);
-    int target_slot = 5 + (rand() % (TOWER_WIDTH - 10));
-    
-    /* Pick event type: 60% bomb, 40% fire */
-    EventType etype = (rand() % 10 < 6) ? EVENT_BOMB : EVENT_FIRE;
-    
-    /* Propose the event but DON'T run it yet — the player decides via the
-     * disaster modal (EventT shows a dialog before the bomb flag is set;
-     * see decomp seg_10c8). game_event_proceed/ransom activate or cancel it. */
-    sim->event.type = etype;
-    sim->event.active = 0;
-    sim->event.pending = 1;
-    sim->event.target_floor = target_floor;
-    sim->event.target_slot = target_slot;
-    sim->event.caught = 0;
-    sim->event.damage_cost = 0;
-    sim->event.ransom_cost = 0;
-
-    if (etype == EVENT_BOMB) {
-        /* Bomb: 600 ticks to defuse (~10 seconds at normal speed) */
-        sim->event.duration = 600;
-        sim->event.timer = sim->event.duration;
-        /* Payoff fee scales with star rating. Stand-in for the EXE's per-star
-         * event cost (decomp: 0xde1c-0xde20, costs by star 2/3/4 — exact $
-         * not decoded), extrapolated through TOWER. */
-        static const int RANSOM_BY_STAR[7] = { 0, 0, 20000, 35000, 60000, 100000, 150000 };
-        int sr = tower->star_rating;
-        if (sr < 0) sr = 0;
-        if (sr > 6) sr = 6;
-        sim->event.ransom_cost = RANSOM_BY_STAR[sr];
-        printf("💣 BOMB THREAT on floor %d! Awaiting your decision...\n", target_floor);
-    } else {
-        /* Fire: burns for 800 ticks, spreads outward */
-        sim->event.duration = 800;
-        sim->event.timer = sim->event.duration;
-        sim->event.fire_left = target_slot;
-        sim->event.fire_right = target_slot;
-        printf("🔥 FIRE reported on floor %d at slot %d! Awaiting acknowledgement...\n",
-               target_floor, target_slot);
-    }
+            tower->tenants[i].state != TENANT_ABANDONED)
+            return 1;
+    return 0;
 }
 
-/* Player chose to face the event head-on: deploy security (bomb) or just ride
- * out the fire. This is the risky path — the bomb may still explode, the fire
- * still spreads. Activates the (already-configured) event for game_update_event. */
+static int tower_has_cathedral(const Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++)
+        if (tower->tenants[i].type == ITEM_CATHEDRAL)
+            return 1;
+    return 0;
+}
+
+/* PickRandomFloor (10c8:033e): uniform in [min_floor .. top built floor],
+ * where "built" means the floor map has any non-transport tenant.
+ * Returns the floor NUMBER, or TOWER_MIN_FLOOR - 1 if the tower doesn't
+ * reach min_floor. */
+static int pick_disaster_floor(const int16_t *left, const int16_t *right,
+                               int min_floor)
+{
+    int top = TOWER_MIN_FLOOR - 1;
+    for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++)
+        if (right[fi] > left[fi])
+            top = index_to_floor(fi);
+    if (top < min_floor) return TOWER_MIN_FLOOR - 1;
+    return min_floor + rand() % (top - min_floor + 1);
+}
+
+void game_schedule_disasters(GameSim *sim, Tower *tower)
+{
+    /* EXE order: the fire check runs first (TimeT @0357 before @0373), and
+     * a started fire sets the game-flags bit that gates the bomb offer. */
+    if (tower->day % 84 == 83)
+        game_start_fire(sim, tower, 0);
+    if (tower->day % 60 == 59)
+        game_offer_bomb(sim, tower, 0);
+}
+
+void game_start_fire(GameSim *sim, Tower *tower, int forced_floor)
+{
+    EventState *ev = &sim->event;
+    if (ev->active || ev->pending) return;
+    if (tower->star_rating <= 2) return;
+    if (!tower_has_security(tower)) return;
+    if (tower_has_cathedral(tower)) return;   /* fires retire for good */
+
+    int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+    tower_floor_extents(tower, left, right);
+
+    /* Origin floor: uniform in [first floor above the ground lobby .. top
+     * built floor]; its extent must fit the 32-cell right-edge offset. */
+    int floor = forced_floor > 0
+              ? forced_floor
+              : pick_disaster_floor(left, right, game_lobby_height(tower) + 1);
+    if (floor < TOWER_MIN_FLOOR) return;
+    int fi = floor_to_index(floor);
+    if (fi < 0 || fi >= TOWER_FLOOR_COUNT) return;
+    if (right[fi] - left[fi] < 32) return;    /* StartFire: width must exceed 0x1F */
+
+    *ev = (EventState){0};
+    ev->type = EVENT_FIRE;
+    ev->active = 1;
+    ev->pending = 1;                          /* the helicopter offer (10e8:0147) */
+    ev->target_floor = floor;
+    ev->target_slot = right[fi] - 32;         /* 32 cells in from the right edge */
+    ev->ransom_cost = FIRE_CHOPPER_COST;
+    for (int i = 0; i < TOWER_FLOOR_COUNT; i++)
+        ev->fire_left[i] = ev->fire_right[i] = -1;
+    ev->fire_left[fi] = ev->fire_right[fi] = (int16_t)ev->target_slot;
+
+    printf("🔥 FIRE breaks out on floor %d at cell %d!\n", floor, ev->target_slot);
+}
+
+void game_offer_bomb(GameSim *sim, Tower *tower, int forced_floor)
+{
+    EventState *ev = &sim->event;
+    if (ev->active || ev->pending) return;
+    if (!tower_has_security(tower)) return;
+
+    /* The ransom switch (10c8:006e) has cases only for stars 2/3/4 —
+     * any other star means no bomb threat at all. Values are tuning
+     * words 0xDE1C/1E/20 (2000/3000/10000, x$100). */
+    int ransom;
+    switch (tower->star_rating) {
+    case 2:  ransom = 200000;  break;
+    case 3:  ransom = 300000;  break;
+    case 4:  ransom = 1000000; break;
+    default: return;
+    }
+
+    int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+    tower_floor_extents(tower, left, right);
+
+    int floor = forced_floor > 0
+              ? forced_floor
+              : pick_disaster_floor(left, right, game_lobby_height(tower) + 1);
+    if (floor < TOWER_MIN_FLOOR) return;
+    int fi = floor_to_index(floor);
+    if (fi < 0 || fi >= TOWER_FLOOR_COUNT) return;
+    if (right[fi] - left[fi] <= 3) return;    /* extent must exceed 3 cells */
+
+    *ev = (EventState){0};
+    ev->type = EVENT_BOMB;
+    ev->pending = 1;                          /* the pay-or-deploy dialog (0xBCC) */
+    ev->target_floor = floor;
+    /* RandomRange(left_extent, right_extent - 4) */
+    ev->target_slot = left[fi] + rand() % (right[fi] - 4 - left[fi] + 1);
+    ev->ransom_cost = ransom;
+
+    printf("💣 BOMB THREAT — they want $%d. Floor %d (hidden from the player).\n",
+           ev->ransom_cost, floor);
+}
+
+/* Player takes the free path: let the fire burn / send guards bomb-hunting.
+ * Refusing the bomb is what ARMS it (TryStartEvent's refuse branch sets the
+ * terror flag and the 1:00 PM trigger). */
 void game_event_proceed(GameSim *sim, Tower *tower)
 {
     (void)tower;
-    if (!sim->event.pending) return;
-    sim->event.pending = 0;
-    sim->event.active = 1;
-    sim->event.timer = sim->event.duration;   /* full countdown from now */
+    EventState *ev = &sim->event;
+    if (!ev->pending) return;
+    ev->pending = 0;
+    if (ev->type == EVENT_BOMB)
+        ev->active = 1;                       /* detonates at 1PM unless caught */
 }
 
-/* Player paid off a bomb threat: a star-scaled fee, and the crisis is averted
- * with no blast. Fire has no payoff option (decomp: fire dialog is info-only),
- * so for a fire this just proceeds. */
+/* Player pays: helicopters for a fire, the ransom for a bomb. */
 void game_event_ransom(GameSim *sim, Tower *tower)
 {
-    if (!sim->event.pending) return;
-    if (sim->event.type != EVENT_BOMB) { game_event_proceed(sim, tower); return; }
-    sim->event.pending = 0;
-    sim->event.active = 0;
-    tower->money -= sim->event.ransom_cost;
-    sim->expenses_this_quarter += sim->event.ransom_cost;
-    sim->event.caught = 1;            /* neutralized — no explosion */
-    sim->event.type = EVENT_NONE;
+    EventState *ev = &sim->event;
+    if (!ev->pending) return;
+
+    if (ev->type == EVENT_FIRE) {
+        /* The chopper starts at the origin floor's right extent - 12 and
+         * sweeps left, dousing every front to its right (10e8:0147/0450). */
+        int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+        tower_floor_extents(tower, left, right);
+        int fi = floor_to_index(ev->target_floor);
+        ev->pending = 0;
+        ev->chopper_x = right[fi] - FIRE_FRONT_CELLS;
+        tower->money -= ev->ransom_cost;
+        sim->expenses_this_quarter += ev->ransom_cost;
+        printf("🚁 Helicopters dispatched ($%d)\n", ev->ransom_cost);
+        return;
+    }
+
+    /* Bomb: pay off the threat — no blast, threat over. */
+    ev->pending = 0;
+    ev->active = 0;
+    tower->money -= ev->ransom_cost;
+    sim->expenses_this_quarter += ev->ransom_cost;
+    ev->caught = 1;
+    ev->type = EVENT_NONE;
+}
+
+/* Destroy the tenant covering (floor index, cell) — burned tenants leave
+ * rubble until rebuilt, exactly like the EXE's Burned Area records. */
+static void fire_destroy_cell(GameSim *sim, Tower *tower, int fi, int x)
+{
+    if (x < 0 || x >= TOWER_WIDTH) return;
+    uint16_t id = tower->grid[fi][x].tenant_id;
+    if (id == 0) return;
+    Tenant *t = tower_tenant(tower, id);
+    if (!t || t->state == TENANT_ABANDONED) return;
+    sim->event.damage_cost += ITEM_COST[(int)t->type];
+    printf("🔥 %s on F%d destroyed by fire!\n",
+           tower_item_name(t->type), t->floor);
+    t->state = TENANT_ABANDONED;
+    t->capacity = CAP_EMPTY;
+    t->population = 0;
+    t->burned = 1;
+}
+
+/* One EXE frame of fire simulation (SpreadFire 10e8:0304 + the chopper
+ * pass 0450/0856). Fronts destroy where they stand and advance every 7th
+ * frame; floors above the origin ignite on the 80-frames-per-floor
+ * schedule; the chopper flies 1 cell left per frame dousing everything to
+ * its right. */
+static void fire_step_frame(GameSim *sim, Tower *tower,
+                            const int16_t *left, const int16_t *right)
+{
+    EventState *ev = &sim->event;
+    ev->fire_frame++;
+
+    int origin_fi = floor_to_index(ev->target_floor);
+
+    for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
+        if (right[fi] <= left[fi]) continue;  /* empty floor */
+
+        if (ev->fire_left[fi] < 0) {
+            /* Vertical spread: floor origin+k ignites at exactly frame
+             * k*80, at the origin cell — never below the origin. A floor
+             * whose extent misses the cell at that moment stays unburnt
+             * (the EXE's equality check never retries). */
+            if (fi > origin_fi &&
+                ev->fire_frame == (fi - origin_fi) * FIRE_FLOOR_FRAMES &&
+                ev->target_slot >= left[fi])
+                ev->fire_left[fi] = (int16_t)ev->target_slot;
+        } else {
+            fire_destroy_cell(sim, tower, fi, ev->fire_left[fi]);
+            if (ev->fire_frame % FIRE_SPREAD_FRAMES == 0)
+                ev->fire_left[fi]--;
+            if (ev->fire_left[fi] < left[fi])
+                ev->fire_left[fi] = -1;       /* burned off the left edge */
+        }
+
+        if (ev->fire_right[fi] < 0) {
+            if (fi > origin_fi &&
+                ev->fire_frame == (fi - origin_fi) * FIRE_FLOOR_FRAMES &&
+                ev->target_slot + FIRE_FRONT_CELLS <= right[fi])
+                ev->fire_right[fi] = (int16_t)ev->target_slot;
+        } else {
+            /* The right front's flames span [front .. front+11]; it
+             * destroys at front+12, the cell it's advancing into. */
+            fire_destroy_cell(sim, tower, fi, ev->fire_right[fi] + FIRE_FRONT_CELLS);
+            if (ev->fire_frame % FIRE_SPREAD_FRAMES == 0)
+                ev->fire_right[fi]++;
+            if (ev->fire_right[fi] + FIRE_FRONT_CELLS > right[fi])
+                ev->fire_right[fi] = -1;      /* burned off the right edge */
+        }
+    }
+
+    if (ev->chopper_x > 0) {
+        ev->chopper_x--;
+        for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
+            if (ev->fire_left[fi] > ev->chopper_x)  ev->fire_left[fi] = -1;
+            if (ev->fire_right[fi] > ev->chopper_x) ev->fire_right[fi] = -1;
+        }
+        /* Done at the origin floor's left extent. Quirk kept from the EXE:
+         * a front that slipped LEFT of that on some wider floor survives
+         * the sweep and keeps burning to its own edge. */
+        if (origin_fi >= 0 && ev->chopper_x <= left[origin_fi])
+            ev->chopper_x = 0;
+    }
+
+    /* Fire over? (AnimateFire 10e8:025a's any-front scan + the ft==2000
+     * hard stop = 9:00 PM.) */
+    int burning = 0;
+    for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++)
+        if (ev->fire_left[fi] >= 0 || ev->fire_right[fi] >= 0)
+            burning = 1;
+    if (!burning || ev->fire_frame >= FIRE_END_FRAME) {
+        printf("🧯 Fire out (origin floor %d, $%d damage)\n",
+               ev->target_floor, ev->damage_cost);
+        ev->active = 0;
+        ev->type = EVENT_NONE;
+        ev->chopper_x = 0;
+    }
 }
 
 void game_update_event(GameSim *sim, Tower *tower)
 {
-    if (!sim->event.active) return;
-    
-    sim->event.timer--;
-    
-    if (sim->event.type == EVENT_FIRE) {
-        /* Fire spreads left and right each tick */
-        sim->event.fire_left -= FIRE_SPREAD_RATE;
-        sim->event.fire_right += FIRE_SPREAD_RATE;
-        if (sim->event.fire_left < 0) sim->event.fire_left = 0;
-        if (sim->event.fire_right >= TOWER_WIDTH) sim->event.fire_right = TOWER_WIDTH - 1;
-        
-        /* Destroy tenants in fire path (check every 30 ticks) */
-        if (sim->event.timer % 30 == 0) {
-            int fi = floor_to_index(sim->event.target_floor);
-            for (int x = sim->event.fire_left; x <= sim->event.fire_right; x++) {
-                TowerCell *cell = &tower->grid[fi][x];
-                if (cell->tenant_id > 0) {
-                    Tenant *t = tower_tenant(tower, cell->tenant_id);
-                    if (t && t->state != TENANT_ABANDONED) {
-                        sim->event.damage_cost += ITEM_COST[(int)t->type];
-                        printf("🔥 %s on F%d destroyed by fire!\n",
-                               tower_item_name(t->type), t->floor);
-                        t->state = TENANT_ABANDONED;
-                        t->capacity = CAP_EMPTY;
-                        t->population = 0;
-                        t->burned = 1;   /* leaves rubble until rebuilt */
-                    }
-                }
-            }
-        }
-    } else if (sim->event.type == EVENT_BOMB) {
-        /* Bomb: security has a chance to catch it each tick */
-        /* Simplified: 0.5% chance per tick that guard reaches it */
-        if ((rand() % 200) == 0) {
-            sim->event.caught = 1;
-            sim->event.active = 0;
+    EventState *ev = &sim->event;
+    if (ev->pending) return;                  /* the EXE dialogs are modal */
+    if (!ev->active) return;
+
+    if (ev->type == EVENT_BOMB) {
+        /* Guards race the clock. The real GuardT pathing (guards walking
+         * from security offices to the target) isn't decoded yet — this
+         * stochastic stand-in keeps the race uncertain until it is. */
+        if (rand() % 200 == 0) {
+            ev->caught = 1;
+            ev->active = 0;
+            ev->type = EVENT_NONE;
             printf("🛡️ Security caught the bomb on floor %d! Crisis averted.\n",
-                   sim->event.target_floor);
+                   ev->target_floor);
             return;
         }
+        /* Detonation at 1:00 PM sharp (EXE frame 0x4B0). */
+        if (sim->hour >= 13)
+            game_resolve_event(sim, tower);
+        return;
     }
-    
-    /* Timer expired — resolve */
-    if (sim->event.timer <= 0) {
-        game_resolve_event(sim, tower);
+
+    /* FIRE — advance the EXE frame clock. TimeT's day clock is non-uniform:
+     * 320 frames per game-hour from 10AM to 1PM (ft 240->1200), then 100
+     * per hour to the 9PM stop (->2000). One frame fires per
+     * ticks-per-hour of accumulated frames-per-hour, so this is exact at
+     * every game speed. */
+    int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+    tower_floor_extents(tower, left, right);
+
+    int ticks_per_hour = sim->ticks_per_quarter / 6;
+    if (ticks_per_hour < 1) ticks_per_hour = 1;
+    ev->fire_accum += (sim->hour < 13) ? 320 : 100;
+    while (ev->fire_accum >= ticks_per_hour) {
+        ev->fire_accum -= ticks_per_hour;
+        fire_step_frame(sim, tower, left, right);
+        if (!ev->active) return;
     }
 }
 
 void game_resolve_event(GameSim *sim, Tower *tower)
 {
-    if (sim->event.type == EVENT_BOMB && !sim->event.caught) {
-        /* BOOM — destroy tenants in blast radius */
-        int min_f = sim->event.target_floor - BOMB_BLAST_FLOORS / 2;
-        int max_f = sim->event.target_floor + BOMB_BLAST_FLOORS / 2;
-        int min_s = sim->event.target_slot - BOMB_BLAST_SLOTS / 2;
-        int max_s = sim->event.target_slot + BOMB_BLAST_SLOTS / 2;
-        
-        if (min_f < TOWER_MIN_FLOOR) min_f = TOWER_MIN_FLOOR;
-        if (max_f > TOWER_MAX_FLOOR) max_f = TOWER_MAX_FLOOR;
-        if (min_s < 0) min_s = 0;
-        if (max_s >= TOWER_WIDTH) max_s = TOWER_WIDTH - 1;
-        
+    EventState *ev = &sim->event;
+    if (ev->type == EVENT_BOMB && !ev->caught) {
+        /* DestroyTenants (10c8:02bd): everything touching floors
+         * [target-2 .. target+3] x cells [target-20 .. target+20]. */
+        int min_f = ev->target_floor - BOMB_BLAST_FLOORS_DOWN;
+        int max_f = ev->target_floor + BOMB_BLAST_FLOORS_UP;
+        int min_s = ev->target_slot - BOMB_BLAST_HALF_CELLS;
+        int max_s = ev->target_slot + BOMB_BLAST_HALF_CELLS;
+
         int destroyed = 0;
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
             if (t->state == TENANT_ABANDONED) continue;
-            if (t->floor >= min_f && t->floor <= max_f &&
-                t->x >= min_s && t->x + t->width <= max_s + 1) {
-                sim->event.damage_cost += ITEM_COST[(int)t->type];
-                t->state = TENANT_ABANDONED;
-                t->capacity = CAP_EMPTY;
-                t->population = 0;
-                t->burned = 1;   /* leaves rubble until rebuilt, like fire */
-                destroyed++;
-            }
+            if (t->floor + t->height - 1 < min_f || t->floor > max_f) continue;
+            if (t->x + t->width - 1 < min_s || t->x > max_s) continue;
+            ev->damage_cost += ITEM_COST[(int)t->type];
+            t->state = TENANT_ABANDONED;
+            t->capacity = CAP_EMPTY;
+            t->population = 0;
+            t->burned = 1;   /* leaves rubble until rebuilt, like fire */
+            destroyed++;
         }
-        
-        tower->money -= sim->event.damage_cost;
-        printf("💥 BOMB EXPLODED on floor %d! %d tenants destroyed, $%d damage!\n",
-               sim->event.target_floor, destroyed, sim->event.damage_cost);
-    } else if (sim->event.type == EVENT_FIRE) {
-        int spread = sim->event.fire_right - sim->event.fire_left;
-        printf("🧯 Fire extinguished on floor %d (spread %d slots, $%d damage)\n",
-               sim->event.target_floor, spread, sim->event.damage_cost);
+
+        /* No cash charge — the EXE's ResolveEvent(0) never touches money;
+         * the loss is the destroyed buildings. */
+        printf("💥 BOMB EXPLODED on floor %d! %d tenants destroyed ($%d of construction)!\n",
+               ev->target_floor, destroyed, ev->damage_cost);
     }
-    
-    sim->event.active = 0;
-    sim->event.type = EVENT_NONE;
+
+    ev->active = 0;
+    ev->type = EVENT_NONE;
 }
 
 void game_update_santa(GameSim *sim)
@@ -1689,7 +1834,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 2u   /* v2: hotel condition/demand fields in Tenant,
+#define SAVE_VERSION 3u   /* v3: scheduled-disaster EventState (per-floor
+                           * fire fronts, chopper) + disaster_sched_day.
+                           * v2: hotel condition/demand fields in Tenant,
                              hotel_pass_day in GameSim */
 
 int game_save(const GameSim *sim, const Tower *tower, const char *path)
