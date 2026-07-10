@@ -206,6 +206,13 @@ typedef struct {
      * 2/3-story ground lobby forgives 25/50 ticks of waiting before it
      * registers as frustration. Recomputed each tick from the lobby height. */
     int      lobby_bonus;
+
+    /* Office arrivals since the sim last consumed them — the floors where
+     * workers just reached their desks. game_update rolls each one for the
+     * 1-in-10 sick-worker chance (UniPeple medical path). Capped; a tick
+     * never sees anywhere near 32 arrivals. */
+    int8_t   office_arrival_floor[32];
+    int      office_arrivals;
 } PeopleSim;
 
 void people_init(PeopleSim *ps);

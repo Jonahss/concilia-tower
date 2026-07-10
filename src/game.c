@@ -188,7 +188,7 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
         case ITEM_SECURITY:  sim->promo.has_security = 1;  break;
         case ITEM_RECYCLING: recycling_centers++;          break;
         case ITEM_METRO:     sim->promo.has_metro = 1;     break;
-        case ITEM_MEDICAL:   sim->promo.has_medical = 1;   break;
+        case ITEM_MEDICAL:   sim->promo.has_medical = 1;   break;  /* existence */
         case ITEM_CATHEDRAL: sim->promo.has_cathedral = 1; break;
         case ITEM_HOTEL_SUITE:
             sim->promo.has_suite = 1;
@@ -202,6 +202,10 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
     sim->promo.recycling_adequate =
         recycling_centers > 0 &&
         sim->standing_population / recycling_centers < 2500;
+
+    /* 0xB92D lives on the sim (armed 7AM, cleared by the no-center path);
+     * the scan just mirrors it into the flag bank */
+    sim->promo.medical_adequate = sim->medical_adequate;
 
     sim->tower_width = game_measure_width(tower);
 }
@@ -301,7 +305,7 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
          * suite is the requirement. */
         return sim->promo.has_suite &&
                sim->promo.recycling_adequate &&
-               sim->promo.has_medical &&
+               sim->promo.medical_adequate &&
                sim->promo.vip_visited &&
                promotion_window_open(sim);
     case 5:
@@ -311,7 +315,7 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
          * 0xB92B here. */
         return sim->promo.has_metro &&
                sim->promo.recycling_adequate &&
-               sim->promo.has_medical &&
+               sim->promo.medical_adequate &&
                promotion_window_open(sim);
     case 6:
         /* TOWER: special event, not automatic */
@@ -954,8 +958,18 @@ void game_update(GameSim *sim, Tower *tower)
     
     /* Star evaluation, hourly — the weekday-evening window inside
      * game_check_promotion picks WHICH hours a 3->4/4->5 can land on. */
-    if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0)
+    if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0) {
+        /* 7AM: MedicalDailyTick re-arms adequacy at star>=3 and the
+         * patient-per-day counters start fresh (cap 40/center/day). */
+        if (sim->hour == 7) {
+            if (tower->star_rating >= 3)
+                sim->medical_adequate = 1;
+            for (int i = 0; i < tower->tenant_count; i++)
+                if (tower->tenants[i].type == ITEM_MEDICAL)
+                    tower->tenants[i].patients_today = 0;
+        }
         evaluate_star_rating(sim, tower);
+    }
 
     /* Schedule clock for the elevator tables (EXE 0xB3A0/0xB3A1: the
      * weekend day-type + the 7 periods that slice the day) */
@@ -982,6 +996,16 @@ void game_update(GameSim *sim, Tower *tower)
     /* People + elevators run every tick — cars and queues are the game */
     people_update(&sim->people, tower, sim->frame, sim->time_of_day,
                   sim->reach_public, sim->reach_service);
+
+    /* Sick-worker rolls: 1-in-10 of office arrivals at star>=3 seek the
+     * medical center (UniPeple medical path; below star 3 nobody rolls). */
+    if (tower->star_rating >= 3) {
+        for (int i = 0; i < sim->people.office_arrivals; i++)
+            if (rand() % 10 == 0)
+                game_medical_seek(sim, tower,
+                                  sim->people.office_arrival_floor[i]);
+    }
+    sim->people.office_arrivals = 0;
 
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
@@ -1471,6 +1495,55 @@ int game_lobby_height(Tower *tower)
     return h;
 }
 
+/* --- Medical adequacy (MedicalT seg_1170, byte-verified 2026-07-10) ---
+ * A sick office worker (1-in-10 roll on arriving at their desk, star>=3)
+ * seeks a medical center in their 15-floor band, falling back to band 0.
+ * Finding NONE is the only thing that clears medical adequacy (0xB92D) —
+ * and fires the "more medical please" nag (InfoUI msg 6). A center at its
+ * 40-patients/day cap turns the patient away SILENTLY; overflow never
+ * dings adequacy, and no population-per-center bar exists (unlike
+ * recycling). The EXE computes the registration and lookup bands with
+ * different offsets — an original off-by-a-few bug — so the port uses ONE
+ * band function for both, as the referee recommended. */
+static int medical_band(int floor)
+{
+    return floor <= 0 ? 0 : floor / 15;
+}
+
+int game_medical_seek(GameSim *sim, Tower *tower, int from_floor)
+{
+    int band = medical_band(from_floor);
+    Tenant *found = NULL;
+    for (int pass = 0; pass < 2 && !found; pass++) {
+        int want = pass == 0 ? band : 0;      /* own band, then band 0 */
+        if (pass == 1 && band == 0) break;
+        /* a RANDOM center in the band (ChoiceOfficeOneUBM picks randomly,
+         * which is also what spreads patients across multiple centers) */
+        Tenant *in_band[16];
+        int n = 0;
+        for (int i = 0; i < tower->tenant_count && n < 16; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type != ITEM_MEDICAL || t->state == TENANT_ABANDONED)
+                continue;
+            if (medical_band(t->floor) == want) in_band[n++] = t;
+        }
+        if (n > 0) found = in_band[rand() % n];
+    }
+    if (!found) {
+        /* MoreMedicalPlease 1170:061c: nag + clear, unconditionally */
+        if (sim->medical_adequate)
+            printf("\xf0\x9f\x8f\xa5 A sick worker found no medical help "
+                   "- the tower needs more medical centers!\n");
+        sim->medical_adequate = 0;
+        sim->medical_nag = 1;
+        return 0;
+    }
+    if (found->patients_today >= 40)
+        return 1;                              /* full: turned away, silent */
+    found->patients_today++;
+    return 2;
+}
+
 /* ================================================================
  * Medical emergencies (CheckMedicalEmergency, seg_11e8)
  * ================================================================
@@ -1887,7 +1960,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 4u   /* v4: standing_population (star checks read the
+#define SAVE_VERSION 5u   /* v5: medical adequacy (0xB92D lifecycle) +
+                           * Tenant.patients_today.
+                           * v4: standing_population (star checks read the
                            * time-independent count).
                            * v3: scheduled-disaster EventState (per-floor
                            * fire fronts, chopper) + disaster_sched_day.

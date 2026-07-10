@@ -189,9 +189,15 @@ typedef struct {
                               * (>= 2500 pop per center -> inadequate, trucks
                               * stop, star 4/5 blocked). Dynamic, can flip back. */
     int has_metro;           /* 0xB3E8 >= 0 — metro station built */
-    int has_medical;         /* medical center built; stands in for 0xB92D
-                              * medical_adequate (daily-armed flag; MedicalT's
-                              * exact inadequacy trigger not yet decoded) */
+    int has_medical;         /* a medical center exists (flavor events) */
+    int medical_adequate;    /* 0xB92D — armed =1 every 7AM at star>=3
+                              * (MedicalDailyTick 1170:011f tail), cleared
+                              * ONLY when a sick worker finds no center
+                              * (their 15-floor band + band-0 fallback both
+                              * empty, or the assigned center was demolished
+                              * — MoreMedicalPlease 1170:061c). Patient
+                              * overflow never clears it. Required 3->4 AND
+                              * 4->5. [byte-verified 2026-07-10 referee] */
     int vip_visited;         /* 0xB923 — VIP verdict favorable (gates 3->4 ONLY) */
     int has_cathedral;       /* cathedral built (the TOWER wedding venue) */
 } PromotionFlags;
@@ -497,6 +503,11 @@ typedef struct {
     
     /* Stats */
     int           max_population;   /* Peak population reached */
+    int           medical_adequate; /* persistent 0xB92D state (see
+                                       PromotionFlags.medical_adequate, which
+                                       mirrors this each scan) */
+    int           medical_nag;      /* one-shot for the UI feed: a sick worker
+                                       found no medical center */
     int           standing_population; /* time-of-day-independent count:
                                           everyone who lives/works here (hotel
                                           guests only while hosted) — what the
@@ -661,6 +672,12 @@ void game_resolve_event(GameSim *sim, Tower *tower);
  *          pay-off (bomb, no blast). */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
+
+/* A sick office worker seeks a medical center (UniPeple 1220:2b55 medical
+ * path). Returns 0 = none found (adequacy cleared + nag), 1 = turned away
+ * (center full — silent), 2 = admitted. Exposed for tests; game_update
+ * rolls it on 1-in-10 of office arrivals at star>=3. */
+int game_medical_seek(GameSim *sim, Tower *tower, int from_floor);
 
 /* Medical emergencies (flavor — only with a medical center, no penalty) */
 void game_try_medical(GameSim *sim, Tower *tower);

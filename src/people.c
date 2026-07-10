@@ -665,6 +665,10 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         t->hosted = 1;
         t->neglect_days = 0;
     }
+    /* A worker at their desk — candidate for the sick-worker roll */
+    if (t && !p->going_home && t->type == ITEM_OFFICE &&
+        ps->office_arrivals < (int)(sizeof ps->office_arrival_floor))
+        ps->office_arrival_floor[ps->office_arrivals++] = (int8_t)t->floor;
     p->state = PERSON_AT_DEST;
 }
 

@@ -981,7 +981,7 @@ static void test_star_requirements(void)
     sim.quarter = QUARTER_WEEKDAY3;
     sim.promo.has_suite = 1;
     sim.promo.recycling_adequate = 1;
-    sim.promo.has_medical = 1;
+    sim.promo.medical_adequate = 1;
     sim.promo.vip_visited = 0;
     CHECK(!game_check_promotion(&sim, &tw, 4), "no star-4 without a satisfied VIP");
     sim.promo.vip_visited = 1;
@@ -1341,6 +1341,40 @@ static void test_bomb_blast(void)
     CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
 }
 
+/* Medical adequacy (MedicalT seg_1170, byte-verified 2026-07-10 referee):
+ * cleared ONLY when a sick worker finds no center (own 15-floor band +
+ * band-0 fallback both empty); a full center (40/day) turns patients away
+ * silently; re-armed every 7AM at star>=3. */
+static void test_medical_adequacy(void)
+{
+    printf("medical adequacy (band seek, 40/day cap, no-center clear):\n");
+    fresh();
+    sim.medical_adequate = 1;
+
+    CHECK(game_medical_seek(&sim, &tw, 20) == 0, "no center anywhere -> not found");
+    CHECK(!sim.medical_adequate && sim.medical_nag,
+          "no center clears adequacy (0xB92D) and nags");
+
+    sim.medical_adequate = 1; sim.medical_nag = 0;
+    uint16_t med1 = fplace(ITEM_MEDICAL, 18, 100);   /* band 1 = floors 15-29 */
+    CHECK(game_medical_seek(&sim, &tw, 20) == 2, "same-band center admits the patient");
+    CHECK(tenant(med1)->patients_today == 1, "admission counts against the daily cap");
+    CHECK(sim.medical_adequate, "a found center keeps adequacy");
+
+    CHECK(game_medical_seek(&sim, &tw, 50) == 0,
+          "band-3 worker, band-1 center, no band-0 fallback -> not found");
+    CHECK(!sim.medical_adequate, "adequacy cleared again");
+
+    sim.medical_adequate = 1;
+    uint16_t med0 = fplace(ITEM_MEDICAL, 3, 100);    /* band 0 */
+    CHECK(game_medical_seek(&sim, &tw, 50) == 2, "band-0 center is the universal fallback");
+
+    tenant(med1)->patients_today = 40;
+    tenant(med0)->patients_today = 40;
+    CHECK(game_medical_seek(&sim, &tw, 20) == 1, "a full center turns patients away");
+    CHECK(sim.medical_adequate, "overflow NEVER clears adequacy (no recycling-style bar)");
+}
+
 /* The hourly star evaluation (game_update wiring): promotions land on the
  * hour, using the STANDING population (workers count while employed, not
  * while present) so the count survives the evening window. */
@@ -1410,7 +1444,7 @@ static void test_flavor(void)
 
     /* with a medical center it eventually fires, on an occupied floor */
     fresh();
-    sim.promo.has_medical = 1;
+    sim.promo.has_medical = 1;   /* flavor events gate on existence */
     Tenant *o2 = &tw.tenants[tw.tenant_count++];
     *o2 = (Tenant){0}; o2->type = ITEM_OFFICE; o2->floor = 6; o2->state = TENANT_OCCUPIED;
     int got = 0;
@@ -1495,6 +1529,7 @@ int main(void)
     test_office_dynamics();
     test_star_requirements();
     test_promotion_cadence();
+    test_medical_adequacy();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

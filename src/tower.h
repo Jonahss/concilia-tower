@@ -291,6 +291,9 @@ typedef struct {
     uint8_t  condition;    /* Hotel room: RoomCondition (clean/dirty/infested) */
     uint8_t  burned;       /* Destroyed by fire — renders as rubble until rebuilt */
     uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
+    uint8_t  patients_today; /* Medical center: patients admitted since 7AM
+                                (hard cap 40/day — InMedicalPeple 1170:0291;
+                                a full center turns patients away SILENTLY) */
 
     /* --- Hotel demand model (EXE tenant bytes +0x14/+0x15/+0x17, decoded
      *     by referee_infested_checkin_2026-07-10) --- */
