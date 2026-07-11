@@ -491,17 +491,16 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 /* Advance capacity animation (3-phase daily cycle) */
                 update_capacity(t, sim->time_of_day, reachable);
                 
-                /* Generate income (per tick, scaled). Rent tenants use
-                 * the REAL per-class table (res 0x3E9); venue types use
-                 * the port's sales approximations. */
-                int base_income = tenant_rent(t->type, t->rent_class);
-                if (base_income == 0 && type_idx < ITEM_TYPE_COUNT)
-                    base_income = TENANT_INCOME[type_idx];
+                /* Per-tick income is only the venue-sales approximations
+                 * (restaurants/fast food) — real RENT is event-driven:
+                 * offices/shops bank quarterly lumps at the settlement,
+                 * hotels at checkout, condos at the move-in sale
+                 * (income cadence byte-verified 2026-07-11). */
+                int base_income = (type_idx < ITEM_TYPE_COUNT)
+                                    ? TENANT_INCOME[type_idx] : 0;
 
                 /* Retail customer competition: clustering same-type retail in a
-                 * zone dilutes each one's revenue (see game_retail_income).
-                 * For shops this doubles as the port's stand-in for the EXE's
-                 * sales-grade -> rate-class feedback (MainteT 069e). */
+                 * zone dilutes each one's revenue (see game_retail_income). */
                 base_income = game_retail_income(sim, t, base_income);
 
                 /* Rent scales with established occupancy (cap_peak): a thriving,
@@ -543,6 +542,9 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                     t->condition = ROOM_DIRTY;
                     t->open_for_booking = 0;
                     t->hosted = 0;
+                    /* the stay is paid at checkout (MoneyT 0eac -> 0854,
+                     * same 0x3E9 rows, one lump per guest stay) */
+                    income += tenant_rent(t->type, t->rent_class);
                 }
             }
             break;
@@ -1162,9 +1164,34 @@ void game_update(GameSim *sim, Tower *tower)
             sim->day_expenses = 0;
             tower->day++;
 
-            /* Tenant pairing pass — MainteT runs upgrades/pairing every 3rd day. */
-            if (tower->day % 3 == 0) {
+            /* THE QUARTERLY SETTLEMENT (every 3rd day = the EXE quarter;
+             * JudgeT MainLoop's day%3 gate + the TimeT maintenance row,
+             * byte-verified 2026-07-11). EXE order on the one tick:
+             * move-outs first (leavers pay nothing), then rent lumps,
+             * then the maintenance sweep below. */
+            int settlement_day = tower->day % 3 == 0;
+            if (settlement_day) {
                 game_stressed_moveout(sim, tower);
+
+                /* Rent lumps: each occupied office and shop banks its
+                 * full 0x3E9 value as ONE payment (never amortized).
+                 * Hotels are absent from this loop — they bank per guest
+                 * stay at checkout (MoneyT 0eac); condos are the one-time
+                 * sale at move-in. */
+                long rent = 0;
+                for (int i = 0; i < tower->tenant_count; i++) {
+                    Tenant *t = &tower->tenants[i];
+                    if (t->type != ITEM_OFFICE && t->type != ITEM_SHOP)
+                        continue;
+                    if (t->state != TENANT_OCCUPIED &&
+                        t->state != TENANT_VACANT) continue;
+                    rent += tenant_rent(t->type, t->rent_class);
+                }
+                if (rent > 0) {
+                    tower->money += rent;
+                    sim->income_this_quarter += rent;
+                    printf("\xf0\x9f\x92\xb0 Quarterly rent collected: $%ld\n", rent);
+                }
             }
 
             /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
@@ -1200,11 +1227,13 @@ void game_update(GameSim *sim, Tower *tower)
                 }
             }
             
-            /* Upkeep sweep (MoneyT 1178:0b44 — the EXE runs it once per
-             * 3-day quarter; our day boundary is the same cadence).
-             * Lobbies + per-car elevator upkeep + escalators. */
-            int upkeep = calc_lobby_maintenance(tower);
-            PeopleSim *ups = &sim->people;
+            /* Upkeep sweep (MoneyT 1178:0b44) — fires on the SAME
+             * settlement tick as the rent (TimeT gates both on day%3,
+             * byte-verified 2026-07-11; the old daily billing was 3x the
+             * EXE's rate). */
+            int upkeep = settlement_day ? calc_lobby_maintenance(tower) : 0;
+            if (settlement_day) {
+                PeopleSim *ups = &sim->people;
             for (int i = 0; i < ups->shaft_count; i++) {
                 ElevatorShaft *sh = &ups->shafts[i];
                 if (!sh->active) continue;
@@ -1216,6 +1245,7 @@ void game_update(GameSim *sim, Tower *tower)
             for (int i = 0; i < tower->tenant_count; i++)
                 if (tower->tenants[i].type == ITEM_ESCALATOR)
                     upkeep += TUNING.maint_escalator;
+            }
             if (upkeep > 0) {
                 tower->money -= upkeep;
                 sim->expenses_this_quarter += upkeep;

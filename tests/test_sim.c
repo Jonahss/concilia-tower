@@ -633,16 +633,19 @@ static void test_money(void)
     people_rebuild_transport(&sim.people, &tw);
     if (sim.people.shaft_count >= 1)
         people_set_num_cars(&sim.people, 0, 3);
+    /* The sweep fires on the quarterly settlement (every 3rd day, with
+     * the rent lumps — byte-verified 2026-07-11; daily billing was 3x
+     * the EXE's rate), so three days = exactly one sweep. */
     long before = tw.money;
-    run_days(1);
+    run_days(3);
     long upkeep = before - tw.money;
     CHECK(upkeep == 3 * TUNING.maint_car_std + TUNING.maint_escalator,
-          "day sweep charges 3 cars x $10k + escalator $5k");
+          "settlement sweep charges 3 cars x $10k + escalator $5k, once per quarter");
 
     /* Lobbies are free below 3 stars (FUN_1178_0a6a: star fee table 0/30/100) */
     tw.star_rating = 2;
     before = tw.money;
-    run_days(1);
+    run_days(3);
     CHECK(before - tw.money == upkeep,
           "2-star lobby adds no upkeep (folklore $100/segment retired)");
 }

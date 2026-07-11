@@ -1231,22 +1231,16 @@ static void render_tower(void)
                     else if (game.sim.medical.active)      frame_idx = 0;
                     else                                    frame_idx = 1;
                 } else if (tenant->type == ITEM_CINEMA && nframes >= 4) {
-                    /* Cinema (Jonah): 0 inactive/closed, 1 open, 2 crowding in,
-                     * 3 movie screening. Closed off-hours, else crowd ramp 1..3. */
-                    if (!TENANT_ACTIVE_TIMES[ITEM_CINEMA][game.sim.time_of_day]) {
-                        frame_idx = 0;
-                    } else {
-                        int cr = CAP_MAX - CAP_MIN, cp = tenant->capacity - CAP_MIN;
-                        if (cp < 0) cp = 0;
-                        if (cp > cr) cp = cr;
-                        frame_idx = 1 + (cp * 2) / cr;     /* 1..3 */
-                    }
+                    /* Cinema: the venue state IS the sprite frame (the EXE
+                     * renderer draws slot+6 directly, seg_1038:0396) —
+                     * 0 closed, 1 open, 2 has patrons, 3 show running.
+                     * Jonah's frame decode matched it exactly. */
+                    frame_idx = tenant->venue_state <= 3 ? tenant->venue_state : 0;
                 } else if (tenant->type == ITEM_PARTY_HALL && nframes >= 3) {
-                    /* Party hall (Jonah): 0 dark/closed, 1 lit+empty, 2 party. */
-                    if (!TENANT_ACTIVE_TIMES[ITEM_PARTY_HALL][game.sim.time_of_day])
-                        frame_idx = 0;
-                    else
-                        frame_idx = (tenant->population > 0) ? 2 : 1;
+                    /* Party hall: same state-driven pick, folded onto its
+                     * 3-frame sheet (0 dark, 1 lit, 2+ party). */
+                    frame_idx = tenant->venue_state == 0 ? 0
+                              : tenant->venue_state == 1 ? 1 : 2;
                 } else if (tenant->type == ITEM_PARKING && nframes >= 2) {
                     /* Parking (Jonah): frame 0 = red X (inaccessible); 1..n-1 are
                      * car-bay VARIANTS (cosmetic, not occupancy). Red X when the
