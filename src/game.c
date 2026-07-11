@@ -789,6 +789,37 @@ static void infest_room(Tenant *v)
  * R4 verified this consumer). [0xDD76] = 80 splits "happy" from "ok". */
 #define DEMAND_HAPPY_BAR 80
 
+/* Noisy neighbor for a hotel room (NoiseT seg_1138, byte-verified
+ * 2026-07-10 referee): a restaurant, shop, fast food, office, movie
+ * theater, or party hall within 20 cells of the room's near edge, on the
+ * room's own floor. (Offices are bothered within 10, condos within 30;
+ * hotel rooms only bother condos — neither matters to this check.) The
+ * EXE walk tests the range BEFORE stepping outward, so one record past
+ * the strict cutoff still counts — replicated here as edge distance <= 20
+ * against nearest edges. */
+static int hotel_has_noisy_neighbor(const Tower *tower, const Tenant *room)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *n = &tower->tenants[i];
+        if (n == room || n->floor != room->floor) continue;
+        if (n->state == TENANT_ABANDONED) continue;
+        switch (n->type) {
+        case ITEM_RESTAURANT: case ITEM_SHOP: case ITEM_FAST_FOOD:
+        case ITEM_OFFICE: case ITEM_CINEMA: case ITEM_PARTY_HALL:
+            break;
+        default:
+            continue;
+        }
+        int gap = (n->x >= room->x + room->width)
+                    ? n->x - (room->x + room->width)
+                    : (room->x >= n->x + n->width)
+                        ? room->x - (n->x + n->width)
+                        : 0;                       /* overlapping/abutting */
+        if (gap <= 20) return 1;
+    }
+    return 0;
+}
+
 void game_hotel_demand_pass(GameSim *sim, Tower *tower)
 {
     (void)sim;
@@ -846,14 +877,17 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
         }
 
         /* Demand verdict: average the guests' banked elevator stress,
-         * adjust for the room rate, compare to the star-scaled bar. (The
-         * EXE also adds a noise penalty here; unported until the NoiseT
-         * return polarity is settled — see decomp loose ends.) */
+         * adjust for the room rate, add the noise penalty, compare to the
+         * star-scaled bar (JudgeT 1130:0686: noisy neighbor -> metric
+         * += 60, hardcoded — noise lowers demand but never closes a room
+         * whose guests are otherwise happy). */
         int avg = t->guest_stress_trips
                     ? t->guest_stress_total / t->guest_stress_trips : 0;
         if (t->rent_class == 0)      avg += 30;   /* High rate: pickier guests */
         else if (t->rent_class == 2) avg -= 30;   /* Low rate: forgiving */
         else if (t->rent_class == 3) avg = 0;     /* Very low: always fills */
+        if (hotel_has_noisy_neighbor(tower, t))
+            avg += 60;
         if (avg < 0) avg = 0;
 
         int bar = (tower->star_rating >= 4) ? TUNING.judge_stressed

@@ -27,6 +27,13 @@ static uint16_t place(ItemType ty, int floor, int x)
 
 static Tenant *tenant(uint16_t id) { return tower_tenant(&tw, id); }
 
+/* Direct placement for disaster geometry — tower_import_item skips cost
+ * and adjacency validation but fills the grid, which the fire needs. */
+static uint16_t fplace(ItemType ty, int floor, int x)
+{
+    return tower_import_item(&tw, ty, floor, x, ITEM_WIDTH[ty]);
+}
+
 static void fresh(void)
 {
     tower_init(&tw);
@@ -245,6 +252,33 @@ static void test_hotel_demand(void)
     a->rent_class = 3;
     game_hotel_demand_pass(&sim, &tw);
     CHECK(a->open_for_booking, "very-low room rate always books");
+
+    /* Noisy neighbor (NoiseT seg_1138 + JudgeT 1130:0686, byte-verified
+     * 2026-07-10): a commercial unit within 20 cells adds +60 to the
+     * metric. avg 100 is fine quiet (bar 150 at 1 star) but 160 noisy. */
+    a->rent_class = 1;
+    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* avg 100 */
+    b->guest_stress_total = 400; b->guest_stress_trips = 4;   /* no rescuer */
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->open_for_booking, "avg-100 room books fine in the quiet");
+    uint16_t shop = fplace(ITEM_SHOP, 1, BX + 22);            /* gap 18 <= 20 */
+    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* arming reset them */
+    b->guest_stress_total = 400; b->guest_stress_trips = 4;
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(!a->open_for_booking,
+          "the same room next to a shop is disarmed (+60 noise penalty)");
+    /* happy guests shrug the noise off: 0 + 60 = 60 < 80 = content */
+    a->guest_stress_total = 0; a->guest_stress_trips = 4;
+    b->guest_stress_total = 0; b->guest_stress_trips = 4;
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->open_for_booking && a->demand_category == 2,
+          "noise alone never closes a room with happy guests");
+    /* out of earshot: gap > 20 cells is quiet (for room a) */
+    tenant(shop)->x = BX + 30;   /* edge gap from a: 209-183 = 26 */
+    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* avg 100 */
+    b->guest_stress_total = 0;   b->guest_stress_trips = 4;   /* rescuer */
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->open_for_booking, "a shop farther than 20 cells is out of earshot");
 }
 
 /* --- people/elevator pipeline (people.c) --- */
@@ -1113,13 +1147,6 @@ static void test_office_dynamics(void)
     dr->stress = 0; dr->condition = ROOM_DIRTY; dr->cap_peak = 0x10;
     game_office_dynamics(&sim, &tw);
     CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
-}
-
-/* Direct placement for disaster geometry — tower_import_item skips cost
- * and adjacency validation but fills the grid, which the fire needs. */
-static uint16_t fplace(ItemType ty, int floor, int x)
-{
-    return tower_import_item(&tw, ty, floor, x, ITEM_WIDTH[ty]);
 }
 
 /* Scheduled disasters (TimeT 10AM dispatch, byte-verified 2026-07-09/10):
