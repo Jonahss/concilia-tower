@@ -1443,6 +1443,68 @@ static void test_venues(void)
           "the party banks its tier and closes at 5PM");
 }
 
+/* In-tenant occupants (AnimPeple seg_1028): counts, frame bands and the
+ * fixed desk positions per the EXE's randomizers. */
+static int tindex(uint16_t id)
+{
+    for (int i = 0; i < tw.tenant_count; i++)
+        if (tw.tenants[i].id == id) return i;
+    return 0;
+}
+
+static void test_occupants(void)
+{
+    printf("in-tenant occupant sprites (AnimPeple):\n");
+    fresh();
+    uint16_t off = fplace(ITEM_OFFICE, 3, 100);
+    uint16_t con = fplace(ITEM_CONDO, 4, 100);
+    uint16_t twn = fplace(ITEM_HOTEL_TWIN, 5, 100);
+    uint16_t sgl = fplace(ITEM_HOTEL_SINGLE, 5, 130);
+    uint16_t rst = fplace(ITEM_RESTAURANT, 6, 100);
+    Tenant *o = tenant(off), *c = tenant(con), *tw2 = tenant(twn),
+           *sg = tenant(sgl), *r = tenant(rst);
+    o->state = c->state = tw2->state = sg->state = r->state = TENANT_OCCUPIED;
+    tw2->hosted = 1; sg->hosted = 1; r->retail_open = 1;
+    sim.time_of_day = TOD_MORNING; sim.hour = 10;
+
+    /* roll every tenant once (the stagger passes each index within 16) */
+    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+
+    TenantOccupants *oo = &sim.occupants[tindex(off)];
+    CHECK(oo->count == 6, "an office at work shows 6 workers");
+    int inband = 1;
+    for (int k = 0; k < 6; k++) if (oo->frame[k] > 0x1D) inband = 0;
+    CHECK(inband, "office frames stay in the office band (<= 0x1D)");
+    if (o->id % 6 < 2)
+        CHECK(oo->x[0] == o->id % 6 + 1, "desk-sitter 0 at its fixed desk");
+    else
+        CHECK(oo->x[0] == 7, "layout-B sitter at x=7");
+
+    CHECK(sim.occupants[tindex(con)].count == 3, "a condo houses 3 residents");
+    CHECK(sim.occupants[tindex(twn)].count == 3 && sim.occupants[tindex(sgl)].count == 2,
+          "twin rooms sleep 3 sprites, singles 2");
+    TenantOccupants *ro = &sim.occupants[tindex(rst)];
+    CHECK(ro->count == 2 && ro->frame[0] >= 0x49 && ro->frame[0] <= 0x4B &&
+          ro->x[0] <= 2, "restaurant staff behind the counter, waiter band");
+
+    /* presence gates: night office, unhosted room, closed restaurant */
+    sim.time_of_day = TOD_NIGHT; sim.hour = 23;
+    tw2->hosted = 0; r->retail_open = 0;
+    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+    CHECK(sim.occupants[tindex(off)].count == 0, "offices empty out at night");
+    CHECK(sim.occupants[tindex(twn)].count == 0, "an unhosted room shows nobody");
+    CHECK(sim.occupants[tindex(rst)].count == 0, "closed restaurants are unstaffed");
+    CHECK(sim.occupants[tindex(con)].count == 3, "condo residents are home at night");
+
+    /* construction worker band = exactly the 6 frames of 0x85EA */
+    uint16_t bld = fplace(ITEM_OFFICE, 7, 100);
+    tenant(bld)->state = TENANT_CONSTRUCTION;
+    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+    TenantOccupants *bo = &sim.occupants[tindex(bld)];
+    CHECK(bo->count == 1 && bo->frame[0] >= 0x39 && bo->frame[0] <= 0x3E,
+          "every construction site gets one worker (frames 0x39-0x3E)");
+}
+
 /* Change-movie (InfoDlgT 1100:432f/4377): deterministic rotation within
  * the chosen tier, film fresh at age 0, $300k hit / $150k ordinary. */
 static void test_change_movie(void)
@@ -1738,6 +1800,7 @@ int main(void)
     test_guard_hunt();
     test_venues();
     test_change_movie();
+    test_occupants();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

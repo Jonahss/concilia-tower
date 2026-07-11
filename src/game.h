@@ -536,6 +536,23 @@ static inline const StatSample *stats_at(const StatsHistory *h, int i)
 #define MODE_CAMPAIGN  0   /* star-gated unlocks, starts on an empty lot */
 #define MODE_SANDBOX   1   /* everything unlocked from the start */
 
+/* In-tenant occupant sprites (AnimPeple seg_1028, dispatch + randomizers
+ * byte-verified 2026-07-02). Each occupied unit shows a few little people
+ * whose position/pose re-roll every 16 frames — desk-sitters and roamers
+ * in offices, residents (and a dog) in condos, guests in hotel rooms,
+ * counter staff in food venues, one worker on every construction site.
+ * Frame codes index the type-8 people band: DIB resources 0x85E8..0x85EE
+ * concatenated in id order (office 0x00-0x1D, condo/home 0x1E-0x38,
+ * construction 0x39-0x3E, fast food 0x3F-0x48, restaurant 0x49-0x4F,
+ * hotel 0x50-0x5F + 0x60-0x62) — every randomizer's range lands exactly
+ * inside its resource, which is how the band order was verified. */
+#define OCCUPANTS_MAX 6
+typedef struct {
+    uint8_t count;                  /* occupants rolled for this tenant */
+    uint8_t x[OCCUPANTS_MAX];       /* cells from the tenant's left edge */
+    uint8_t frame[OCCUPANTS_MAX];   /* people-band frame code 0x00-0x62 */
+} TenantOccupants;
+
 /* The simulation state */
 typedef struct {
     /* Time */
@@ -649,6 +666,13 @@ typedef struct {
     StatsHistory  stats;
     long          stats_prev_wait_total;   /* for per-quarter wait deltas */
     long          stats_prev_wait_samples;
+
+    /* In-tenant occupant sprites (AnimPeple seg_1028) — the little
+     * people inside offices, condos, hotel rooms, venue counters and
+     * construction sites. Pure cosmetics, re-rolled every 16 frames
+     * staggered by tenant index; carried in the save only because the
+     * sim is dumped wholesale (stale values re-roll within a second). */
+    TenantOccupants occupants[MAX_TENANTS];
 } GameSim;
 
 /* Initialize simulation */
@@ -769,6 +793,11 @@ int  game_retail_period(const GameSim *sim, const Tower *tower);
 int  game_retail_customer_in(GameSim *sim, Tower *tower, Tenant *t,
                              int walkin, int felt_wait);
 void game_retail_customer_out(Tenant *t);
+
+/* Re-roll in-tenant occupant sprites (AnimPeple): every tenant refreshes
+ * on a 16-frame cadence, staggered by index so the tower never twitches
+ * in sync ((day_clock + person_ref) % 16 in the EXE). */
+void game_animate_occupants(GameSim *sim, Tower *tower);
 
 /* A sick office worker seeks a medical center (UniPeple 1220:2b55 medical
  * path). Returns 0 = none found (adequacy cleared + nag), 1 = turned away

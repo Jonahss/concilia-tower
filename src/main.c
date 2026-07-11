@@ -2306,6 +2306,43 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
  * Real art: car sheets 0x8428/29/2A/2B (5 fullness frames, the 5th is the
  * red F "full" diamond), queue silhouettes 0x8468, engines at the sheet
  * tails. Frame choice = GetCarSprite (1090:221f). */
+/* In-tenant occupants (AnimPeple): the little people the sim rolled into
+ * each unit. Frame codes span the concatenated type-8 people band —
+ * sprite sheets 0x85E8..0x85EE, 16x24px frames, drawn in the lower
+ * 24px of the 36px floor exactly like the EXE's 24px slot-8 compositor. */
+static void render_occupants(void)
+{
+    static const struct { uint16_t id; int first, count; } BAND[] = {
+        { 0x85E8, 0x00, 30 }, { 0x85E9, 0x1E, 27 }, { 0x85EA, 0x39, 6 },
+        { 0x85EB, 0x3F, 10 }, { 0x85EC, 0x49, 7 },  { 0x85ED, 0x50, 16 },
+        { 0x85EE, 0x60, 3 },
+    };
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        TenantOccupants *o = &game.sim.occupants[i];
+        if (!o->count) continue;
+        Tenant *t = &game.tower.tenants[i];
+        for (int k = 0; k < o->count && k < OCCUPANTS_MAX; k++) {
+            int frame = o->frame[k];
+            Sprite *spr = NULL;
+            int fx = 0;
+            for (size_t b = 0; b < sizeof BAND / sizeof BAND[0]; b++) {
+                if (frame >= BAND[b].first &&
+                    frame < BAND[b].first + BAND[b].count) {
+                    spr = sprites_find(&game.sprites, BAND[b].id);
+                    fx = (frame - BAND[b].first) * 16;
+                    break;
+                }
+            }
+            if (!spr) continue;
+            int sx, sy;
+            grid_to_screen(t->floor, t->x + o->x[k], &sx, &sy);
+            SDL_Rect src = { fx, 0, 16, 24 };
+            SDL_Rect dst = { sx, sy + CELL_H - 24, 16, 24 };
+            SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+        }
+    }
+}
+
 static void render_people(void)
 {
     PeopleSim *ps = &game.sim.people;
@@ -4259,6 +4296,7 @@ static void render(void)
 
     render_sky();
     render_tower();
+    render_occupants();    /* interior people, under the hall/queue crowds */
     render_people();
     render_events();       /* fire/bomb effects ON TOP of the burning floors */
     render_medical();      /* medical-emergency marker over the affected floor */
@@ -5345,6 +5383,9 @@ int main(int argc, char *argv[])
 
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
+    /* the in-tenant people band (AnimPeple, 0x85E8-0x85EE) is white-keyed */
+    for (uint16_t id = 0x85E8; id <= 0x85EE; id++)
+        sprites_apply_white_key(&game.sprites, game.renderer, id);
     /* digit sheet background is the shaft's own near-black (as in OS) */
     sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS,
                             25, 25, 25);

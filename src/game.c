@@ -1123,9 +1123,11 @@ void game_update(GameSim *sim, Tower *tower)
     /* People + elevators run every tick — cars and queues are the game.
      * Exception: an armed bomb freezes the normal simulation (the EXE
      * swaps the per-frame person dispatch for the guard loop, 1090:0140). */
-    if (!(sim->event.active && sim->event.type == EVENT_BOMB))
+    if (!(sim->event.active && sim->event.type == EVENT_BOMB)) {
         people_update(&sim->people, tower, sim->frame, sim->time_of_day,
                       sim->hour, sim->reach_public, sim->reach_service);
+        game_animate_occupants(sim, tower);   /* frozen with the people */
+    }
 
     /* Sick-worker rolls: 1-in-10 of office arrivals at star>=3 seek the
      * medical center (UniPeple medical path; below star 3 nobody rolls). */
@@ -1841,6 +1843,156 @@ void game_retail_customer_out(Tenant *t)
     if (t && is_retail(t->type) && t->patrons_now > 0) t->patrons_now--;
 }
 
+/* ================================================================
+ * In-tenant occupant sprites (AnimPeple seg_1028, verified 2026-07-02)
+ * ================================================================
+ * The EXE ties these to real person records and their trip status
+ * (+5 <= 5 = "present"); the port keeps the same poses and cadences
+ * but decides presence from the unit's own state — a PORT PROXY,
+ * flagged per type below. All frame codes and fixed positions are the
+ * EXE's own randomizer constants. */
+
+/* Roaming x: rand % (width-1), so a 2-cell sprite never hangs off the
+ * right edge (the EXE reads the type table width; we use the strip's). */
+static int occ_roam(const Tenant *t)
+{
+    int w = t->width;
+    if (w < 3) w = 3;
+    return rand() % (w - 1);
+}
+
+static void occ_clamp(const Tenant *t, TenantOccupants *o)
+{
+    int maxx = t->width >= 2 ? t->width - 2 : 0;
+    for (int k = 0; k < o->count; k++)
+        if (o->x[k] > maxx) o->x[k] = (uint8_t)maxx;
+}
+
+/* AnimateOfficePeople 1028:0902 — 6 workers; layout fork on the decor
+ * variant (the same id%6 the renderer picks furniture with). */
+static void occ_roll_office(const Tenant *t, TenantOccupants *o)
+{
+    int variant = t->id % 6;
+    o->count = 6;
+    if (variant < 2) {
+        /* three desk-sitters at fixed positions (frames 0x0C-0x11) */
+        o->x[0] = (uint8_t)(variant + 1); o->frame[0] = (uint8_t)(0x0E + rand() % 2);
+        o->x[1] = (uint8_t)(variant + 2); o->frame[1] = (uint8_t)(0x10 + rand() % 2);
+        o->x[2] = (uint8_t)(variant + 3); o->frame[2] = (uint8_t)(0x0C + rand() % 2);
+    } else {
+        o->x[0] = 7;                      o->frame[0] = (uint8_t)(0x0A + rand() % 2);
+        int f1 = 6 + rand() % 4;
+        o->x[1] = (uint8_t)(f1 >= 8 ? 4 : occ_roam(t)); o->frame[1] = (uint8_t)f1;
+        int f2 = 2 + rand() % 4;
+        o->x[2] = (uint8_t)(f2 >= 4 ? 2 : occ_roam(t)); o->frame[2] = (uint8_t)f2;
+    }
+    o->x[3] = (uint8_t)occ_roam(t); o->frame[3] = (uint8_t)(rand() % 2);
+    o->x[4] = (uint8_t)occ_roam(t); o->frame[4] = (uint8_t)(0x14 + rand() % 4);
+    o->x[5] = (uint8_t)occ_roam(t); o->frame[5] = (uint8_t)(0x12 + rand() % 2);
+}
+
+/* AnimateCondoPeople 1028:0FEB — 3 residents. */
+static void occ_roll_condo(const GameSim *sim, const Tower *tower,
+                           const Tenant *t, TenantOccupants *o)
+{
+    int weekend = tower->day % 3 == 2;         /* 0xB3A0 */
+    int daytime = sim->hour < 17;              /* period < 4 */
+    int night = sim->time_of_day == TOD_NIGHT; /* [0x3218] lights-out */
+    o->count = 3;
+    o->x[0] = (uint8_t)occ_roam(t);
+    o->frame[0] = weekend ? 0x22 : daytime ? 0x1E
+                                           : (uint8_t)(0x20 + rand() % 2);
+    int f1 = 0x29 + rand() % 9;
+    o->x[1] = (uint8_t)(f1 == 0x31 ? 1 : occ_roam(t));  /* pose tied to
+                                             the condo's left end */
+    o->frame[1] = (uint8_t)f1;
+    o->x[2] = (uint8_t)occ_roam(t);
+    o->frame[2] = (uint8_t)(night ? 0x36 + rand() % 3   /* the dog band */
+                                  : 0x32 + rand() % 4);
+}
+
+/* AnimateHotelGuests 1028:12C5 — 2 sprites in singles, 3 in twin/suite. */
+static void occ_roll_hotel(const GameSim *sim, const Tenant *t,
+                           TenantOccupants *o)
+{
+    int daytime = sim->hour < 17;
+    int night = sim->time_of_day == TOD_NIGHT;
+    o->count = (t->type == ITEM_HOTEL_SINGLE) ? 2 : 3;
+    o->x[0] = (uint8_t)occ_roam(t);
+    o->frame[0] = (uint8_t)(0x60 + rand() % 3);
+    o->x[1] = (uint8_t)occ_roam(t);
+    o->frame[1] = (uint8_t)(daytime ? 0x50 + rand() % 2
+                                    : 0x52 + rand() % 9);
+    if (o->count == 3) {
+        o->x[2] = (uint8_t)occ_roam(t);
+        o->frame[2] = (uint8_t)((!daytime && night) ? 0x5F  /* asleep */
+                                                    : 0x5B + rand() % 4);
+    }
+}
+
+void game_animate_occupants(GameSim *sim, Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        if (((sim->frame + i) & 15) != 0) continue;   /* the EXE stagger */
+        Tenant *t = &tower->tenants[i];
+        TenantOccupants *o = &sim->occupants[i];
+        o->count = 0;
+
+        if (t->state == TENANT_CONSTRUCTION) {
+            /* every unit being built shows one worker (no presence check
+             * in the EXE either) */
+            o->count = 1;
+            o->x[0] = (uint8_t)occ_roam(t);
+            o->frame[0] = (uint8_t)(0x39 + rand() % 6);
+            occ_clamp(t, o);
+            continue;
+        }
+        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
+            continue;
+
+        switch (t->type) {
+        case ITEM_OFFICE:
+            /* PROXY: workers shown during office hours (EXE: per-person
+             * trip status) */
+            if (TENANT_ACTIVE_TIMES[ITEM_OFFICE][sim->time_of_day])
+                occ_roll_office(t, o);
+            break;
+        case ITEM_CONDO:
+            occ_roll_condo(sim, tower, t, o);
+            break;
+        case ITEM_HOTEL_SINGLE:
+        case ITEM_HOTEL_TWIN:
+        case ITEM_HOTEL_SUITE:
+            /* PROXY: guests shown while the room is hosted */
+            if (t->hosted) occ_roll_hotel(sim, t, o);
+            break;
+        case ITEM_FAST_FOOD:
+            /* AnimateFastFoodStaff: both behind the counter (left 3 cells);
+             * PROXY: staffed while the doors are open */
+            if (t->retail_open) {
+                o->count = 2;
+                o->x[0] = (uint8_t)(rand() % 3);
+                o->frame[0] = (uint8_t)(0x3F + rand() % 2);
+                o->x[1] = (uint8_t)(rand() % 3);
+                o->frame[1] = (uint8_t)(0x41 + rand() % 2);
+            }
+            break;
+        case ITEM_RESTAURANT:
+            if (t->retail_open) {
+                o->count = 2;
+                o->x[0] = (uint8_t)(rand() % 3);
+                o->frame[0] = (uint8_t)(0x49 + rand() % 3);
+                o->x[1] = (uint8_t)(rand() % 3);
+                o->frame[1] = (uint8_t)(0x4C + rand() % 4);
+            }
+            break;
+        default:
+            break;
+        }
+        occ_clamp(t, o);
+    }
+}
+
 /* Consume the people sim's retail-arrival feed (like game_venue_arrivals):
  * every customer who just reached a retail door goes through the
  * InRestPeple check and grades the venue's service. */
@@ -2434,7 +2586,8 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 8u   /* v8: retail patron economy in Tenant (service
+#define SAVE_VERSION 9u   /* v9: occupant sprites in GameSim (AnimPeple).
+                           * v8: retail patron economy in Tenant (service
                            * scores / quota / customer counters).
                            * v7: venue fields in Tenant (movie/show cycle).
                            * v6: GuardHunt in EventState (deterministic
