@@ -1041,9 +1041,12 @@ void game_update(GameSim *sim, Tower *tower)
         game_hotel_demand_pass(sim, tower);
     }
 
-    /* People + elevators run every tick — cars and queues are the game */
-    people_update(&sim->people, tower, sim->frame, sim->time_of_day,
-                  sim->reach_public, sim->reach_service);
+    /* People + elevators run every tick — cars and queues are the game.
+     * Exception: an armed bomb freezes the normal simulation (the EXE
+     * swaps the per-frame person dispatch for the guard loop, 1090:0140). */
+    if (!(sim->event.active && sim->event.type == EVENT_BOMB))
+        people_update(&sim->people, tower, sim->frame, sim->time_of_day,
+                      sim->reach_public, sim->reach_service);
 
     /* Sick-worker rolls: 1-in-10 of office arrivals at star>=3 seek the
      * medical center (UniPeple medical path; below star 3 nobody rolls). */
@@ -1768,6 +1771,8 @@ void game_offer_bomb(GameSim *sim, Tower *tower, int forced_floor)
            ev->ransom_cost, floor);
 }
 
+static void guard_hunt_deploy(GameSim *sim, Tower *tower);
+
 /* Player takes the free path: let the fire burn / send guards bomb-hunting.
  * Refusing the bomb is what ARMS it (TryStartEvent's refuse branch sets the
  * terror flag and the 1:00 PM trigger). */
@@ -1777,8 +1782,10 @@ void game_event_proceed(GameSim *sim, Tower *tower)
     EventState *ev = &sim->event;
     if (!ev->pending) return;
     ev->pending = 0;
-    if (ev->type == EVENT_BOMB)
+    if (ev->type == EVENT_BOMB) {
         ev->active = 1;                       /* detonates at 1PM unless caught */
+        guard_hunt_deploy(sim, tower);        /* GuardT 033d(1) */
+    }
 }
 
 /* Player pays: helicopters for a fire, the ransom for a bomb. */
@@ -1905,6 +1912,100 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
     }
 }
 
+/* Deploy the guard fleet (FUN_10f8_033d mode 1). Guards 0-2 take the
+ * office's floor, 3-5 the floor below; every office expands its own
+ * search bubble outward from there. */
+static void guard_hunt_deploy(GameSim *sim, Tower *tower)
+{
+    GuardHunt *h = &sim->event.hunt;
+    memset(h, 0, sizeof(*h));
+
+    int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+    tower_floor_extents(tower, left, right);
+
+    for (int i = 0; i < tower->tenant_count && h->noffices < GUARD_OFFICES_MAX; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_SECURITY || t->state == TENANT_ABANDONED) continue;
+        GuardOffice *o = &h->o[h->noffices++];
+        o->office = (uint16_t)(i + 1);
+        o->office_floor = (int8_t)t->floor;
+        o->claimed_up = (int8_t)t->floor;         /* guards 0-2 hold it */
+        o->claimed_down = (int8_t)(t->floor - 1); /* guards 3-5 hold it */
+        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+            GuardState *g = &o->g[gi];
+            g->below = gi >= 3;
+            g->floor = (int8_t)(g->below ? t->floor - 1 : t->floor);
+            int fi = floor_to_index(g->floor);
+            if (fi >= 0 && fi < TOWER_FLOOR_COUNT && right[fi] > left[fi])
+                g->x = (int16_t)(right[fi] - 2);
+            else
+                g->x = -1;    /* unbuilt start floor: pull the frontier now */
+        }
+    }
+    h->active = h->noffices > 0;
+}
+
+/* The next unsearched floor for a guard: preferred direction first (below
+ * guards expand down, the rest up), skipping unbuilt floors and a tall
+ * ground lobby's upper stories; both directions exhausted = retire.
+ * Returns the floor, or TOWER_MIN_FLOOR - 1 when done. */
+static int guard_next_floor(GuardOffice *o, const GuardState *g,
+                            const int16_t *left, const int16_t *right,
+                            int lobby_h)
+{
+    for (int attempt = 0; attempt < 2; attempt++) {
+        int down = (g->below != 0) ^ (attempt != 0);
+        for (;;) {
+            int f = down ? o->claimed_down - 1 : o->claimed_up + 1;
+            if (f < TOWER_MIN_FLOOR || f > TOWER_TOP_FLOOR) break;
+            if (down) o->claimed_down--; else o->claimed_up++;
+            if (f >= 2 && f <= lobby_h) continue;    /* lobby upper story */
+            int fi = floor_to_index(f);
+            if (right[fi] <= left[fi]) continue;     /* unbuilt */
+            return f;
+        }
+    }
+    return TOWER_MIN_FLOOR - 1;
+}
+
+/* One EXE frame of the hunt (EmergencyGuardLoop 1220:6764/67cf +
+ * GuardT sweep 10f8:0701, travel 10f8:104a). Returns 1 on a catch. */
+static int guard_hunt_step_frame(GameSim *sim, Tower *tower,
+                                 const int16_t *left, const int16_t *right)
+{
+    GuardHunt *h = &sim->event.hunt;
+    int lobby_h = game_lobby_height(tower);
+
+    for (int oi = 0; oi < h->noffices; oi++) {
+        GuardOffice *o = &h->o[oi];
+        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+            GuardState *g = &o->g[gi];
+            if (g->retired) continue;
+            if (g->transit > 0) { g->transit--; continue; }
+            if (g->pause > 0)   { g->pause--;   continue; }
+
+            int fi = floor_to_index(g->floor);
+            if (g->x >= 0 && fi >= 0 && fi < TOWER_FLOOR_COUNT && g->x > left[fi]) {
+                g->x--;
+                if (g->floor == sim->event.target_floor &&
+                    g->x == sim->event.target_slot)
+                    return 1;                          /* CAUGHT */
+                g->pause = GUARD_SWEEP_FRAMES - 1;
+            } else {
+                /* left edge (or unbuilt start): pull the frontier */
+                int f = guard_next_floor(o, g, left, right, lobby_h);
+                if (f < TOWER_MIN_FLOOR) { g->retired = 1; continue; }
+                int d = f - g->floor; if (d < 0) d = -d;
+                g->transit = (int16_t)(GUARD_FLOOR_FRAMES * d +
+                             (g->floor < o->office_floor ? GUARD_FLOOR_FRAMES : 0));
+                g->floor = (int8_t)f;
+                g->x = (int16_t)(right[floor_to_index(f)] - 2);
+            }
+        }
+    }
+    return 0;
+}
+
 void game_update_event(GameSim *sim, Tower *tower)
 {
     EventState *ev = &sim->event;
@@ -1912,20 +2013,33 @@ void game_update_event(GameSim *sim, Tower *tower)
     if (!ev->active) return;
 
     if (ev->type == EVENT_BOMB) {
-        /* Guards race the clock. The real GuardT pathing (guards walking
-         * from security offices to the target) isn't decoded yet — this
-         * stochastic stand-in keeps the race uncertain until it is. */
-        if (rand() % 200 == 0) {
-            ev->caught = 1;
-            ev->active = 0;
-            ev->type = EVENT_NONE;
-            printf("🛡️ Security caught the bomb on floor %d! Crisis averted.\n",
-                   ev->target_floor);
+        /* Detonation at 1:00 PM sharp (EXE frame 0x4B0), checked BEFORE
+         * guard movement — a guard can't catch it on the deadline frame. */
+        if (sim->hour >= 13) {
+            game_resolve_event(sim, tower);
             return;
         }
-        /* Detonation at 1:00 PM sharp (EXE frame 0x4B0). */
-        if (sim->hour >= 13)
-            game_resolve_event(sim, tower);
+        /* The deterministic sweep, paced in EXE frames like the fire
+         * (320 frames/game-hour before 1PM). */
+        int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+        tower_floor_extents(tower, left, right);
+        int ticks_per_hour = sim->ticks_per_quarter / 6;
+        if (ticks_per_hour < 1) ticks_per_hour = 1;
+        ev->hunt.frame_accum += 320;
+        while (ev->hunt.frame_accum >= ticks_per_hour) {
+            ev->hunt.frame_accum -= ticks_per_hour;
+            if (guard_hunt_step_frame(sim, tower, left, right)) {
+                ev->caught = 1;
+                ev->active = 0;
+                ev->type = EVENT_NONE;
+                ev->hunt.active = 0;
+                printf("🛡️ Security caught the bomb on floor %d! "
+                       "Crisis averted.\n", ev->target_floor);
+                /* (EXE also jumps the clock to 4PM here — EventCleanup
+                 * resets ft to 0x5DC; the port keeps its clock running.) */
+                return;
+            }
+        }
         return;
     }
 
@@ -1980,6 +2094,7 @@ void game_resolve_event(GameSim *sim, Tower *tower)
 
     ev->active = 0;
     ev->type = EVENT_NONE;
+    ev->hunt.active = 0;
 }
 
 void game_update_santa(GameSim *sim)
@@ -2008,7 +2123,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 5u   /* v5: medical adequacy (0xB92D lifecycle) +
+#define SAVE_VERSION 6u   /* v6: GuardHunt in EventState (deterministic
+                           * bomb sweep).
+                           * v5: medical adequacy (0xB92D lifecycle) +
                            * Tenant.patients_today.
                            * v4: standing_population (star checks read the
                            * time-independent count).

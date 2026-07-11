@@ -1368,6 +1368,63 @@ static void test_bomb_blast(void)
     CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
 }
 
+/* The bomb hunt (GuardT seg_10f8, byte-verified 2026-07-11): fully
+ * deterministic — guards sweep right-to-left, expanding floor by floor
+ * from their office; stepping onto the exact bomb cell = caught. */
+static void test_guard_hunt(void)
+{
+    printf("bomb hunt (deterministic guard sweep):\n");
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 5, 60);
+    for (int f = 4; f <= 6; f++)
+        for (int i = 0; i < 4; i++)
+            fplace(ITEM_OFFICE, f, 100 + i * 9);   /* extents [100,136) */
+
+    game_offer_bomb(&sim, &tw, 5);
+    CHECK(sim.event.pending, "bomb offer opens");
+    sim.event.target_slot = 110;                   /* pin the target */
+    game_event_proceed(&sim, &tw);
+    CHECK(sim.event.hunt.active && sim.event.hunt.noffices == 1,
+          "refusing the ransom deploys the office's guards");
+    {
+        GuardOffice *o = &sim.event.hunt.o[0];
+        CHECK(o->g[0].floor == 5 && o->g[3].floor == 4,
+              "guards 0-2 take the office floor, 3-5 the floor below");
+        CHECK(o->g[0].x == 134, "guards materialize at right extent - 2");
+    }
+    sim.hour = 10;
+    int caught_at = -1;
+    for (int t = 0; t < 100 && caught_at < 0; t++) {
+        game_update_event(&sim, &tw);
+        if (sim.event.caught) caught_at = t;
+    }
+    CHECK(caught_at >= 0, "sweep reaches the bomb cell - caught, no dice");
+    CHECK(!sim.event.active && !sim.event.hunt.active, "everyone stands down");
+
+    /* Same setup, but the guards are demolished away before the refusal:
+     * nobody hunts, and 1:00 PM detonates the bomb. */
+    fresh();
+    tw.star_rating = 3;
+    uint16_t sec = fplace(ITEM_SECURITY, 5, 60);
+    for (int i = 0; i < 4; i++) fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    uint16_t vic = fplace(ITEM_OFFICE, 5, 100);   /* dup id guard */
+    (void)vic;
+    game_offer_bomb(&sim, &tw, 5);
+    sim.event.target_slot = 110;
+    tenant(sec)->state = TENANT_ABANDONED;         /* office gone */
+    game_event_proceed(&sim, &tw);
+    CHECK(sim.event.active && sim.event.hunt.noffices == 0,
+          "no security office = nobody to hunt");
+    sim.hour = 10;
+    for (int t = 0; t < 50; t++) game_update_event(&sim, &tw);
+    CHECK(sim.event.active, "bomb still live before 1PM");
+    sim.hour = 13;
+    game_update_event(&sim, &tw);
+    CHECK(!sim.event.active && !sim.event.caught,
+          "1:00 PM sharp: detonation (checked before guard movement)");
+}
+
 /* Medical adequacy (MedicalT seg_1170, byte-verified 2026-07-10 referee):
  * cleared ONLY when a sick worker finds no center (own 15-floor band +
  * band-0 fallback both empty); a full center (40/day) turns patients away
@@ -1557,6 +1614,7 @@ int main(void)
     test_star_requirements();
     test_promotion_cadence();
     test_medical_adequacy();
+    test_guard_hunt();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

@@ -414,6 +414,48 @@ typedef enum {
 #define FIRE_END_FRAME      1760 /* ignition (10AM, ft 240) -> hard stop at ft 2000 = 9PM */
 #define FIRE_CHOPPER_COST   500000  /* helicopter response (0xDE14 = 5000, x$100) */
 
+/* --- The bomb hunt (GuardT seg_10f8, byte-verified 2026-07-11) ---
+ * Fully deterministic — no dice anywhere; only the bomb's location is
+ * random. Every security office (max 10) fields 6 guards who already
+ * exist as staff: on arming, guards 0-2 take the office's floor and 3-5
+ * the floor below, each office expanding its own search bubble outward,
+ * floor by floor. Guards don't use elevators — floor changes are a
+ * teleport with a 3-frames-per-floor transit delay (invisible in
+ * transit), landing at the floor's right extent - 2 and sweeping
+ * right-to-left at 1 cell per 2 EXE frames. Stepping onto the exact bomb
+ * cell = caught (CheckEventTarget 10c8:01c4 is exact equality). The
+ * normal people simulation freezes for the duration. Guards do NOT know
+ * the bomb's floor (the seeded-at-the-bomb path is dead 0xB3EA code) —
+ * placement and office count matter strictly and deterministically. */
+#define GUARDS_PER_OFFICE   6
+#define GUARD_OFFICES_MAX   10
+#define GUARD_SWEEP_FRAMES  2    /* 1 cell / 2 EXE frames (linger 0xDDCC=1) */
+#define GUARD_FLOOR_FRAMES  3    /* transit frames per floor (0xDDCE=3) */
+
+typedef struct {
+    int8_t  floor;      /* current floor */
+    int16_t x;          /* current cell (sweeping right->left) */
+    int16_t transit;    /* EXE frames until materialize; invisible if > 0 */
+    int8_t  pause;      /* frames until the next 1-cell step */
+    int8_t  below;      /* started below the office: expands downward first */
+    int8_t  retired;    /* both frontier directions exhausted */
+} GuardState;
+
+typedef struct {
+    uint16_t   office;        /* tenant id of the security office */
+    int8_t     office_floor;
+    int8_t     claimed_up;    /* highest floor already assigned */
+    int8_t     claimed_down;  /* lowest floor already assigned */
+    GuardState g[GUARDS_PER_OFFICE];
+} GuardOffice;
+
+typedef struct {
+    int         active;
+    int         frame_accum;  /* EXE-frame pacing, shared with the clock */
+    int         noffices;
+    GuardOffice o[GUARD_OFFICES_MAX];
+} GuardHunt;
+
 typedef struct {
     EventType type;
     int       active;
@@ -436,6 +478,7 @@ typedef struct {
     int16_t   fire_left[TOWER_FLOOR_COUNT];   /* leftmost burning cell, -1 = none */
     int16_t   fire_right[TOWER_FLOOR_COUNT];  /* right front cell (flames span +12) */
     int       chopper_x;       /* > 0: helicopter at this cell, flying left */
+    GuardHunt hunt;            /* the deterministic guard sweep (bomb only) */
 } EventState;
 
 /* --- Santa system (from SantaT seg_11b8) ---

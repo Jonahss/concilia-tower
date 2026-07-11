@@ -3742,6 +3742,23 @@ static void render_events(void)
             }
         }
     } else if (game.sim.event.type == EVENT_BOMB) {
+        /* The hunt: every materialized guard, sweeping right-to-left.
+         * Small dark-uniform figures; invisible while in floor transit. */
+        for (int oi = 0; oi < game.sim.event.hunt.noffices; oi++) {
+            const GuardOffice *o = &game.sim.event.hunt.o[oi];
+            for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+                const GuardState *g = &o->g[gi];
+                if (g->retired || g->transit > 0 || g->x < 0) continue;
+                int gx = lobby_sx + g->x * CELL_W;
+                int gy = lobby_sy - (g->floor * CELL_H);
+                SDL_SetRenderDrawColor(game.renderer, 20, 20, 120, 255);
+                SDL_Rect body = { gx + 2, gy + CELL_H - 12, 4, 10 };
+                SDL_RenderFillRect(game.renderer, &body);
+                SDL_SetRenderDrawColor(game.renderer, 230, 200, 160, 255);
+                SDL_Rect head = { gx + 3, gy + CELL_H - 15, 2, 3 };
+                SDL_RenderFillRect(game.renderer, &head);
+            }
+        }
         int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
         Sprite *al = game.alert_terror;
         if (al && al->texture) {
