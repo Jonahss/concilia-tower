@@ -1253,8 +1253,12 @@ static void render_tower(void)
                      * trash piles up then the truck clears it back to empty. */
                     frame_idx = (game.sim.frame / 96) % nframes;
                 } else if (tenant->type == ITEM_METRO && nframes >= 3) {
-                    /* Metro (Jonah): frames 0/1 ≈ daytime platform, 2 = night. */
-                    frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2 : 0;
+                    /* Metro: frame 0 = TRAIN at the platform (sheet 0x8C29,
+                     * eyeballed 2026-07-11), 1 = empty day, 2 = night. The
+                     * sim's 1%/tick toggle (DoRandomSubwayInOut) drives it
+                     * via venue_state — trains come and go, 10AM-5PM. */
+                    frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2
+                              : tenant->venue_state ? 0 : 1;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (retail_closes) {

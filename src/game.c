@@ -1979,6 +1979,20 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
         if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
             continue;
 
+        /* Metro train (DoRandomSubwayInOut 11e8:0273, byte-verified
+         * 2026-07-11): pure cosmetics — a 1%/tick present/absent toggle
+         * while 10AM-5PM, parked overnight empty. The port piggybacks
+         * on this 16-frame pass (1 - 0.99^16 ~ a 1-in-7 flip) and
+         * borrows venue_state (unused for metro) as "train in". */
+        if (t->type == ITEM_METRO) {
+            if (sim->hour >= 10 && sim->hour < 17) {
+                if (rand() % 7 == 0) t->venue_state = !t->venue_state;
+            } else {
+                t->venue_state = 0;
+            }
+            continue;
+        }
+
         switch (t->type) {
         case ITEM_OFFICE:
             /* PROXY: workers shown during office hours (EXE: per-person
