@@ -592,6 +592,7 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 /* ---------- trip planning (TryStartTrip port) ---------- */
 
 static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame);
+static int is_retail_kind(ItemType ty);
 
 static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int frame)
 {
@@ -656,6 +657,10 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         p->state = PERSON_FREE;
         return;
     }
+    /* Capture the felt wait BEFORE deliver_stress zeroes the accumulator —
+     * it grades the retail service score (Restaurant.c 11a8:1197). */
+    int felt = p->wait_accum - ps->lobby_bonus;
+    if (felt < 0) felt = 0;
     deliver_stress(ps, tower, p);
     /* Hotel guests checking in mark the room hosted (housekeeping loop)
      * and reset its neglect fuse — check-in is the ONLY thing that resets
@@ -675,6 +680,17 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         ps->venue_arrivals < (int)(sizeof ps->venue_arrival_tenant /
                                    sizeof ps->venue_arrival_tenant[0]))
         ps->venue_arrival_tenant[ps->venue_arrivals++] = p->home_tenant;
+    /* A customer at a retail door — queued for the InRestPeple pass
+     * (game_retail_arrivals): admission, customer count, service grade.
+     * Street walk-ins are the ones who entered at ground. */
+    if (t && !p->going_home && is_retail_kind(t->type) &&
+        ps->retail_arrivals < (int)(sizeof ps->retail_arrival_tenant /
+                                    sizeof ps->retail_arrival_tenant[0])) {
+        int a = ps->retail_arrivals++;
+        ps->retail_arrival_tenant[a] = p->home_tenant;
+        ps->retail_arrival_wait[a] = (uint16_t)(felt > 0xFFFF ? 0xFFFF : felt);
+        ps->retail_arrival_walkin[a] = (p->entry_floor == GROUND_IDX);
+    }
     p->state = PERSON_AT_DEST;
 }
 
@@ -968,33 +984,46 @@ static int depart_roll(int frame, int idx, int n)
     return (h % (uint32_t)n) == 0;
 }
 
-/* A commercial venue a visitor would come into the tower to patronise. */
-static int is_visit_venue(ItemType ty)
+static int is_retail_kind(ItemType ty)
 {
-    return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD ||
-           ty == ITEM_CINEMA || ty == ITEM_PARTY_HALL;
+    return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD;
 }
 
-/* True if a tenant is an occupied venue people can actually reach. */
-static int venue_reachable(const Tenant *t, const uint8_t *reach)
+/* Pick a same-kind retail venue for a customer on `floor` — the EXE's
+ * PickRestaurant (11a8:12dc): uniform random over the 15-floor zone's
+ * venues of that kind, falling back to the ground zone, and THEN the
+ * validity check — a closed pick fails the whole attempt, no re-roll.
+ * This selection IS the competition mechanic: more same-kind venues in a
+ * zone = fewer expected customers each. Returns NULL on a failed attempt. */
+static Tenant *pick_retail(Tower *tower, ItemType kind, int floor, int seed,
+                           const uint8_t *reach)
 {
-    if (t->state != TENANT_OCCUPIED || !is_visit_venue(t->type)) return 0;
-    int f = floor_to_index(t->floor);
-    return f >= 0 && f < TOWER_FLOOR_COUNT && reach[f];
-}
-
-/* Deterministically pick the seed-th reachable commercial venue (so metro
- * visitors fan out across shops/restaurants/cinemas instead of mobbing one). */
-static Tenant *pick_visit_venue(Tower *tower, int seed, const uint8_t *reach)
-{
-    int n = 0;
-    for (int i = 0; i < tower->tenant_count; i++)
-        if (venue_reachable(&tower->tenants[i], reach)) n++;
-    if (!n) return NULL;
-    int pick = ((seed % n) + n) % n, k = 0;
-    for (int i = 0; i < tower->tenant_count; i++)
-        if (venue_reachable(&tower->tenants[i], reach) && k++ == pick)
-            return &tower->tenants[i];
+    int zone = floor_to_zone(floor);
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            if (zone == 0) return NULL;    /* ground zone already searched */
+            zone = 0;
+        }
+        int n = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == kind && t->state == TENANT_OCCUPIED &&
+                floor_to_zone(t->floor) == zone) n++;
+        }
+        if (!n) continue;                  /* empty zone -> ground fallback */
+        int pick = ((seed % n) + n) % n, k = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == kind && t->state == TENANT_OCCUPIED &&
+                floor_to_zone(t->floor) == zone && k++ == pick) {
+                int f = floor_to_index(t->floor);
+                if (!t->retail_open) return NULL;   /* closed pick = fail */
+                if (f < 0 || f >= TOWER_FLOOR_COUNT || !reach[f]) return NULL;
+                return t;
+            }
+        }
+        return NULL;
+    }
     return NULL;
 }
 
@@ -1026,12 +1055,13 @@ static int parking_entry_floor(Tower *tower, const uint8_t *reach)
  *   MORNING: office workers arrive       EVENING: they go home
  *   EVENING: hotel guests check in       DAWN:    they check out */
 static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
-                        const uint8_t *reach_public)
+                        int hour, const uint8_t *reach_public)
 {
     int park = parking_entry_floor(tower, reach_public);
     if ((uint8_t)tod != ps->cur_phase) {
         ps->cur_phase = (uint8_t)tod;
         memset(ps->spawned, 0, sizeof(ps->spawned));
+        memset(ps->dinner_sent, 0, sizeof(ps->dinner_sent));
         /* flip people already at their destination into the new phase */
         for (int i = 0; i < ps->people_high; i++) {
             Person *p = &ps->people[i];
@@ -1062,10 +1092,25 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING) ||
                       (item_is_hotel_room(t->type) && tod == TOD_EVENING &&
                        t->open_for_booking);
-        /* venue patrons: lunch/shopping crowd, then the evening crowd */
-        int patron = ((t->type == ITEM_FAST_FOOD || t->type == ITEM_SHOP) &&
-                      tod == TOD_AFTERNOON) ||
-                     (t->type == ITEM_RESTAURANT && tod == TOD_EVENING);
+
+        /* Retail walk-ins: the venue's own street pool, gated by today's
+         * quota (Restaurant.c: quota gate 10b3 counts down at dispatch).
+         * Windows and pacing per the 2026-07-11 referee: FF/shops trickle
+         * 10AM-5PM and rush 5-9PM; restaurants 5-9PM, then the stragglers
+         * pour in until 11PM. */
+        int walkin = 0;
+        if (is_retail_kind(t->type) && t->retail_open &&
+            t->retail_quota > 0) {
+            int roll = 0;
+            if (t->type == ITEM_RESTAURANT)
+                roll = (hour >= 17 && hour < 21) ? 12
+                     : (hour >= 21 && hour < 23) ? 4 : 0;
+            else
+                roll = (hour >= 10 && hour < 17) ? 32
+                     : (hour >= 17 && hour < 21) ? 8 : 0;
+            if (roll && depart_roll(frame, i, roll)) walkin = 1;
+        }
+
         /* show venues draw a quota-sized crowd per showing (VenueT summons
          * 56-person pools; the daily quotas do the real gating): cinemas
          * fill the matinee through the afternoon and the evening show after
@@ -1076,14 +1121,17 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                      : (tod == TOD_EVENING)   ? t->quota_evening : 0;
         else if (t->type == ITEM_PARTY_HALL)
             show_cap = (tod == TOD_EVENING) ? t->quota_evening : 0;
-        if (show_cap > 0) patron = 1;
+        int patron = show_cap > 0;
         /* housekeepers ride the service net to dirty rooms each dawn */
         int staff = t->type == ITEM_HOUSEKEEPING &&
                     (tod == TOD_DAWN || tod == TOD_MORNING);
-        if (!inbound && !patron && !staff) continue;
-        if (ps->spawned[i] >= (show_cap > 0 ? show_cap : tenant_commuters(t)))
-            continue;
-        if (!depart_roll(frame, i, 8)) continue;   /* irregular trickle (EXE dice) */
+        if (!inbound && !patron && !staff && !walkin) continue;
+        if (!walkin) {
+            if (ps->spawned[i] >=
+                (show_cap > 0 ? show_cap : tenant_commuters(t)))
+                continue;
+            if (!depart_roll(frame, i, 8)) continue;  /* irregular trickle */
+        }
         int fidx = floor_to_index(t->floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
 
@@ -1110,48 +1158,105 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             ps->people[sp - 1].entry_floor = (uint8_t)entry;
             if (patron)
                 ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
-            ps->spawned[i]++;
+            if (walkin) {
+                ps->people[sp - 1].stay = (uint8_t)(8 + (i * 5) % 12);
+                t->retail_quota--;         /* the dispatch gate (+6) */
+            } else {
+                ps->spawned[i]++;
+            }
         }
     }
 
-    /* Metro: the tower's visitor source. Each reachable metro pumps outside
-     * visitors up to the commercial venues through the day; they patronise a
-     * shop/restaurant/cinema, then ride back down and leave through the metro.
-     * This is the bulk of a tower's foot traffic — without a metro, venues see
-     * only the trickle that walks in off the street (the GROUND patrons above). */
-    if (tod != TOD_NIGHT) {
-        for (int i = 0; i < tower->tenant_count; i++) {
-            Tenant *m = &tower->tenants[i];
-            if (m->type != ITEM_METRO || m->state != TENANT_OCCUPIED) continue;
-            if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
-            if (!depart_roll(frame, i, 6)) continue;  /* irregular trickle (EXE dice) */
-            int mf = floor_to_index(m->floor);
-            if (mf < 0 || mf >= TOWER_FLOOR_COUNT || !reach_public[mf]) continue;
-            Tenant *v = pick_visit_venue(tower, frame + i, reach_public);
-            if (!v) continue;                          /* nowhere reachable yet */
-            int vf = floor_to_index(v->floor);
-            if (vf < 0 || vf >= TOWER_FLOOR_COUNT) continue;
-            /* home = the venue (its floor anchors the visit); enter & leave
-             * via the metro floor rather than the street. */
-            int sp = spawn_person(ps, tower, v, mf, vf, 0);
-            if (sp) {
-                Person *np = &ps->people[sp - 1];
-                np->stay = (uint8_t)(4 + (i * 3) % 10);
-                np->entry_floor = (uint8_t)mf;
-                ps->spawned[i]++;
+    /* --- External retail customers (the four decoded flows). Each one
+     * spawns a real person whose trip rides the real elevators; their
+     * arrival grades the venue's service score. They leave through the
+     * floor they came from (entry_floor). --- */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->state != TENANT_OCCUPIED) continue;
+        int fidx = floor_to_index(t->floor);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+
+        Tenant *v = NULL;
+        int seed = frame * 31 + i;
+
+        if (t->type == ITEM_OFFICE) {
+            /* Office lunch rush (UniPeple 1220:2288): workers 1..5 of
+             * each office hit a FASTFOOD in their zone, noon-5PM,
+             * weekdays only — offices never patronize restaurants. */
+            if (ps->sched_day || hour < 12 || hour >= 17) continue;
+            if (ps->spawned[i] >= 5 || !depart_roll(frame, i, 12)) continue;
+            v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
+                            reach_public);
+            if (v) ps->spawned[i]++;
+        } else if (item_is_hotel_room(t->type)) {
+            /* Hotel dinners (1220:382c): guests of EVEN tenant slots go
+             * out for a RESTAURANT dinner, 5-9PM, once per stay. */
+            if (!t->hosted || (i & 1) || hour < 17 || hour >= 21) continue;
+            if (ps->dinner_sent[i >> 3] & (1 << (i & 7))) continue;
+            if (!depart_roll(frame, i, 6)) continue;
+            v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
+                            reach_public);
+            if (v) ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
+        } else if (t->type == ITEM_CONDO) {
+            /* Condo excursions (1220:3a1a): weekdays a shopping trip
+             * after 10AM; weekends every 4th condo dines out 5-9PM and
+             * the rest grab fast food on the daytime schedule. */
+            if (ps->spawned[i] >= 2) continue;
+            if (!ps->sched_day) {
+                if (hour < 10 || hour >= 21 || !depart_roll(frame, i, 24))
+                    continue;
+                v = pick_retail(tower, ITEM_SHOP, t->floor, seed,
+                                reach_public);
+            } else if ((i & 3) == 0) {
+                if (hour < 17 || hour >= 21 || !depart_roll(frame, i, 6))
+                    continue;
+                v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
+                                reach_public);
+            } else {
+                if (hour < 10 || hour >= 17 || !depart_roll(frame, i, 24))
+                    continue;
+                v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
+                                reach_public);
             }
+            if (v) ps->spawned[i]++;
+        } else if (t->type == ITEM_METRO) {
+            /* Metro visitors (1220:51dc): outside traffic, 10AM-5PM, a
+             * random retail KIND in the GROUND zone. */
+            if (hour < 10 || hour >= 17) continue;
+            if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
+            if (!depart_roll(frame, i, 6)) continue;
+            if (!reach_public[fidx]) continue;
+            static const ItemType KINDS[3] =
+                { ITEM_RESTAURANT, ITEM_FAST_FOOD, ITEM_SHOP };
+            v = pick_retail(tower, KINDS[(seed >> 4) % 3], 0, seed,
+                            reach_public);
+            if (v) ps->spawned[i]++;
+        } else {
+            continue;
+        }
+        if (!v) continue;                  /* failed attempt — no re-roll */
+        int vf = floor_to_index(v->floor);
+        if (vf < 0 || vf >= TOWER_FLOOR_COUNT) continue;
+        /* home = the venue (anchors the visit + arrival grading); they
+         * enter and leave through their own floor. */
+        int sp = spawn_person(ps, tower, v, fidx, vf, 0);
+        if (sp) {
+            Person *np = &ps->people[sp - 1];
+            np->stay = (uint8_t)(8 + (i * 3) % 10);   /* min-stay ~60fr */
+            np->entry_floor = (uint8_t)fidx;
         }
     }
 }
 
 /* ---------- main tick ---------- */
 
-void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
+void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                    const uint8_t *reach_public, const uint8_t *reach_service)
 {
     (void)reach_service;
 
-    spawn_phase(ps, tower, frame, tod, reach_public);
+    spawn_phase(ps, tower, frame, tod, hour, reach_public);
 
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
@@ -1200,6 +1305,9 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (p->stay && (frame + i) % 8 == 0 && --p->stay == 0) {
                 Tenant *ht = tower_tenant(tower, p->home_tenant);
                 int hf = ht ? floor_to_index(ht->floor) : -1;
+                /* a retail patron heading out (OutRestPeple) */
+                if (ht && is_retail_kind(ht->type))
+                    game_retail_customer_out(ht);
                 p->going_home = 1;
                 p->dest_floor = (p->service && hf >= 0) ? (uint8_t)hf
                                                         : p->entry_floor;

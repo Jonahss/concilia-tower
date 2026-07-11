@@ -230,6 +230,23 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
         if (!rt) FAILF("truncated in retail block");
         memcpy(tower->twr_retail, rt, 0x2400);
     }
+    /* Live retail-economy fields ride in the record (2026-07-11 referee:
+     * +2 state, +3/4/5 service scores, +6 quota, +7 walk-ins admitted,
+     * +9 patrons inside, +0x10 customers today) — real 1995 saves carry
+     * each venue's service history, so imported towers keep it. */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (!t->retail_ref) continue;
+        const uint8_t *e = tower->twr_retail + (t->retail_ref - 1) * 18;
+        t->retail_score[0] = e[3];
+        t->retail_score[1] = e[4];
+        t->retail_score[2] = e[5];
+        t->retail_quota    = e[6];
+        t->walkins_today   = e[7];
+        t->patrons_now     = e[9];
+        t->retail_open     = (e[2] != 3 && e[2] != 0xFF);
+        t->customers_today = (uint16_t)(e[0x10] | (e[0x11] << 8));
+    }
 
     /* === elevator groups (24) === */
     struct {
@@ -559,6 +576,27 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             break;
         }
         if (!t->retail_ref) EFAIL("retail table full (256 slots)");
+    }
+    /* Sync the live retail economy back into the records (the inverse of
+     * the import read; state 0xFF = un-let shop slot is preserved). */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (!t->retail_ref) continue;
+        if (t->type != ITEM_RESTAURANT && t->type != ITEM_SHOP &&
+            t->type != ITEM_FAST_FOOD) continue;
+        uint8_t *e = tower->twr_retail + (t->retail_ref - 1) * 18;
+        if (e[2] != 0xFF)
+            e[2] = !t->retail_open       ? 3
+                 : t->patrons_now >= 10  ? 2
+                 : t->patrons_now >= 1   ? 1 : 0;
+        e[3] = t->retail_score[0];
+        e[4] = t->retail_score[1];
+        e[5] = t->retail_score[2];
+        e[6] = t->retail_quota;
+        e[7] = t->walkins_today;
+        e[9] = t->patrons_now;
+        e[0x10] = (uint8_t)(t->customers_today & 0xFF);
+        e[0x11] = (uint8_t)(t->customers_today >> 8);
     }
     int retail_used = 0;
     for (int s = 0; s < 512; s++) {

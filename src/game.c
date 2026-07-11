@@ -491,17 +491,13 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 /* Advance capacity animation (3-phase daily cycle) */
                 update_capacity(t, sim->time_of_day, reachable);
                 
-                /* Per-tick income is only the venue-sales approximations
-                 * (restaurants/fast food) — real RENT is event-driven:
-                 * offices/shops bank quarterly lumps at the settlement,
-                 * hotels at checkout, condos at the move-in sale
-                 * (income cadence byte-verified 2026-07-11). */
+                /* Per-tick income is now ONLY the parking approximation —
+                 * every other income is event-driven: offices/shops bank
+                 * quarterly lumps, hotels at checkout, condos at move-in,
+                 * cinemas/party halls at show close, restaurants/fast
+                 * food at their nightly settle (all byte-verified). */
                 int base_income = (type_idx < ITEM_TYPE_COUNT)
                                     ? TENANT_INCOME[type_idx] : 0;
-
-                /* Retail customer competition: clustering same-type retail in a
-                 * zone dilutes each one's revenue (see game_retail_income). */
-                base_income = game_retail_income(sim, t, base_income);
 
                 /* Rent scales with established occupancy (cap_peak): a thriving,
                  * grown office (0x40) pays ~2× a fresh one (0x20); an upgraded
@@ -1048,7 +1044,7 @@ void game_clock_jump(GameSim *sim, Tower *tower, int hour)
     int now = sim->quarter * sim->ticks_per_quarter + sim->tick;
     if (target <= now) return;              /* never jump backward */
     int tq = target / sim->ticks_per_quarter;
-    while (sim->quarter < tq) {
+    while ((int)sim->quarter < tq) {
         sim->quarter++;
         quarter_closeout(sim, tower);
     }
@@ -1088,6 +1084,7 @@ void game_update(GameSim *sim, Tower *tower)
      * game_check_promotion picks WHICH hours a 3->4/4->5 can land on. */
     if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0) {
         game_venue_hourly(sim, tower);
+        game_retail_hourly(sim, tower);
 
         /* 7AM: MedicalDailyTick re-arms adequacy at star>=3 and the
          * patient-per-day counters start fresh (cap 40/center/day). */
@@ -1128,7 +1125,7 @@ void game_update(GameSim *sim, Tower *tower)
      * swaps the per-frame person dispatch for the guard loop, 1090:0140). */
     if (!(sim->event.active && sim->event.type == EVENT_BOMB))
         people_update(&sim->people, tower, sim->frame, sim->time_of_day,
-                      sim->reach_public, sim->reach_service);
+                      sim->hour, sim->reach_public, sim->reach_service);
 
     /* Sick-worker rolls: 1-in-10 of office arrivals at star>=3 seek the
      * medical center (UniPeple medical path; below star 3 nobody rolls). */
@@ -1140,6 +1137,7 @@ void game_update(GameSim *sim, Tower *tower)
     }
     sim->people.office_arrivals = 0;
     game_venue_arrivals(sim, tower);
+    game_retail_arrivals(sim, tower);
 
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
@@ -1385,29 +1383,6 @@ void game_calc_zones(GameSim *sim, Tower *tower)
     }
 }
 
-/* Retail customer competition (JudgeT seg_11a8 zone model): same-type retail
- * in a 15-floor zone share a limited customer pool, so clustering past the
- * comfortable count dilutes each one's revenue — "variety thrives, clones
- * starve." Returns base_income scaled by threshold/count when over-clustered;
- * unchanged for a well-spread tower (count <= threshold). Fast food is exempt
- * (JudgeT: fast food never goes unsatisfied). Relies on sim->zones, refreshed
- * by game_calc_zones every 120 ticks. */
-int game_retail_income(const GameSim *sim, const Tenant *t, int base_income)
-{
-    if (base_income <= 0) return base_income;
-    int z = floor_to_zone(t->floor);
-    int cnt = 0, thresh = 0;
-    if (t->type == ITEM_RESTAURANT) {
-        cnt = sim->zones[z].restaurant_count; thresh = ZONE_MAX_RESTAURANTS;
-    } else if (t->type == ITEM_SHOP) {
-        cnt = sim->zones[z].shop_count;       thresh = ZONE_MAX_SHOPS;
-    }
-    if (thresh > 0 && cnt > thresh)
-        return base_income * thresh / cnt;
-    return base_income;
-}
-
-
 /* Starting persistent peak for a freshly-built unit (TenantMake MakeTenant:
  * sets the capacity byte by type and star level). Offices begin at the bottom
  * tier and grow; hotels/suites begin at their star-scaled room occupancy. */
@@ -1491,24 +1466,19 @@ void game_judge_tenants(GameSim *sim, Tower *tower)
         int z = floor_to_zone(t->floor);
         ZoneData *zd = &sim->zones[z];
         int stress_add = 0;
-        
-        /* Zone competition stress — from JudgeT annotation */
+
+        /* Retail zone-competition stress REMOVED (2026-07-11 referee):
+         * it was an invention. Real competition is emergent — customers
+         * pick one random same-kind venue per zone, so clustering thins
+         * each venue's customers and the nightly income ladder does the
+         * punishing. (Also: it's SHOPS whose satisfaction is pinned 0 in
+         * the EXE — they earn rent, not patron sales — not fast food;
+         * the old comment repeated a type-ID swap.) */
         switch (t->type) {
-        case ITEM_RESTAURANT:
-            if (zd->restaurant_count > ZONE_MAX_RESTAURANTS)
-                stress_add += (zd->restaurant_count - ZONE_MAX_RESTAURANTS) * 5;
-            break;
-        case ITEM_FAST_FOOD:
-            /* Fast food never gets unsatisfied (from JudgeT: returns 0) */
-            break;
-        case ITEM_SHOP:
-            if (zd->shop_count > ZONE_MAX_SHOPS)
-                stress_add += (zd->shop_count - ZONE_MAX_SHOPS) * 3;
-            break;
         case ITEM_OFFICE:
             /* Offices don't compete by zone, but overcrowding matters */
-            if (zd->office_count > 8)
-                stress_add += (zd->office_count - 8) * 2;
+            if (zd->office_count > ZONE_MAX_OFFICES)
+                stress_add += (zd->office_count - ZONE_MAX_OFFICES) * 2;
             break;
         default: break;
         }
@@ -1716,6 +1686,173 @@ void game_venue_arrivals(GameSim *sim, Tower *tower)
         }
     }
     sim->people.venue_arrivals = 0;
+}
+
+/* ================================================================
+ * Retail patron economy (Restaurant.c seg_11a8 + MoneyT 1178:126c,
+ * byte-verified 2026-07-11 referee)
+ * ================================================================
+ * The daily cycle: fast food and shops open at 10AM, restaurants at
+ * 5PM. Opening sets the day's walk-in quota from yesterday's service
+ * score — clamp(score, 10, cap), where the cap depends on the period
+ * class (rainy > weekend > weekday; weekend reads max(wd, we) score).
+ * Fast food and shops close at 9PM, restaurants at 11PM. Closing banks
+ * the ONE daily income event for restaurants and fast food, a 4-tier
+ * ladder on the day's customer count where the bottom tier is a LOSS
+ * — a venue that never fills bleeds cash until demolished (they can
+ * never move out; JudgeT's move-out handles only office/condo/shop).
+ * Shops book nothing at close (quarterly rent instead). All venue
+ * income is suppressed on bomb (day%60==59) and fire (day%84==83)
+ * offer days. */
+
+/* Walk-in quota caps (tuning res 0x7F05: 0xDDA6../0xDD98../0xDDB2..) */
+static int retail_quota_cap(ItemType type, int period)
+{
+    static const int food[3] = { 35, 50, 25 };   /* wd / we / rainy */
+    static const int shop[3] = { 25, 30, 18 };
+    return (type == ITEM_SHOP) ? shop[period] : food[period];
+}
+
+/* Period class (GetTimePeriod 11a8:17eb): 2 rainy > 1 weekend > 0 weekday.
+ * The rainy day is the every-8th-day flag (day%8==4) armed only below
+ * 5 stars ([0xB3E4]; its "rain" identity is MEDIUM confidence — the
+ * period selection itself is byte-verified). Weekend is the EXE's
+ * DAY-based flag 0xB3A0 = ((day%12)%3) >= 2, i.e. every 3rd day — NOT
+ * the port's quarter-of-day slice, which never overlaps business hours
+ * (that quarter/day-type tangle is a queued time-model question). */
+int game_retail_period(const GameSim *sim, const Tower *tower)
+{
+    (void)sim;
+    if (tower->day % 8 == 4 && tower->star_rating < 5) return 2;
+    if (tower->day % 3 == 2) return 1;
+    return 0;
+}
+
+/* The daily income ladder (MoneyT 1178:126c; values are tuning words
+ * 0xDDDC-0xDDEA, x$100). Signed: the bottom tier subtracts. */
+static int retail_income_tier(ItemType type, int customers)
+{
+    if (type == ITEM_RESTAURANT)
+        return customers >= 50 ? 10000 : customers >= 35 ? 6000
+             : customers >= 25 ?  4000 : -6000;
+    if (type == ITEM_FAST_FOOD)
+        return customers >= 50 ? 5000 : customers >= 35 ? 3000
+             : customers >= 25 ? 2000 : -3000;
+    return 0;                                    /* shops: quarterly rent */
+}
+
+static int is_retail(ItemType ty)
+{
+    return ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD || ty == ITEM_SHOP;
+}
+
+static void retail_open_one(GameSim *sim, Tower *tower, Tenant *t)
+{
+    int period = game_retail_period(sim, tower);
+    int score = t->retail_score[period];
+    /* Weekends read the better of the weekday/weekend scores. */
+    if (period == 1 && t->retail_score[0] > score) score = t->retail_score[0];
+    int cap = retail_quota_cap(t->type, period);
+    int quota = score < 10 ? 10 : score > cap ? cap : score;
+
+    t->retail_open = 1;
+    t->retail_quota = (uint8_t)quota;
+    t->retail_score[period] = 0;      /* today's grades start fresh */
+    t->walkins_today = 0;
+    t->patrons_now = 0;
+    t->customers_today = 0;
+}
+
+static void retail_close_one(GameSim *sim, Tower *tower, Tenant *t)
+{
+    t->retail_open = 0;
+    t->patrons_now = 0;
+    if (t->type == ITEM_SHOP) return;
+    /* Disaster-offer days suppress ALL venue income (1178:1283-12af —
+     * the only uses of day%60 / day%84 outside the event scheduler). */
+    if (tower->day % 60 == 59 || tower->day % 84 == 83) return;
+    int amount = retail_income_tier(t->type, t->customers_today);
+    tower->money += amount;
+    if (amount >= 0) sim->income_this_quarter += amount;
+    else             sim->expenses_this_quarter += -amount;
+    if (amount < 0)
+        printf("💸 %s on F%d lost $%d today (%d customers)\n",
+               tower_item_name(t->type), t->floor, -amount,
+               t->customers_today);
+}
+
+/* The hourly rows (TimeT: ft 240 / 1600 / 2000 / 2200). */
+void game_retail_hourly(GameSim *sim, Tower *tower)
+{
+    int h = sim->hour;
+    if (h != 10 && h != 17 && h != 21 && h != 23) return;
+    long banked = 0;
+    int closed_n = 0, cust = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (!is_retail(t->type)) continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION ||
+            t->state == TENANT_ABANDONED) continue;
+        int is_rest = t->type == ITEM_RESTAURANT;
+        if ((h == 10 && !is_rest) || (h == 17 && is_rest))
+            retail_open_one(sim, tower, t);
+        else if ((h == 21 && !is_rest) || (h == 23 && is_rest)) {
+            long before = tower->money;
+            cust += t->customers_today;
+            retail_close_one(sim, tower, t);
+            banked += tower->money - before;
+            closed_n++;
+        }
+    }
+    if (closed_n)
+        printf("🍽️ %dPM close: %d venue%s, %d customers, net $%ld\n",
+               h - 12, closed_n, closed_n == 1 ? "" : "s", cust, banked);
+}
+
+/* A customer at the door (InRestPeple 11a8:0cc2). Returns 0 admitted,
+ * 1 bounced (closed), 2 refused (full house, 40 inside). The EXE counts
+ * walk-ins at dispatch and rolls back failed trips; the port counts
+ * everyone at the door — same net, minus people stuck in a queue at
+ * close. `walkin` marks the venue's own pool for the +7 counter. */
+int game_retail_customer_in(GameSim *sim, Tower *tower, Tenant *t,
+                            int walkin, int felt_wait)
+{
+    if (!t || !is_retail(t->type)) return 1;
+    if (!t->retail_open) return 1;
+    if (t->patrons_now >= 40) return 2;
+    t->patrons_now++;
+    if (t->customers_today < 0xFFFF) t->customers_today++;
+    if (walkin && t->walkins_today < 0xFF) t->walkins_today++;
+    /* Service grading (11a8:1197): the arrival's banked elevator wait
+     * feeds the current period's score — tomorrow's quota. The second
+     * bar is the star-scaled word the hotel demand pass also reads. */
+    int period = game_retail_period(sim, tower);
+    int bar2 = tower->star_rating >= 4 ? 200 : 150;   /* [0xDD78] */
+    int add = felt_wait < 80 ? 2 : felt_wait < bar2 ? 1 : 0;
+    int cap = retail_quota_cap(t->type, period);
+    int ns = t->retail_score[period] + add;
+    t->retail_score[period] = (uint8_t)(ns > cap ? cap : ns);
+    return 0;
+}
+
+/* A patron heading home (OutRestPeple). */
+void game_retail_customer_out(Tenant *t)
+{
+    if (t && is_retail(t->type) && t->patrons_now > 0) t->patrons_now--;
+}
+
+/* Consume the people sim's retail-arrival feed (like game_venue_arrivals):
+ * every customer who just reached a retail door goes through the
+ * InRestPeple check and grades the venue's service. */
+void game_retail_arrivals(GameSim *sim, Tower *tower)
+{
+    for (int a = 0; a < sim->people.retail_arrivals; a++) {
+        Tenant *t = tower_tenant(tower, sim->people.retail_arrival_tenant[a]);
+        game_retail_customer_in(sim, tower, t,
+                                sim->people.retail_arrival_walkin[a],
+                                sim->people.retail_arrival_wait[a]);
+    }
+    sim->people.retail_arrivals = 0;
 }
 
 /* --- Medical adequacy (MedicalT seg_1170, byte-verified 2026-07-10) ---
@@ -2297,7 +2434,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 7u   /* v7: venue fields in Tenant (movie/show cycle).
+#define SAVE_VERSION 8u   /* v8: retail patron economy in Tenant (service
+                           * scores / quota / customer counters).
+                           * v7: venue fields in Tenant (movie/show cycle).
                            * v6: GuardHunt in EventState (deterministic
                            * bomb sweep).
                            * v5: medical adequacy (0xB92D lifecycle) +

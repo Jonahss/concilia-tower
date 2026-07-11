@@ -218,6 +218,20 @@ typedef struct {
      * consumed by the venue pass (game.c) for attendance counting. */
     uint16_t venue_arrival_tenant[32];
     int      venue_arrivals;
+
+    /* Customers who just reached a restaurant / fast food / shop —
+     * consumed by game_retail_arrivals (InRestPeple semantics). wait =
+     * the felt elevator wait that grades the venue's service score;
+     * walkin = the venue's own street pool (entered at ground). */
+    uint16_t retail_arrival_tenant[64];
+    uint16_t retail_arrival_wait[64];
+    uint8_t  retail_arrival_walkin[64];
+    int      retail_arrivals;
+
+    /* One dinner excursion per hosted room per evening (UniPeple sets
+     * the "wants dinner" status ONCE at check-in). One bit per tenant,
+     * cleared with the phase reset. */
+    uint8_t  dinner_sent[MAX_TENANTS / 8];
 } PeopleSim;
 
 void people_init(PeopleSim *ps);
@@ -227,8 +241,9 @@ void people_init(PeopleSim *ps);
 void people_rebuild_transport(PeopleSim *ps, Tower *tower);
 
 /* One simulation tick: spawning, trips, queues, cars, stress delivery.
- * frame = global tick counter, tod = TimeOfDay (game.h value). */
-void people_update(PeopleSim *ps, Tower *tower, int frame, int tod,
+ * frame = global tick counter, tod = TimeOfDay (game.h value), hour =
+ * the clock hour (the retail windows are finer than time-of-day). */
+void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                    const uint8_t *reach_public, const uint8_t *reach_service);
 
 /* Join the waiting queue at a stop (exposed for tests).

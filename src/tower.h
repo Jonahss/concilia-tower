@@ -340,6 +340,22 @@ typedef struct {
     uint8_t  quota_evening;
     uint16_t patrons_today;    /* total admitted today -> the income tier */
 
+    /* --- Retail patron economy (Restaurant.c seg_11a8 venue record,
+     * byte-verified 2026-07-11 referee). Restaurants and fast food earn
+     * ONE income event per day at close — tiered on customers_today,
+     * bottom tier a LOSS; shops earn quarterly rent and book nothing
+     * here. The three service scores are quality accumulators: each
+     * arriving customer grades their elevator wait into the current
+     * period's slot, and that slot becomes tomorrow's walk-in quota. */
+    uint8_t  retail_score[3];  /* service score: weekday/weekend/rainy
+                                  (file retail record +3/+4/+5) */
+    uint8_t  retail_quota;     /* today's walk-in quota, counts DOWN as
+                                  walk-ins dispatch (record +6) */
+    uint8_t  walkins_today;    /* walk-ins admitted today (+7) */
+    uint8_t  patrons_now;      /* inside right now, cap 40 (+9) */
+    uint8_t  retail_open;      /* doors open (record +2 state != 3) */
+    uint16_t customers_today;  /* the income driver (+0x10) */
+
     /* --- Rent --- */
     uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —
                               the map's Rent overlay (file tenant +0x0F;

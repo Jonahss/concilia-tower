@@ -323,7 +323,7 @@ static void test_commute_elevator(void)
     int f5 = floor_to_index(5);
     int arrived = 0;
     for (int frame = 0; frame < 2000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_MORNING,
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
         arrived = people_at(office, f5, PERSON_AT_DEST);
         if (arrived == 6) break;
@@ -335,7 +335,7 @@ static void test_commute_elevator(void)
     /* evening: everyone goes home and despawns */
     int gone = 0;
     for (int frame = 2000; frame < 6000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_EVENING,
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
                       sim.reach_public, sim.reach_service);
         if (sim.people.population_now == 0) { gone = 1; break; }
     }
@@ -353,6 +353,8 @@ static void test_metro_visitors(void)
     for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
     CHECK(shop != 0, "shop placed");
     force_occupied(shop);
+    tenant(shop)->retail_open = 1;    /* doors open (the 10AM row's job) */
+    tenant(shop)->retail_quota = 25;
 
     /* Construct the metro directly on f2 — placement is basement-restricted,
      * but the sim only needs floor/type/state to feed visitors. */
@@ -367,7 +369,7 @@ static void test_metro_visitors(void)
 
     int visitors = 0;
     for (int frame = 0; frame < 3000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
                       sim.reach_public, sim.reach_service);
         visitors = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
@@ -383,7 +385,7 @@ static void test_metro_visitors(void)
     people_rebuild_transport(&sim.people, &tw);
     int night = 0;
     for (int frame = 0; frame < 600; frame++)
-        people_update(&sim.people, &tw, frame, TOD_NIGHT,
+        people_update(&sim.people, &tw, frame, TOD_NIGHT, 23,
                       sim.reach_public, sim.reach_service);
     for (int i = 0; i < sim.people.people_high; i++) {
         Person *p = &sim.people.people[i];
@@ -416,7 +418,7 @@ static void test_parking_bypass(void)
 
     int via_park = 0;
     for (int frame = 0; frame < 3000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_MORNING,
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
         via_park = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
@@ -442,7 +444,7 @@ static void test_walk_rules(void)
     int f5 = floor_to_index(5);
     int arrived = 0;
     for (int frame = 0; frame < 3000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_MORNING,
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
         arrived = people_at(office, f5, PERSON_AT_DEST);
         if (arrived == 6) break;
@@ -459,7 +461,7 @@ static void test_walk_rules(void)
     Tenant *t = tenant(office);
     int before = t->stress;
     for (int frame = 0; frame < 600; frame++)
-        people_update(&sim.people, &tw, frame, TOD_MORNING,
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
     CHECK(people_at(office, f5, PERSON_AT_DEST) == 0,
           "5 stair flights exceed the walk budget");
@@ -540,7 +542,7 @@ static void test_elevator_dialog(void)
     s->car[0].floor = (uint8_t)g;
     s->car[0].target = (uint8_t)g;
     s->car[0].door_timer = 1;          /* doors closing, no work anywhere */
-    for (int t = 0; t < 200; t++) people_update(&sim.people, &tw, t, 1,
+    for (int t = 0; t < 200; t++) people_update(&sim.people, &tw, t, 1, 9,
                                                sim.reach_public,
                                                sim.reach_service);
     CHECK(s->car[0].floor == f3, "idle car returned to its home floor");
@@ -566,12 +568,14 @@ static void test_patrons_and_staff(void)
     for (int f = 0; f <= 1; f++) place(ITEM_STAIRS, f, BX + 30);
     CHECK(ff != 0, "fast food placed");
     force_occupied(ff);
+    tenant(ff)->retail_open = 1;      /* doors open (the 10AM row's job) */
+    tenant(ff)->retail_quota = 35;    /* plenty of walk-ins to draw from */
     people_rebuild_transport(&sim.people, &tw);
 
     int f2 = floor_to_index(2);
     int seen = 0;
-    for (int frame = 0; frame < 1200 && seen < 5; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+    for (int frame = 0; frame < 3000 && seen < 5; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
                       sim.reach_public, sim.reach_service);
         if (people_at(ff, f2, PERSON_AT_DEST) > seen)
             seen = people_at(ff, f2, PERSON_AT_DEST);
@@ -579,7 +583,7 @@ static void test_patrons_and_staff(void)
     CHECK(seen == 5, "5 lunch patrons walked up to the fast food");
     int gone = 0;
     for (int frame = 1200; frame < 6000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_AFTERNOON,
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
                       sim.reach_public, sim.reach_service);
         if (sim.people.population_now == 0) { gone = 1; break; }
     }
@@ -603,7 +607,7 @@ static void test_patrons_and_staff(void)
     int dispatched = 0, rode = 0;
     int f2s = floor_to_index(2);
     for (int frame = 0; frame < 3000 && !rode; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_DAWN,
+        people_update(&sim.people, &tw, frame, TOD_DAWN, 6,
                       sim.reach_public, sim.reach_service);
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
@@ -883,7 +887,7 @@ static void test_schedules(void)
     s->car[0].floor = s->car[0].target = s->lo;
     s->car[0].dir = 1;
     for (int i = 0; i < 400; i++)
-        people_update(&sim.people, &tw, i, TOD_MORNING,
+        people_update(&sim.people, &tw, i, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
     CHECK(s->car[0].floor == s->hi,
           "shuttle mode: idle car ran to the top of the shaft");
@@ -895,7 +899,7 @@ static void test_schedules(void)
     int held = 0, arrived = 0;
     int f5 = floor_to_index(5);
     for (int frame = 0; frame < 4000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_MORNING,
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
         if (s->car[0].hold_timer) held = 1;
         arrived = people_at(office, f5, PERSON_AT_DEST);
@@ -941,42 +945,84 @@ static void test_wedding(void)
     CHECK(!sim.wedding.active, "below 15,000 population, no wedding");
 }
 
-/* Retail customer competition (JudgeT zone model): same-type retail clustered
- * in a 15-floor zone split a fixed customer pool, so each earns less; a
- * well-spread tower is unaffected; fast food is immune. */
-static void test_retail_competition(void)
+/* The retail patron economy (Restaurant.c seg_11a8 + MoneyT 1178:126c,
+ * byte-verified 2026-07-11): open sets quota = clamp(score, 10, cap);
+ * customers grade the service score; close banks the tiered daily income
+ * (bottom tier a LOSS); disaster-offer days suppress it all. */
+static void test_retail_economy(void)
 {
-    printf("retail zone competition (JudgeT seg_11a8):\n");
+    printf("retail patron economy (Restaurant.c + MoneyT 126c):\n");
     fresh();
+    tw.day = 1;                                /* weekday, no disasters */
+    sim.quarter = 0;
+    uint16_t rid = fplace(ITEM_RESTAURANT, 3, 100);
+    uint16_t fid = fplace(ITEM_FAST_FOOD, 4, 100);
+    uint16_t hid = fplace(ITEM_SHOP, 5, 100);
+    Tenant *r = tenant(rid), *f = tenant(fid), *s = tenant(hid);
+    r->state = f->state = s->state = TENANT_OCCUPIED;
 
-    Tenant rt = { 0 }; rt.type = ITEM_RESTAURANT; rt.floor = 5;  /* zone 0 */
-    int z0 = floor_to_zone(5);
+    CHECK(game_retail_period(&sim, &tw) == 0, "plain day = weekday class");
+    tw.day = 12;                               /* 12%8==4 */
+    CHECK(game_retail_period(&sim, &tw) == 2, "day%%8==4 = the rainy class");
+    tw.star_rating = 5;
+    CHECK(game_retail_period(&sim, &tw) == 0, "5-star towers retire rain");
+    tw.star_rating = 1; tw.day = 1;
 
-    sim.zones[z0].restaurant_count = ZONE_MAX_RESTAURANTS;   /* at the comfortable cap */
-    CHECK(game_retail_income(&sim, &rt, 1000) == 1000,
-          "restaurants at/under the zone cap earn full income");
+    /* 10AM opens FF+shops (not restaurants); quota floors at 10 */
+    sim.hour = 10; game_retail_hourly(&sim, &tw);
+    CHECK(!r->retail_open && f->retail_open && s->retail_open,
+          "10AM opens fast food and shops; restaurants wait for 5PM");
+    CHECK(f->retail_quota == 10, "a scoreless venue still gets quota 10");
 
-    sim.zones[z0].restaurant_count = 2 * ZONE_MAX_RESTAURANTS; /* double the cap */
-    CHECK(game_retail_income(&sim, &rt, 1000) == 500,
-          "doubling restaurants in a zone halves each one's income");
+    /* customers at the door: admission, grading, the 40 cap */
+    game_retail_customer_in(&sim, &tw, f, 0, 40);   /* fast elevator: +2 */
+    game_retail_customer_in(&sim, &tw, f, 0, 100);  /* slow: +1 */
+    game_retail_customer_in(&sim, &tw, f, 0, 400);  /* awful: +0 */
+    CHECK(f->customers_today == 3 && f->patrons_now == 3,
+          "arrivals count as customers and patrons");
+    CHECK(f->retail_score[0] == 3, "service grades bank +2/+1/+0");
+    CHECK(game_retail_customer_in(&sim, &tw, r, 0, 0) == 1,
+          "a closed restaurant bounces its customer");
+    f->patrons_now = 40;
+    CHECK(game_retail_customer_in(&sim, &tw, f, 0, 0) == 2,
+          "the 41st patron is refused (house cap 40)");
+    f->patrons_now = 3;
 
-    /* A lone restaurant in another zone is unaffected by the cluster. */
-    Tenant lone = { 0 }; lone.type = ITEM_RESTAURANT; lone.floor = 20; /* zone 1 */
-    sim.zones[floor_to_zone(20)].restaurant_count = 1;
-    CHECK(game_retail_income(&sim, &lone, 1000) == 1000,
-          "spreading restaurants across zones keeps full income");
+    /* 5PM opens restaurants; yesterday's score becomes today's quota */
+    r->retail_score[0] = 44;
+    sim.hour = 17; game_retail_hourly(&sim, &tw);
+    CHECK(r->retail_open && r->retail_quota == 35,
+          "restaurant quota = clamp(score, 10, weekday cap 35)");
+    CHECK(r->retail_score[0] == 0, "opening resets the period's score");
 
-    /* Fast food never competes (JudgeT: fast food never goes unsatisfied). */
-    Tenant ff = { 0 }; ff.type = ITEM_FAST_FOOD; ff.floor = 5;
-    sim.zones[z0].fastfood_count = 9;
-    CHECK(game_retail_income(&sim, &ff, 1000) == 1000,
-          "fast food is immune to zone competition");
+    /* 9PM closes FF+shops and banks the FF ladder; shops book nothing */
+    long money0 = tw.money;
+    f->customers_today = 50;
+    s->customers_today = 60;
+    sim.hour = 21; game_retail_hourly(&sim, &tw);
+    CHECK(!f->retail_open && tw.money == money0 + 5000,
+          "50 customers bank fast food's $5,000 top tier at 9PM (shop $0)");
+    money0 = tw.money;
 
-    /* Shops compete too, on their own (higher) threshold. */
-    Tenant sh = { 0 }; sh.type = ITEM_SHOP; sh.floor = 5;
-    sim.zones[z0].shop_count = 2 * ZONE_MAX_SHOPS;
-    CHECK(game_retail_income(&sim, &sh, 1000) == 1000 * ZONE_MAX_SHOPS / (2 * ZONE_MAX_SHOPS),
-          "over-clustered shops earn a diluted share");
+    /* 11PM closes restaurants — and an empty one takes the LOSS tier */
+    r->customers_today = 0;
+    sim.hour = 23; game_retail_hourly(&sim, &tw);
+    CHECK(tw.money == money0 - 6000,
+          "an empty restaurant LOSES $6,000 at its 11PM close");
+
+    /* the disaster-day suppression (MoneyT 126c day%60/%84 gates) */
+    tw.day = 59;                                /* bomb-offer day */
+    r->customers_today = 200; r->retail_open = 1;
+    money0 = tw.money;
+    sim.hour = 23; game_retail_hourly(&sim, &tw);
+    CHECK(tw.money == money0, "bomb-offer days suppress venue income");
+
+    /* weekend quota cap + max(wd,we) score read */
+    tw.day = 2; sim.quarter = QUARTER_WEEKEND;
+    f->retail_score[0] = 60; f->retail_score[1] = 20;
+    sim.hour = 10; game_retail_hourly(&sim, &tw);
+    CHECK(f->retail_quota == 50,
+          "weekend reads max(wd,we) score against the 50 cap");
 }
 
 
@@ -1683,7 +1729,7 @@ int main(void)
     test_elevator_dialog();
     test_patrons_and_staff();
     test_money();
-    test_retail_competition();
+    test_retail_economy();
     test_cap_peaks();
     test_stressed_moveout();
     test_star_requirements();

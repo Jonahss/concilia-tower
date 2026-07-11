@@ -246,8 +246,8 @@ static const int TENANT_INCOME[] = {
     [ITEM_HOTEL_SINGLE] = 0,    /* real rent: TENANT_RENT_BY_CLASS */
     [ITEM_HOTEL_TWIN] = 0,
     [ITEM_HOTEL_SUITE] = 0,
-    [ITEM_RESTAURANT] = 15000,  /* Lunch + dinner sales (approx) */
-    [ITEM_FAST_FOOD] = 8000,
+    [ITEM_RESTAURANT] = 0,      /* real: nightly patron-sales settle (11PM) */
+    [ITEM_FAST_FOOD] = 0,       /* real: nightly patron-sales settle (9PM) */
     [ITEM_SHOP] = 0,            /* real rent: TENANT_RENT_BY_CLASS */
     [ITEM_CINEMA] = 0,          /* real: tiered show income (VenueT) */
     [ITEM_PARTY_HALL] = 0,      /* real: tiered event income (VenueT) */
@@ -344,10 +344,11 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
 #define NUM_ZONES       7
 #define FLOORS_PER_ZONE 15
 
-/* Zone competition thresholds — how many of each type before stress */
-#define ZONE_MAX_RESTAURANTS  2   /* > 2 restaurants in one zone = stress */
-#define ZONE_MAX_FASTFOOD     3   /* > 3 fast food = stress */
-#define ZONE_MAX_SHOPS        4   /* > 4 shops = stress */
+/* Zone office-crowding threshold. (The old retail thresholds are gone:
+ * the 2026-07-11 referee proved retail competition is EMERGENT — each
+ * customer picks one random same-kind venue in their zone, so clustering
+ * starves venues through the patron flow, not through a formula.) */
+#define ZONE_MAX_OFFICES      8
 
 static inline int floor_to_zone(int floor) {
     if (floor < 0) return 0;
@@ -695,12 +696,8 @@ const char *game_quarter_name(Quarter q);
 /* Recalculate zone competition data from all tenants */
 void game_calc_zones(GameSim *sim, Tower *tower);
 
-/* Scale a retail tenant's income by zone customer-competition (same-type
- * clustering dilutes revenue). Relies on sim->zones being current. */
-int game_retail_income(const GameSim *sim, const Tenant *t, int base_income);
-
-/* Apply zone-based stress to commercial tenants.
- * Too many competitors in same zone = stress accumulation. */
+/* Apply zone-based stress to office overcrowding. (Retail zone stress
+ * removed 2026-07-11: it was an invention — see game_retail_hourly.) */
 void game_judge_tenants(GameSim *sim, Tower *tower);
 
 
@@ -761,6 +758,17 @@ void game_venue_arrivals(GameSim *sim, Tower *tower);
  * next hit ($300k) or ordinary ($150k) film, deterministically. */
 void game_change_movie(GameSim *sim, Tower *tower, Tenant *t, int hit);
 int  game_movie_quota(const Tenant *t);
+
+/* Retail patron economy (Restaurant.c seg_11a8, byte-verified 2026-07-11):
+ * open/close rows + the nightly tiered income settle; the door check and
+ * departure hooks the people sim calls; the period class (0 weekday /
+ * 1 weekend / 2 rainy-day) that picks score slot and quota cap. */
+void game_retail_hourly(GameSim *sim, Tower *tower);
+void game_retail_arrivals(GameSim *sim, Tower *tower);
+int  game_retail_period(const GameSim *sim, const Tower *tower);
+int  game_retail_customer_in(GameSim *sim, Tower *tower, Tenant *t,
+                             int walkin, int felt_wait);
+void game_retail_customer_out(Tenant *t);
 
 /* A sick office worker seeks a medical center (UniPeple 1220:2b55 medical
  * path). Returns 0 = none found (adequacy cleared + nag), 1 = turned away

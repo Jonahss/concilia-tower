@@ -1145,18 +1145,16 @@ static void render_tower(void)
                  * capacity_to_frame gives 0-6, but sprites have varying
                  * frame counts (office=4, hotel=9, restaurant=4, etc).
                  * Scale proportionally so cap 0x40 always maps to last frame. */
-                /* Restaurants and fast food reserve their LAST frame for the
-                 * shuttered-for-the-night storefront, driven by opening hours —
-                 * NOT crowd. Without this a packed diner maps to the last frame
-                 * and renders as closed. Crowd therefore spans only the frames
-                 * before the closed one; off-hours forces the closed frame.
-                 * (Matches OpenSkyscraper Restaurant/FastFood: index=3 when
-                 * closed, else min(ceil(people/5),2) → frames 0-2.) */
+                /* Restaurants and fast food draw the EXE's venue state
+                 * directly (CloudT: frame = variant*4 + state): 0 open-
+                 * empty / 1 busy (1-9 inside) / 2 packed (10+) / 3 closed
+                 * — driven by the retail cycle's doors and the live patron
+                 * count, not by clock guesswork. (UpdateVenueBusyTier
+                 * 11a8:0bd5: 10+ patrons = packed, byte-verified.) */
                 int retail_closes = (nframes >= 2 &&
                     (tenant->type == ITEM_RESTAURANT ||
                      tenant->type == ITEM_FAST_FOOD));
-                int closed = retail_closes &&
-                    !TENANT_ACTIVE_TIMES[tenant->type][game.sim.time_of_day];
+                int closed = retail_closes && !tenant->retail_open;
                 int crowd_frames = retail_closes ? nframes - 1 : nframes;
 
                 int is_hotel = (tenant->type == ITEM_HOTEL_SINGLE ||
@@ -1259,6 +1257,16 @@ static void render_tower(void)
                     frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2 : 0;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
+                } else if (retail_closes) {
+                    /* open restaurant/FF: the live patron tiers */
+                    frame_idx = tenant->patrons_now >= 10 ? 2
+                              : tenant->patrons_now >= 1  ? 1 : 0;
+                    if (frame_idx > crowd_frames - 1) frame_idx = crowd_frames - 1;
+                } else if (tenant->type == ITEM_SHOP && nframes >= 3) {
+                    /* shops share the patron tiers (no closed frame in the
+                     * sheet — verified 2026-06-13) */
+                    frame_idx = tenant->patrons_now >= 10 ? 2
+                              : tenant->patrons_now >= 1  ? 1 : 0;
                 } else if (tenant->capacity <= CAP_EMPTY) {
                     frame_idx = 0;
                 } else {
@@ -4110,6 +4118,8 @@ static void inspect_popup_metrics(int *lines, int *body_h)
     if (t->type==ITEM_OFFICE) n++;                          /* Tier */
     if (item_is_hotel_room(t->type) && t->condition != ROOM_CLEAN) n++;
     if (inspect_cinema_hall(t)) n += 3;                     /* Film/Draw/Today */
+    if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
+        t->type == ITEM_SHOP) n += 2;                       /* Doors/Customers */
     *lines = n;
     /* 8px pad + 14px lines + 24px Close row, plus two 20px change-movie
      * button rows on a theater hall. */
@@ -4151,6 +4161,15 @@ static void render_inspect_popup(void)
         snprintf(ln[n++], 40, "Room is too dirty (roaches!)");
     else if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
         snprintf(ln[n++], 40, "Needs housekeeping");
+    /* Retail: doors + the day's customer count against the walk-in quota
+     * (the EXE's "sales" info lines mirror the income tier). */
+    if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
+        t->type == ITEM_SHOP) {
+        snprintf(ln[n++], 40, "%s, %d inside",
+                 t->retail_open ? "Open" : "Closed", t->patrons_now);
+        snprintf(ln[n++], 40, "Today: %d cust. (quota %d)",
+                 t->customers_today, t->retail_quota);
+    }
     /* Theater hall: the film + its drawing power (the EXE's info window
      * shows the same quota lines, InfoComment 1108:0285 — age 0 renders
      * as "New movie showing!"). */
