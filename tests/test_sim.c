@@ -1397,6 +1397,46 @@ static void test_venues(void)
           "the party banks its tier and closes at 5PM");
 }
 
+/* Change-movie (InfoDlgT 1100:432f/4377): deterministic rotation within
+ * the chosen tier, film fresh at age 0, $300k hit / $150k ordinary. */
+static void test_change_movie(void)
+{
+    printf("change-movie dialog:\n");
+    fresh();
+    uint16_t cin = fplace(ITEM_CINEMA, 3, 100);
+    Tenant *c = tenant(cin);
+    c->state = TENANT_OCCUPIED;
+    c->movie_id = 3; c->venue_age_days = 6;
+
+    long money0 = tw.money;
+    game_change_movie(&sim, &tw, c, 1);
+    CHECK(c->movie_id == 11 && c->venue_age_days == 0,
+          "hit button steps to the next hit (7 + (id+1) mod 7), fresh");
+    CHECK(tw.money == money0 - 300000, "a hit film costs $300,000");
+
+    c->movie_id = 13;                       /* last hit wraps */
+    game_change_movie(&sim, &tw, c, 1);
+    CHECK(c->movie_id == 7, "hit rotation wraps 13 -> 7");
+    money0 = tw.money;
+    game_change_movie(&sim, &tw, c, 0);
+    CHECK(c->movie_id == 1 && tw.money == money0 - 150000,
+          "ordinary button: (id+1) mod 7 for $150,000");
+
+    /* The fresh film's draw shows up at the next 10AM reset. */
+    c->movie_id = 9; c->venue_age_days = 9;   /* stale hit: 20/showing */
+    sim.hour = 10; game_venue_hourly(&sim, &tw);
+    CHECK(c->quota_matinee == 20, "stale film seats 20");
+    game_change_movie(&sim, &tw, c, 1);
+    sim.hour = 10; game_venue_hourly(&sim, &tw);
+    CHECK(c->quota_matinee == 60, "the new hit seats 60 from tomorrow");
+
+    /* Guard: not a theater -> no-op, no charge */
+    uint16_t off = fplace(ITEM_OFFICE, 4, 100);
+    money0 = tw.money;
+    game_change_movie(&sim, &tw, tenant(off), 1);
+    CHECK(tw.money == money0, "non-theater tenants are a no-op");
+}
+
 /* The bomb hunt (GuardT seg_10f8, byte-verified 2026-07-11): fully
  * deterministic — guards sweep right-to-left, expanding floor by floor
  * from their office; stepping onto the exact bomb cell = caught. */
@@ -1645,6 +1685,7 @@ int main(void)
     test_medical_adequacy();
     test_guard_hunt();
     test_venues();
+    test_change_movie();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

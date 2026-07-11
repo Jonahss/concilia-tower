@@ -1576,6 +1576,34 @@ static int venue_income(int patrons_today)
     return 15000;                             /* 0xDDF8 */
 }
 
+/* Attendance-per-showing for the info dialog (InfoComment 1108:0285
+ * feeds the same quota into the "sales" lines). */
+int game_movie_quota(const Tenant *t)
+{
+    return movie_patron_quota(t);
+}
+
+/* The change-movie actions from the theater's info dialog (InfoDlgT
+ * 1100:432f hit / 1100:4377 ordinary). The rotation is deterministic —
+ * only the film a theater OPENS with is random: each button steps to
+ * the next film of its tier ((id+1) mod 7, hits offset by 7), so a hit
+ * can follow an ordinary and vice versa. The new film is fresh (age 0);
+ * today's quotas were already set at 10AM, so the bigger draw starts at
+ * tomorrow's reset — matching the EXE, where the dialog only writes
+ * movie_id/age and the quota is read at DailyVenueReset. Costs are
+ * tuning words 0xDE10/0xDE12 (3000/1500 hundreds); charged
+ * unconditionally — debt is allowed, as with every purchase. */
+void game_change_movie(GameSim *sim, Tower *tower, Tenant *t, int hit)
+{
+    if (!t || t->type != ITEM_CINEMA) return;
+    t->movie_id = hit ? (uint8_t)(7 + (t->movie_id + 1) % 7)
+                      : (uint8_t)((t->movie_id + 1) % 7);
+    t->venue_age_days = 0;
+    int cost = hit ? 300000 : 150000;
+    tower->money -= cost;
+    sim->expenses_this_quarter += cost;
+}
+
 /* One hourly step of every venue's day (the TimeT rows above). */
 void game_venue_hourly(GameSim *sim, Tower *tower)
 {

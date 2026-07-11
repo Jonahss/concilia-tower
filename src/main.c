@@ -4078,10 +4078,26 @@ static void render_event_alert(void)
 }
 
 /* Inspector info popup: a small Win3.1 window with the clicked unit's stats. */
-static void inspect_popup_metrics(int *lines)
+/* The change-movie actions live on the theater's info popup, like the
+ * EXE's venue info dialog (InfoDlgT 1100:432f/4377). Only the hall strip
+ * runs the show (imported .TDT theaters carry a second, narrow entrance
+ * strip), so only the hall gets film lines and buttons. */
+static int inspect_cinema_hall(const Tenant *t)
+{
+    return t && t->type == ITEM_CINEMA && t->width >= 20;
+}
+
+static SDL_Rect inspect_movie_btn_rect(int which, int lines)
+{
+    return (SDL_Rect){ game.inspect_x + 8,
+                       game.inspect_y + WIN_TITLEBAR_H + 8 + lines*14 + 2 + which*20,
+                       INSPECT_W - 16, 16 };
+}
+
+static void inspect_popup_metrics(int *lines, int *body_h)
 {
     Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
-    if (!t) { *lines = 0; return; }
+    if (!t) { *lines = 0; *body_h = 0; return; }
     int n = 2;   /* Floor + Status always shown */
     int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
                t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
@@ -4093,7 +4109,11 @@ static void inspect_popup_metrics(int *lines)
     if (res || comm) n++;                                   /* Satisfaction */
     if (t->type==ITEM_OFFICE) n++;                          /* Tier */
     if (item_is_hotel_room(t->type) && t->condition != ROOM_CLEAN) n++;
+    if (inspect_cinema_hall(t)) n += 3;                     /* Film/Draw/Today */
     *lines = n;
+    /* 8px pad + 14px lines + 24px Close row, plus two 20px change-movie
+     * button rows on a theater hall. */
+    *body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0);
 }
 
 static void render_inspect_popup(void)
@@ -4106,7 +4126,7 @@ static void render_inspect_popup(void)
         "Occupied", "Closing", "Vacant", "Stressed", "Abandoned" };
     SDL_Color black = { 0, 0, 0, 255 };
 
-    char ln[8][40];
+    char ln[10][40];
     int n = 0, type_idx = (int)t->type;
     int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
                t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
@@ -4131,9 +4151,22 @@ static void render_inspect_popup(void)
         snprintf(ln[n++], 40, "Room is too dirty (roaches!)");
     else if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
         snprintf(ln[n++], 40, "Needs housekeeping");
+    /* Theater hall: the film + its drawing power (the EXE's info window
+     * shows the same quota lines, InfoComment 1108:0285 — age 0 renders
+     * as "New movie showing!"). */
+    if (inspect_cinema_hall(t)) {
+        if (t->venue_age_days == 0)
+            snprintf(ln[n++], 40, "New %s showing!",
+                     t->movie_id >= 7 ? "hit" : "movie");
+        else
+            snprintf(ln[n++], 40, "Film: %s, day %d",
+                     t->movie_id >= 7 ? "hit" : "ordinary", t->venue_age_days);
+        snprintf(ln[n++], 40, "Draw: %d per showing", game_movie_quota(t));
+        snprintf(ln[n++], 40, "Today: %d patrons", t->patrons_today);
+    }
 
     int wx = game.inspect_x, wy = game.inspect_y;
-    int body_h = 8 + n * 14 + 24;
+    int body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0);
     draw_win31_titlebar(wx, wy, INSPECT_W, tower_item_name(t->type));
     SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, INSPECT_W, body_h };
     SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
@@ -4143,6 +4176,19 @@ static void render_inspect_popup(void)
 
     int ly = wy + WIN_TITLEBAR_H + 6;
     for (int i = 0; i < n; i++) { stats_label(wx + 8, ly, ln[i], black); ly += 14; }
+
+    if (inspect_cinema_hall(t)) {
+        static const char *MOVIE_BTN[2] =
+            { "Hit movie   $300,000", "New movie  $150,000" };
+        for (int b = 0; b < 2; b++) {
+            SDL_Rect r = inspect_movie_btn_rect(b, n);
+            SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+            SDL_RenderFillRect(game.renderer, &r);
+            SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+            SDL_RenderDrawRect(game.renderer, &r);
+            stats_label(r.x + 8, r.y + 1, MOVIE_BTN[b], black);
+        }
+    }
 
     SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
     SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
@@ -4156,13 +4202,27 @@ static void render_inspect_popup(void)
 static int inspect_popup_click(int mx, int my)
 {
     if (!game.inspect_open) return 0;
-    int lines = 0;
-    inspect_popup_metrics(&lines);
-    int body_h = 8 + lines * 14 + 24;
+    int lines = 0, body_h = 0;
+    inspect_popup_metrics(&lines, &body_h);
     int wx = game.inspect_x, wy = game.inspect_y;
     if (mx < wx || mx >= wx + INSPECT_W ||
         my < wy || my >= wy + WIN_TITLEBAR_H + body_h)
         return 0;
+    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
+    if (inspect_cinema_hall(t)) {
+        for (int b = 0; b < 2; b++) {
+            SDL_Rect r = inspect_movie_btn_rect(b, lines);
+            if (point_in_rect(mx, my, r)) {
+                int hit = (b == 0);
+                game_change_movie(&game.sim, &game.tower, t, hit);
+                char msg[EVENT_MSG_LEN];
+                snprintf(msg, sizeof msg, "New movie showing! - $%s",
+                         hit ? "300,000" : "150,000");
+                add_event_message(msg);
+                return 1;
+            }
+        }
+    }
     SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
     if (mx >= cb.x && mx < cb.x + cb.w && my >= cb.y && my < cb.y + cb.h)
         game.inspect_open = 0;

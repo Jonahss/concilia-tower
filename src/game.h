@@ -754,6 +754,10 @@ void game_event_ransom(GameSim *sim, Tower *tower);
  * and the attendance counter fed by the people sim's arrivals. */
 void game_venue_hourly(GameSim *sim, Tower *tower);
 void game_venue_arrivals(GameSim *sim, Tower *tower);
+/* Change-movie dialog actions (InfoDlgT 1100:432f/4377): step to the
+ * next hit ($300k) or ordinary ($150k) film, deterministically. */
+void game_change_movie(GameSim *sim, Tower *tower, Tenant *t, int hit);
+int  game_movie_quota(const Tenant *t);
 
 /* A sick office worker seeks a medical center (UniPeple 1220:2b55 medical
  * path). Returns 0 = none found (adequacy cleared + nag), 1 = turned away
