@@ -326,6 +326,20 @@ typedef struct {
     uint16_t guest_stress_total;
     uint16_t guest_stress_trips;
 
+    /* --- Venues (VenueT seg_1180, byte-verified 2026-07-02 annotation) ---
+     * Cinemas and party halls run a daily show cycle: reset at 10AM (film
+     * ages, quotas set), matinee + evening showings for movies / one
+     * evening event for the party hall, tiered income at close from the
+     * day's total attendance. */
+    uint8_t  movie_id;         /* cinema: 0..13 (0-6 ordinary, 7-13 hits);
+                                  party hall: 0xFF; others: 0 */
+    uint8_t  venue_age_days;   /* days since the film changed (caps 0x7F);
+                                  attendance tier = age/3 */
+    uint8_t  venue_state;      /* 0 closed / 1 open / 2 has patrons / 3 show */
+    uint8_t  quota_matinee;    /* patrons admittable per showing today */
+    uint8_t  quota_evening;
+    uint16_t patrons_today;    /* total admitted today -> the income tier */
+
     /* --- Rent --- */
     uint8_t  rent_class;   /* 0 High / 1 Average / 2 Low / 3 Very Low —
                               the map's Rent overlay (file tenant +0x0F;

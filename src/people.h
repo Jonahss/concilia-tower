@@ -213,6 +213,11 @@ typedef struct {
      * never sees anywhere near 32 arrivals. */
     int8_t   office_arrival_floor[32];
     int      office_arrivals;
+
+    /* Patrons who just walked into a cinema / party hall — tenant ids,
+     * consumed by the venue pass (game.c) for attendance counting. */
+    uint16_t venue_arrival_tenant[32];
+    int      venue_arrivals;
 } PeopleSim;
 
 void people_init(PeopleSim *ps);

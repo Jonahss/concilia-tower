@@ -1320,6 +1320,80 @@ static void test_bomb_blast(void)
     CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
 }
 
+/* Venues (VenueT seg_1180): show cycle, aging quotas, tiered income. */
+static void test_venues(void)
+{
+    printf("venues (show cycle, film aging, tiered income):\n");
+    fresh();
+    uint16_t cin = fplace(ITEM_CINEMA, 3, 100);
+    Tenant *c = tenant(cin);
+    c->state = TENANT_OCCUPIED;
+    c->movie_id = 9;                       /* a hit film */
+    c->venue_age_days = 0;
+
+    sim.hour = 10; game_venue_hourly(&sim, &tw);
+    CHECK(c->quota_matinee == 60 && c->quota_evening == 60,
+          "fresh hit film seats 60 per showing");
+    CHECK(c->venue_age_days == 1 && c->patrons_today == 0,
+          "10AM reset ages the film and clears attendance");
+
+    sim.hour = 12; game_venue_hourly(&sim, &tw);
+    CHECK(c->venue_state == 1, "noon: doors open for the matinee");
+
+    /* patrons walk in (via the people sim's arrival feed) */
+    for (int k = 0; k < 70; k++) {
+        sim.people.venue_arrival_tenant[0] = cin;
+        sim.people.venue_arrivals = 1;
+        game_venue_arrivals(&sim, &tw);
+    }
+    CHECK(c->patrons_today == 70 && c->venue_state == 2,
+          "arrivals count (70 of 120 seats) and the house shows patrons");
+
+    sim.hour = 13; game_venue_hourly(&sim, &tw);
+    CHECK(c->venue_state == 3, "1PM: the matinee runs");
+
+    for (int k = 0; k < 80; k++) {         /* evening crowd, hits the cap */
+        sim.people.venue_arrival_tenant[0] = cin;
+        sim.people.venue_arrivals = 1;
+        game_venue_arrivals(&sim, &tw);
+    }
+    CHECK(c->patrons_today == 120, "attendance caps at the two quotas");
+
+    long money0 = tw.money;
+    sim.hour = 20; game_venue_hourly(&sim, &tw);
+    CHECK(tw.money == money0 + 15000,
+          "a 120-patron day banks the $15,000 tier at 8PM");
+    CHECK(c->venue_state == 0, "the theater closes");
+
+    /* An old film seats 20 per showing -> 40 patrons max -> the $2k tier */
+    c->venue_age_days = 9;
+    sim.hour = 10; game_venue_hourly(&sim, &tw);
+    CHECK(c->quota_matinee == 20, "a 9-day-old film seats only 20");
+    c->patrons_today = 39;
+    money0 = tw.money;
+    sim.hour = 20; game_venue_hourly(&sim, &tw);
+    CHECK(tw.money == money0, "under 40 patrons pays nothing");
+    c->patrons_today = 40;
+    sim.hour = 20; game_venue_hourly(&sim, &tw);
+    CHECK(tw.money == money0 + 2000, "40 patrons reach the $2,000 tier");
+
+    /* Party hall: flat 50 guests, income + close at 5PM */
+    fresh();
+    uint16_t ph = fplace(ITEM_PARTY_HALL, 3, 100);
+    Tenant *p = tenant(ph);
+    p->state = TENANT_OCCUPIED; p->movie_id = 0xFF;
+    sim.hour = 10; game_venue_hourly(&sim, &tw);
+    CHECK(p->quota_matinee == 0 && p->quota_evening == 50,
+          "party hall summons a flat 50 guests, evening only");
+    sim.hour = 13; game_venue_hourly(&sim, &tw);
+    CHECK(p->venue_state == 1, "party hall opens at 1PM");
+    p->patrons_today = 50;
+    money0 = tw.money;
+    sim.hour = 17; game_venue_hourly(&sim, &tw);
+    CHECK(tw.money == money0 + 2000 && p->venue_state == 0,
+          "the party banks its tier and closes at 5PM");
+}
+
 /* The bomb hunt (GuardT seg_10f8, byte-verified 2026-07-11): fully
  * deterministic — guards sweep right-to-left, expanding floor by floor
  * from their office; stepping onto the exact bomb cell = caught. */
@@ -1567,6 +1641,7 @@ int main(void)
     test_promotion_cadence();
     test_medical_adequacy();
     test_guard_hunt();
+    test_venues();
     test_disaster_schedule();
     test_fire_spread();
     test_bomb_blast();

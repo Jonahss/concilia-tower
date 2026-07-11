@@ -669,6 +669,12 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
     if (t && !p->going_home && t->type == ITEM_OFFICE &&
         ps->office_arrivals < (int)(sizeof ps->office_arrival_floor))
         ps->office_arrival_floor[ps->office_arrivals++] = (int8_t)t->floor;
+    /* A patron at the box office — the venue pass counts attendance */
+    if (t && !p->going_home &&
+        (t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL) &&
+        ps->venue_arrivals < (int)(sizeof ps->venue_arrival_tenant /
+                                   sizeof ps->venue_arrival_tenant[0]))
+        ps->venue_arrival_tenant[ps->venue_arrivals++] = p->home_tenant;
     p->state = PERSON_AT_DEST;
 }
 
@@ -1059,13 +1065,24 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         /* venue patrons: lunch/shopping crowd, then the evening crowd */
         int patron = ((t->type == ITEM_FAST_FOOD || t->type == ITEM_SHOP) &&
                       tod == TOD_AFTERNOON) ||
-                     ((t->type == ITEM_RESTAURANT || t->type == ITEM_CINEMA ||
-                       t->type == ITEM_PARTY_HALL) && tod == TOD_EVENING);
+                     (t->type == ITEM_RESTAURANT && tod == TOD_EVENING);
+        /* show venues draw a quota-sized crowd per showing (VenueT summons
+         * 56-person pools; the daily quotas do the real gating): cinemas
+         * fill the matinee through the afternoon and the evening show after
+         * five; the party hall summons its 50 guests in the evening */
+        int show_cap = 0;
+        if (t->type == ITEM_CINEMA)
+            show_cap = (tod == TOD_AFTERNOON) ? t->quota_matinee
+                     : (tod == TOD_EVENING)   ? t->quota_evening : 0;
+        else if (t->type == ITEM_PARTY_HALL)
+            show_cap = (tod == TOD_EVENING) ? t->quota_evening : 0;
+        if (show_cap > 0) patron = 1;
         /* housekeepers ride the service net to dirty rooms each dawn */
         int staff = t->type == ITEM_HOUSEKEEPING &&
                     (tod == TOD_DAWN || tod == TOD_MORNING);
         if (!inbound && !patron && !staff) continue;
-        if (ps->spawned[i] >= tenant_commuters(t)) continue;
+        if (ps->spawned[i] >= (show_cap > 0 ? show_cap : tenant_commuters(t)))
+            continue;
         if (!depart_roll(frame, i, 8)) continue;   /* irregular trickle (EXE dice) */
         int fidx = floor_to_index(t->floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;

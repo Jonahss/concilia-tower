@@ -188,6 +188,10 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
                 placed++;
                 Tenant *ten = &tower->tenants[tower->tenant_count - 1];
                 ten->rent_class = t[0x0f] <= 3 ? t[0x0f] : 1;
+                /* the venue slot table (movie ids) lives outside the floor
+                 * map; assign an id-stable film like the retail variants */
+                if (ten->type == ITEM_CINEMA)          ten->movie_id = id % 14;
+                else if (ten->type == ITEM_PARTY_HALL) ten->movie_id = 0xFF;
                 if (it == ITEM_RESTAURANT || it == ITEM_SHOP ||
                     it == ITEM_FAST_FOOD)
                     ten->retail_ref = t[6] + 1;

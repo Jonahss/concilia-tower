@@ -1,4 +1,5 @@
 /* tower.c - Tower grid implementation */
+#include <stdlib.h>
 #include "tower.h"
 #include "game.h"  /* For CONSTRUCTION_TIME[], CAP_* defines */
 #include <stdio.h>
@@ -405,7 +406,9 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->complaints = 0;
     t->zone = (floor >= 0) ? floor / 15 : 0;  /* JudgeT: 7 zones of 15 floors */
     t->upgrade_day = 0;
-    t->rent_class = 1;  /* Average until JudgeT moves it */
+    t->rent_class = 1;
+    if (type == ITEM_CINEMA)          t->movie_id = (uint8_t)(rand() % 14);
+    else if (type == ITEM_PARTY_HALL) t->movie_id = 0xFF;  /* Average until JudgeT moves it */
     
     /* Skip construction for instant-build items */
     if (t->construction <= 0) {
@@ -596,6 +599,8 @@ uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
     t->capacity = CAP_MIN;
     t->zone = (floor >= 0) ? floor / 15 : 0;
     t->rent_class = 1;
+    if (type == ITEM_CINEMA)          t->movie_id = (uint8_t)(rand() % 14);
+    else if (type == ITEM_PARTY_HALL) t->movie_id = 0xFF;
 
     int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
     for (int f = floor; f < floor + height; f++) {

@@ -1007,6 +1007,8 @@ void game_update(GameSim *sim, Tower *tower)
     /* Star evaluation, hourly — the weekday-evening window inside
      * game_check_promotion picks WHICH hours a 3->4/4->5 can land on. */
     if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0) {
+        game_venue_hourly(sim, tower);
+
         /* 7AM: MedicalDailyTick re-arms adequacy at star>=3 and the
          * patient-per-day counters start fresh (cap 40/center/day). */
         if (sim->hour == 7) {
@@ -1057,6 +1059,7 @@ void game_update(GameSim *sim, Tower *tower)
                                   sim->people.office_arrival_floor[i]);
     }
     sim->people.office_arrivals = 0;
+    game_venue_arrivals(sim, tower);
 
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
@@ -1502,6 +1505,127 @@ int game_lobby_height(Tower *tower)
         h++;
     }
     return h;
+}
+
+/* ================================================================
+ * Venues: cinema + party hall (VenueT seg_1180, fully decoded 2026-07-02)
+ * ================================================================
+ * Daily cycle, on the TimeT clock (wall-clock rows from the dispatcher
+ * map; the port runs them on its hourly hook, so 12:45 rounds to noon):
+ *   10AM  reset: film ages a day, patron quotas set, attendance cleared
+ *   noon  movies open + matinee crowd summoned    (EXE t=1000, 12:45)
+ *   1PM   matinee show starts; party hall opens + summons its 50 guests
+ *   3PM   movies summon the evening crowd
+ *   4PM   matinee crowd leaves
+ *   5PM   evening show starts; party guests leave -> PARTY INCOME + close
+ *   8PM   evening crowd leaves -> MOVIE INCOME + close
+ * Movie attendance per showing decays with the film's age (tier = age/3):
+ * hit films (id 7-13) seat 60/60/40/20, ordinary (0-6) 40/40/40/20; the
+ * party hall admits a flat 50 (tuning 0xDDFA/0xDE02 + DailyVenueReset).
+ * Income at close is tiered on the DAY's total patrons (GetVenueIncomeTier:
+ * <40 -> $0, <80 -> $2,000, <100 -> $10,000, else $15,000). Patrons are
+ * real Person entities — a venue nobody can reach earns nothing. */
+
+/* Patrons per showing (GetMoviePatronQuota 1180:0b3c) */
+static int movie_patron_quota(const Tenant *t)
+{
+    static const int hits[4]     = { 60, 60, 40, 20 };   /* 0xDDFA.. */
+    static const int ordinary[4] = { 40, 40, 40, 20 };   /* 0xDE02.. */
+    int tier = t->venue_age_days / 3;
+    if (tier > 3) tier = 3;
+    return (t->movie_id >= 7 && t->movie_id != 0xFF) ? hits[tier]
+                                                     : ordinary[tier];
+}
+
+/* The tiered payout from today's attendance (GetVenueIncomeTier 1180:0bcb) */
+static int venue_income(int patrons_today)
+{
+    if (patrons_today < 40)  return 0;        /* 0xDDEC / 0xDDF2 */
+    if (patrons_today < 80)  return 2000;     /* 0xDDEE / 0xDDF4 */
+    if (patrons_today < 100) return 10000;    /* 0xDDF0 / 0xDDF6 */
+    return 15000;                             /* 0xDDF8 */
+}
+
+/* One hourly step of every venue's day (the TimeT rows above). */
+void game_venue_hourly(GameSim *sim, Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL) continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION ||
+            t->state == TENANT_ABANDONED) continue;
+        /* .TDT cinemas import as TWO strips (24-cell hall + 7-cell
+         * entrance, both ITEM_CINEMA) — only the hall runs the show,
+         * or an imported theater would sell every ticket twice. */
+        if (t->type == ITEM_CINEMA && t->width < 20) continue;
+        int is_movie = t->type == ITEM_CINEMA;
+
+        switch (sim->hour) {
+        case 10:   /* DailyVenueReset (EXE t=240) */
+            if (t->venue_age_days < 0x7F) t->venue_age_days++;
+            t->patrons_today = 0;
+            if (is_movie) {
+                t->quota_matinee = (uint8_t)movie_patron_quota(t);
+                t->quota_evening = t->quota_matinee;
+            } else {
+                t->quota_matinee = 0;
+                t->quota_evening = 50;        /* the flat party guest list */
+            }
+            t->venue_state = 0;
+            break;
+        case 12:   /* movies open for the matinee */
+            if (is_movie && t->venue_state == 0) t->venue_state = 1;
+            break;
+        case 13:   /* matinee show; party hall opens */
+            if (is_movie) { if (t->venue_state >= 1) t->venue_state = 3; }
+            else if (t->venue_state == 0) t->venue_state = 1;
+            break;
+        case 16:   /* matinee crowd out */
+            if (is_movie) t->venue_state = 1;
+            break;
+        case 17:   /* evening show; party hall closes + banks its income */
+            if (is_movie) {
+                if (t->venue_state >= 1) t->venue_state = 3;
+            } else {
+                int pay = venue_income(t->patrons_today);
+                if (pay > 0) {
+                    tower->money += pay;
+                    sim->income_this_quarter += pay;
+                }
+                t->venue_state = 0;
+            }
+            break;
+        case 20:   /* evening crowd out; movie income + close */
+            if (is_movie) {
+                int pay = venue_income(t->patrons_today);
+                if (pay > 0) {
+                    tower->money += pay;
+                    sim->income_this_quarter += pay;
+                }
+                t->venue_state = 0;
+            }
+            break;
+        default: break;
+        }
+    }
+}
+
+/* Count the patrons the people sim just delivered (PatronArrived
+ * 1180:0c29): attendance is capped by the day's quotas, so an aging film
+ * fills fewer of its seats no matter how many people the elevators bring. */
+void game_venue_arrivals(GameSim *sim, Tower *tower)
+{
+    for (int a = 0; a < sim->people.venue_arrivals; a++) {
+        Tenant *t = tower_tenant(tower, sim->people.venue_arrival_tenant[a]);
+        if (!t) continue;
+        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL) continue;
+        int cap = t->quota_matinee + t->quota_evening;
+        if (t->venue_state >= 1 && t->patrons_today < cap) {
+            t->patrons_today++;
+            if (t->venue_state == 1) t->venue_state = 2;
+        }
+    }
+    sim->people.venue_arrivals = 0;
 }
 
 /* --- Medical adequacy (MedicalT seg_1170, byte-verified 2026-07-10) ---
@@ -2081,7 +2205,8 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 6u   /* v6: GuardHunt in EventState (deterministic
+#define SAVE_VERSION 7u   /* v7: venue fields in Tenant (movie/show cycle).
+                           * v6: GuardHunt in EventState (deterministic
                            * bomb sweep).
                            * v5: medical adequacy (0xB92D lifecycle) +
                            * Tenant.patients_today.

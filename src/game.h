@@ -249,8 +249,8 @@ static const int TENANT_INCOME[] = {
     [ITEM_RESTAURANT] = 15000,  /* Lunch + dinner sales (approx) */
     [ITEM_FAST_FOOD] = 8000,
     [ITEM_SHOP] = 0,            /* real rent: TENANT_RENT_BY_CLASS */
-    [ITEM_CINEMA] = 25000,
-    [ITEM_PARTY_HALL] = 10000,
+    [ITEM_CINEMA] = 0,          /* real: tiered show income (VenueT) */
+    [ITEM_PARTY_HALL] = 0,      /* real: tiered event income (VenueT) */
     [ITEM_METRO] = 0,           /* Service, no direct income */
     [ITEM_PARKING] = 1000,      /* per-car fees unmodeled (ParkingT) */
     [ITEM_CATHEDRAL] = 0,
@@ -749,6 +749,11 @@ void game_resolve_event(GameSim *sim, Tower *tower);
  *          pay-off (bomb, no blast). */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
+
+/* Venues (VenueT): the hourly show-cycle step (reset/open/show/income)
+ * and the attendance counter fed by the people sim's arrivals. */
+void game_venue_hourly(GameSim *sim, Tower *tower);
+void game_venue_arrivals(GameSim *sim, Tower *tower);
 
 /* A sick office worker seeks a medical center (UniPeple 1220:2b55 medical
  * path). Returns 0 = none found (adequacy cleared + nag), 1 = turned away
