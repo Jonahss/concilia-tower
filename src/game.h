@@ -749,6 +749,9 @@ void game_resolve_event(GameSim *sim, Tower *tower);
  *          pay-off (bomb, no blast). */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
+/* Forward clock jump within the day (EXE EventCleanup: caught bomb ->
+ * 4PM). Crossed quarter boundaries still close out their books. */
+void game_clock_jump(GameSim *sim, Tower *tower, int hour);
 
 /* Venues (VenueT): the hourly show-cycle step (reset/open/show/income)
  * and the attendance counter fed by the people sim's arrivals. */

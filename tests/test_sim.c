@@ -1463,6 +1463,7 @@ static void test_guard_hunt(void)
         CHECK(o->g[0].x == 134, "guards materialize at right extent - 2");
     }
     sim.hour = 10;
+    sim.income_this_quarter = 777;    /* proves the jump closes the books */
     int caught_at = -1;
     for (int t = 0; t < 100 && caught_at < 0; t++) {
         game_update_event(&sim, &tw);
@@ -1470,6 +1471,11 @@ static void test_guard_hunt(void)
     }
     CHECK(caught_at >= 0, "sweep reaches the bomb cell - caught, no dice");
     CHECK(!sim.event.active && !sim.event.hunt.active, "everyone stands down");
+    /* EXE EventCleanup: frame_time -> 0x5DC = 4:00 PM after a catch. */
+    CHECK(sim.hour == 16 && sim.minute == 0,
+          "the clock jumps to 4:00 PM on a catch");
+    CHECK(sim.income_this_quarter == 0 && sim.day_income == 777,
+          "quarter boundaries crossed by the jump still close out");
 
     /* Same setup, but the guards are demolished away before the refusal:
      * nobody hunts, and 1:00 PM detonates the bomb. */

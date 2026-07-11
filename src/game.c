@@ -979,6 +979,84 @@ static void evaluate_star_rating(GameSim *sim, Tower *tower)
 
 /* --- Main simulation update --- */
 
+/* End-of-quarter bookkeeping: tally finances, take an analytics sample,
+ * roll the quarter into the daily totals. Runs when the tick counter
+ * wraps — and from game_clock_jump for any boundary the jump skips over,
+ * so no income ever falls out of the books. Call AFTER sim->quarter has
+ * been advanced past the closing quarter. */
+static void quarter_closeout(GameSim *sim, Tower *tower)
+{
+    sim->total_income += sim->income_this_quarter;
+    sim->total_expenses += sim->expenses_this_quarter;
+
+    /* Analytics sample (ring buffer, oldest evicted when full) */
+    {
+        StatsHistory *h = &sim->stats;
+        StatSample *smp;
+        if (h->count < STATS_MAX) {
+            smp = &h->s[(h->head + h->count) % STATS_MAX];
+            h->count++;
+        } else {
+            smp = &h->s[h->head];
+            h->head = (h->head + 1) % STATS_MAX;
+        }
+        long dw = sim->people.wait_total - sim->stats_prev_wait_total;
+        long dn = sim->people.wait_samples - sim->stats_prev_wait_samples;
+        sim->stats_prev_wait_total = sim->people.wait_total;
+        sim->stats_prev_wait_samples = sim->people.wait_samples;
+        *smp = (StatSample){
+            .day = tower->day,
+            .quarter = (int8_t)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT),
+            .star = (int8_t)tower->star_rating,
+            .population = tower->population,
+            .commuters = sim->people.population_now,
+            .avg_wait = dn ? (int32_t)(dw / dn) : 0,
+            .balance = tower->money,
+            .income = sim->income_this_quarter,
+            .expenses = sim->expenses_this_quarter,
+            .built_value = tower->built_value,
+            .lost_value = tower->lost_value,
+        };
+    }
+
+    printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d, "
+           "Commuters %d (avg wait %d)\n",
+           game_quarter_name((Quarter)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT)),
+           sim->income_this_quarter, sim->expenses_this_quarter,
+           tower->money, tower->population,
+           sim->people.population_now, people_avg_wait(&sim->people));
+
+    /* Roll this quarter into the running daily totals before clearing. */
+    sim->day_income   += sim->income_this_quarter;
+    sim->day_expenses += sim->expenses_this_quarter;
+    sim->income_this_quarter = 0;
+    sim->expenses_this_quarter = 0;
+}
+
+/* Jump the clock forward to an hour later the same day (the EXE's
+ * post-catch jump: EventCleanup writes frame_time 0x5DC = 4:00 PM, so
+ * the tower skips the dead hours the frozen hunt consumed). Quarter
+ * boundaries crossed by the jump still get their close-out; hourly
+ * rows in between simply don't fire — same as the EXE, where TimeT
+ * rows between the old and new frame_time are skipped. */
+void game_clock_jump(GameSim *sim, Tower *tower, int hour)
+{
+    int day_ticks = TICKS_PER_DAY(sim->speed);
+    if (day_ticks <= 0 || hour <= 5) return;
+    /* The day runs 5:00 -> 5:00 (tick_to_time above). */
+    int target = (hour - 5) * 60 * day_ticks / (24 * 60);
+    int now = sim->quarter * sim->ticks_per_quarter + sim->tick;
+    if (target <= now) return;              /* never jump backward */
+    int tq = target / sim->ticks_per_quarter;
+    while (sim->quarter < tq) {
+        sim->quarter++;
+        quarter_closeout(sim, tower);
+    }
+    sim->tick = target % sim->ticks_per_quarter;
+    tick_to_time(target, day_ticks, &sim->hour, &sim->minute);
+    sim->time_of_day = hour_to_tod(sim->hour);
+}
+
 void game_update(GameSim *sim, Tower *tower)
 {
     /* Reachability is layout-driven, so refresh it even while paused (build
@@ -1105,53 +1183,7 @@ void game_update(GameSim *sim, Tower *tower)
     if (sim->tick >= sim->ticks_per_quarter) {
         sim->tick = 0;
         sim->quarter++;
-
-        /* End of quarter — tally finances */
-        sim->total_income += sim->income_this_quarter;
-        sim->total_expenses += sim->expenses_this_quarter;
-
-        /* Analytics sample (ring buffer, oldest evicted when full) */
-        {
-            StatsHistory *h = &sim->stats;
-            StatSample *smp;
-            if (h->count < STATS_MAX) {
-                smp = &h->s[(h->head + h->count) % STATS_MAX];
-                h->count++;
-            } else {
-                smp = &h->s[h->head];
-                h->head = (h->head + 1) % STATS_MAX;
-            }
-            long dw = sim->people.wait_total - sim->stats_prev_wait_total;
-            long dn = sim->people.wait_samples - sim->stats_prev_wait_samples;
-            sim->stats_prev_wait_total = sim->people.wait_total;
-            sim->stats_prev_wait_samples = sim->people.wait_samples;
-            *smp = (StatSample){
-                .day = tower->day,
-                .quarter = (int8_t)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT),
-                .star = (int8_t)tower->star_rating,
-                .population = tower->population,
-                .commuters = sim->people.population_now,
-                .avg_wait = dn ? (int32_t)(dw / dn) : 0,
-                .balance = tower->money,
-                .income = sim->income_this_quarter,
-                .expenses = sim->expenses_this_quarter,
-                .built_value = tower->built_value,
-                .lost_value = tower->lost_value,
-            };
-        }
-        
-        printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d, "
-               "Commuters %d (avg wait %d)\n",
-               game_quarter_name((Quarter)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT)),
-               sim->income_this_quarter, sim->expenses_this_quarter,
-               tower->money, tower->population,
-               sim->people.population_now, people_avg_wait(&sim->people));
-        
-        /* Roll this quarter into the running daily totals before clearing. */
-        sim->day_income   += sim->income_this_quarter;
-        sim->day_expenses += sim->expenses_this_quarter;
-        sim->income_this_quarter = 0;
-        sim->expenses_this_quarter = 0;
+        quarter_closeout(sim, tower);
 
         /* Day transition */
         if (sim->quarter >= QUARTER_COUNT) {
@@ -2175,8 +2207,10 @@ void game_update_event(GameSim *sim, Tower *tower)
                 ev->hunt.active = 0;
                 printf("🛡️ Security caught the bomb on floor %d! "
                        "Crisis averted.\n", ev->target_floor);
-                /* (EXE also jumps the clock to 4PM here — EventCleanup
-                 * resets ft to 0x5DC; the port keeps its clock running.) */
+                /* EXE EventCleanup resets frame_time to 0x5DC = 4:00 PM —
+                 * the world was frozen for the whole hunt, and the jump
+                 * hands those dead hours back. */
+                game_clock_jump(sim, tower, 16);
                 return;
             }
         }
