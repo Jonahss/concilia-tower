@@ -1226,8 +1226,26 @@ void game_update(GameSim *sim, Tower *tower)
                 }
             }
 
-            /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
-            if (tower->day % 9 == 3 && tower->star_rating >= 3) {
+            /* VIP visit check (from VipT seg_1240: day % 9 == 3). The
+             * VIP is a suite guest who arrives BY CAR (1240:008f picks
+             * the person via their parked car) — no usable parking, no
+             * VIP visit (the EXE's VoidVipVisit on a failed park;
+             * binding is MEDIUM-HIGH per the 2026-07-11 referee). */
+            int vip_can_park = 0;
+            for (int i = 0; i < tower->tenant_count && !vip_can_park; i++) {
+                Tenant *pt = &tower->tenants[i];
+                int pf = floor_to_index(pt->floor);
+                if (pt->type == ITEM_PARKING &&
+                    pt->state == TENANT_OCCUPIED &&
+                    pf >= 0 && pf < TOWER_FLOOR_COUNT &&
+                    sim->reach_public[pf]) vip_can_park = 1;
+            }
+            if (tower->day % 9 == 3 && tower->star_rating >= 3 &&
+                !vip_can_park) {
+                printf("👔 VIP visit canceled — nowhere to park the car.\n");
+            }
+            if (tower->day % 9 == 3 && tower->star_rating >= 3 &&
+                vip_can_park) {
                 sim->vip_visiting = 1;
                 sim->vip_last_day = tower->day;
                 sim->vip_notice = 1;   /* arrived (consumed by UI feed) */
@@ -1277,6 +1295,17 @@ void game_update(GameSim *sim, Tower *tower)
             for (int i = 0; i < tower->tenant_count; i++)
                 if (tower->tenants[i].type == ITEM_ESCALATOR)
                     upkeep += TUNING.maint_escalator;
+            /* Metro + parking upkeep (res 0x3EA, byte-verified 2026-07-11
+             * referee): $100,000 per station, $10,000 per RAMP — spaces
+             * and cars cost nothing (the old "per-car upkeep" note was a
+             * misread of elevator cars). */
+            for (int i = 0; i < tower->tenant_count; i++) {
+                Tenant *mt = &tower->tenants[i];
+                if (mt->state == TENANT_EMPTY ||
+                    mt->state == TENANT_CONSTRUCTION) continue;
+                if (mt->type == ITEM_METRO) upkeep += 100000;
+                if (mt->type == ITEM_RAMP)  upkeep += 10000;
+            }
             }
             if (upkeep > 0) {
                 tower->money -= upkeep;

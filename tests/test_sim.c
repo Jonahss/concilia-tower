@@ -362,7 +362,8 @@ static void test_metro_visitors(void)
     *m = (Tenant){0};
     m->id = 0xF00; m->type = ITEM_METRO; m->floor = 2; m->x = BX;
     m->width = 6; m->state = TENANT_OCCUPIED;
-    int mf = floor_to_index(2);
+    /* riders enter at the station TOP floor = platform + 2 (11f8:2181) */
+    int mf = floor_to_index(2 + 2);
 
     people_rebuild_transport(&sim.people, &tw);
     game_update_reachability(&sim, &tw);   /* metro/venue spawns gate on reach */
@@ -394,17 +395,25 @@ static void test_metro_visitors(void)
     CHECK(night == 0, "no metro visitors at night");
 }
 
-/* Parking is an elevator bypass: a tower's own commuters drive in via the
- * parking level instead of all funnelling through the ground lobby. */
-static void test_parking_bypass(void)
+/* Cars (ParkingT UseCarPerson, byte-verified 2026-07-11): at star>=3,
+ * office worker #2 of qualifying offices ((floor+id)%4==1) and real suite
+ * guests drive in via their parked car's floor; a suite guest who can't
+ * park cancels the visit. */
+static void test_parking_cars(void)
 {
-    printf("parking bypass (commuters drive in via the car park):\n");
+    printf("parking cars (worker #2 drives, suites are parking-bound):\n");
     fresh();
+    tw.star_rating = 3;
     for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
-    uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
     for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
-    CHECK(office != 0, "office placed");
-    force_occupied(office);
+
+    /* office constructed at a floor satisfying (floor + index) % 4 == 1 */
+    int oidx = tw.tenant_count;
+    int ofl = 2; while ((ofl + oidx) % 4 != 1) ofl++;
+    Tenant *of = &tw.tenants[tw.tenant_count++];
+    *of = (Tenant){0};
+    of->id = 0xF02; of->type = ITEM_OFFICE; of->floor = (int8_t)ofl;
+    of->x = BX; of->width = 9; of->state = TENANT_OCCUPIED;
 
     /* parking on f2 (constructed directly — placement is basement-only) */
     Tenant *pk = &tw.tenants[tw.tenant_count++];
@@ -416,18 +425,58 @@ static void test_parking_bypass(void)
     people_rebuild_transport(&sim.people, &tw);
     game_update_reachability(&sim, &tw);
 
-    int via_park = 0;
+    int via_park = 0, via_lobby = 0;
     for (int frame = 0; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
-        via_park = 0;
+        via_park = via_lobby = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
-            if (p->home_tenant == office && p->entry_floor == pf) via_park++;
+            if (p->home_tenant != of->id) continue;
+            if (p->entry_floor == pf) via_park++; else via_lobby++;
         }
-        if (via_park > 0) break;
+        if (via_park > 0 && via_lobby >= 2) break;
     }
-    CHECK(via_park > 0, "some office commuters arrive via the parking level");
+    CHECK(via_park == 1 && via_lobby >= 2,
+          "exactly worker #2 drives in; the rest use the lobby");
+
+    /* suite guests: with parking, guest #1+ enters at the car floor */
+    fresh();
+    tw.star_rating = 3;
+    uint16_t ste = fplace(ITEM_HOTEL_SUITE, 3, 100);
+    for (int f = 0; f <= 4; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    Tenant *st = tenant(ste);
+    st->state = TENANT_OCCUPIED; st->open_for_booking = 1;
+    Tenant *pk2 = &tw.tenants[tw.tenant_count++];
+    *pk2 = (Tenant){0};
+    pk2->id = 0xF03; pk2->type = ITEM_PARKING; pk2->floor = 1; pk2->x = 100;
+    pk2->width = 6; pk2->state = TENANT_OCCUPIED;
+    int pf2 = floor_to_index(1);
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);
+    int drove = 0;
+    for (int frame = 0; frame < 4000 && !drove; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
+                      sim.reach_public, sim.reach_service);
+        for (int i = 0; i < sim.people.people_high; i++) {
+            Person *p = &sim.people.people[i];
+            if (p->home_tenant == ste && p->entry_floor == pf2) drove = 1;
+        }
+    }
+    CHECK(drove, "a suite guest parks and enters at the car's floor");
+
+    /* no parking: the suite hosts only its carless first guest */
+    pk2->state = TENANT_EMPTY;
+    memset(&sim.people, 0, sizeof(sim.people));
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);
+    for (int frame = 0; frame < 4000; frame++)
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
+                      sim.reach_public, sim.reach_service);
+    int guests = 0;
+    for (int i = 0; i < sim.people.people_high; i++)
+        if (sim.people.people[i].home_tenant == ste) guests++;
+    CHECK(guests <= 1, "carless suite guests cancel: one guest at most");
 }
 
 static void test_walk_rules(void)
@@ -843,6 +892,33 @@ static void test_save_load(void)
     CHECK(game_load(&sim, &tw, "/no/such/file.sav") != 0,
           "missing file fails cleanly");
     remove("/tmp/ct_test.sav");
+}
+
+/* Metro/parking money (res 0x3EA, byte-verified 2026-07-11): $100k per
+ * station + $10k per ramp at the quarterly settlement; parking earns and
+ * costs nothing per space or car. */
+static void test_infra_upkeep(void)
+{
+    printf("metro/ramp quarterly upkeep:\n");
+    fresh();
+    Tenant *m = &tw.tenants[tw.tenant_count++];
+    *m = (Tenant){0};
+    m->id = 0xF10; m->type = ITEM_METRO; m->floor = -10; m->x = 100;
+    m->width = 30; m->state = TENANT_OCCUPIED;
+    Tenant *rp = &tw.tenants[tw.tenant_count++];
+    *rp = (Tenant){0};
+    rp->id = 0xF11; rp->type = ITEM_RAMP; rp->floor = -1; rp->x = 100;
+    rp->width = 16; rp->state = TENANT_OCCUPIED;
+
+    sim.speed = SPEED_NORMAL;
+    sim.quarter = 3;
+    sim.tick = 719;   /* normal speed = 720 ticks/quarter: next update
+                       * crosses the boundary */
+    tw.day = 2;                          /* -> day 3, a settlement day */
+    long money0 = tw.money;
+    game_update(&sim, &tw);
+    CHECK(tw.money == money0 - 110000,
+          "settlement charges $100k metro + $10k ramp, nothing else");
 }
 
 static void test_schedules(void)
@@ -1785,7 +1861,7 @@ int main(void)
     test_hotel_demand();
     test_commute_elevator();
     test_metro_visitors();
-    test_parking_bypass();
+    test_parking_cars();
     test_walk_rules();
     test_queue_and_stress();
     test_elevator_dialog();
@@ -1809,6 +1885,7 @@ int main(void)
     test_wedding();
     test_save_load();
     test_schedules();
+    test_infra_upkeep();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

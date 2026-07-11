@@ -252,7 +252,10 @@ static const int TENANT_INCOME[] = {
     [ITEM_CINEMA] = 0,          /* real: tiered show income (VenueT) */
     [ITEM_PARTY_HALL] = 0,      /* real: tiered event income (VenueT) */
     [ITEM_METRO] = 0,           /* Service, no direct income */
-    [ITEM_PARKING] = 1000,      /* per-car fees unmodeled (ParkingT) */
+    [ITEM_PARKING] = 0,         /* $0 PROVEN (2026-07-11 referee: no 0x3E9
+                                   row, no cash-writer anywhere in ParkingT
+                                   — parking is a pure cost center + the
+                                   lobby-bypass traffic valve) */
     [ITEM_CATHEDRAL] = 0,
     [ITEM_MEDICAL] = 0,         /* Service */
     [ITEM_SECURITY] = 0,        /* Service */

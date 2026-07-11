@@ -1027,22 +1027,31 @@ static Tenant *pick_retail(Tower *tower, ItemType kind, int floor, int seed,
     return NULL;
 }
 
-/* The car-park entry floor a resident commuter can drive to, or -1. Parking is
- * the original's elevator-bypass utility: rather than every worker funnelling
- * through the single ground lobby, those with a car enter/leave at the parking
- * level, splitting the crowd off the lobby/express crush. We use the lowest
- * reachable occupied parking floor. */
-static int parking_entry_floor(Tower *tower, const uint8_t *reach)
+/* A random usable parking floor, or -1 (ParkingT: the EXE assigns a
+ * UNIFORM RANDOM usable space, not the nearest — 1198:06e7). Parking is
+ * the original's elevator-bypass valve: drivers enter and leave at their
+ * car's floor, splitting off the lobby/express crush. PROXY: "usable
+ * space" = a reachable occupied parking floor; the space/quota/ramp-chain
+ * model (512-space cap, per-category quotas) awaits buildable ramps. */
+static int parking_entry_floor(Tower *tower, const uint8_t *reach, int seed)
 {
-    int best = -1, bestf = 9999;
+    int n = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_PARKING || t->state != TENANT_OCCUPIED) continue;
         int f = floor_to_index(t->floor);
-        if (f < 0 || f >= TOWER_FLOOR_COUNT || !reach[f]) continue;
-        if (t->floor < bestf) { bestf = t->floor; best = f; }
+        if (f >= 0 && f < TOWER_FLOOR_COUNT && reach[f]) n++;
     }
-    return best;
+    if (!n) return -1;
+    int pick = ((seed % n) + n) % n, k = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_PARKING || t->state != TENANT_OCCUPIED) continue;
+        int f = floor_to_index(t->floor);
+        if (f >= 0 && f < TOWER_FLOOR_COUNT && reach[f] && k++ == pick)
+            return f;
+    }
+    return -1;
 }
 
 /* How many visitors one metro pumps into the tower per time-of-day phase.
@@ -1057,7 +1066,7 @@ static int parking_entry_floor(Tower *tower, const uint8_t *reach)
 static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                         int hour, const uint8_t *reach_public)
 {
-    int park = parking_entry_floor(tower, reach_public);
+    int park = parking_entry_floor(tower, reach_public, frame);
     if ((uint8_t)tod != ps->cur_phase) {
         ps->cur_phase = (uint8_t)tod;
         memset(ps->spawned, 0, sizeof(ps->spawned));
@@ -1147,12 +1156,24 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             }
             continue;
         }
-        /* Resident commuters with a car drive in via the parking level instead
-         * of the ground lobby — alternate arrivals from each unit split off to
-         * the car park, thinning the lobby/express crowd. Street patrons always
-         * arrive at ground. */
-        int entry = (inbound && park >= 0 && (ps->spawned[i] & 1))
-                        ? park : GROUND_IDX;
+        /* Cars (UseCarPerson 1198:06e7, byte-verified 2026-07-11): at
+         * star>=3, REAL suite guests and office worker #2 of offices
+         * where (floor + person_id) % 4 == 1 drive in, entering at
+         * their parked car's floor. A suite guest who can't park
+         * CANCELS the visit (the EXE voids a pending VIP visit the
+         * same way) — with no parking, suites host only their carless
+         * first guest. PROXY: person ids = spawn order. The old
+         * "alternate commuters drive" rule was the port's invention. */
+        int entry = GROUND_IDX;
+        if (inbound && tower->star_rating >= 3) {
+            if (t->type == ITEM_HOTEL_SUITE && ps->spawned[i] >= 1) {
+                if (park < 0) continue;       /* visit canceled */
+                entry = park;
+            } else if (t->type == ITEM_OFFICE && ps->spawned[i] == 2 &&
+                       ((t->floor + i) & 3) == 1 && park >= 0) {
+                entry = park;
+            }
+        }
         int sp = spawn_person(ps, tower, t, entry, fidx, 0);
         if (sp) {
             ps->people[sp - 1].entry_floor = (uint8_t)entry;
@@ -1222,11 +1243,16 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (v) ps->spawned[i]++;
         } else if (t->type == ITEM_METRO) {
             /* Metro visitors (1220:51dc): outside traffic, 10AM-5PM, a
-             * random retail KIND in the GROUND zone. */
+             * random retail KIND in the GROUND zone. Riders enter and
+             * leave on the TOP station floor — the port anchors the
+             * 3-piece station at its bottom platform, so top = +2
+             * (MakeMetroStation 11f8:2181, byte-verified 2026-07-11). */
             if (hour < 10 || hour >= 17) continue;
             if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
             if (!depart_roll(frame, i, 6)) continue;
-            if (!reach_public[fidx]) continue;
+            fidx = floor_to_index(t->floor + 2);
+            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
+                !reach_public[fidx]) continue;
             static const ItemType KINDS[3] =
                 { ITEM_RESTAURANT, ITEM_FAST_FOOD, ITEM_SHOP };
             v = pick_retail(tower, KINDS[(seed >> 4) % 3], 0, seed,
