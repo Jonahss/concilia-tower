@@ -474,7 +474,15 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
             
         case TENANT_MOVING_IN:
-            /* Brief transition, then occupied */
+            /* Condos are a one-time SALE, banked when the buyer moves in
+             * (res 0x3E9 condo row: $200k/$150k/$100k/$40k by rate class).
+             * A re-occupied abandoned condo is a resale to a new buyer. */
+            if (t->type == ITEM_CONDO) {
+                int sale = tenant_rent(ITEM_CONDO, t->rent_class);
+                income += sale;
+                printf("\xf0\x9f\x8f\xa0 Condo on F%d sold for $%d\n",
+                       t->floor, sale);
+            }
             t->state = TENANT_OCCUPIED;
             break;
             
@@ -483,11 +491,17 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 /* Advance capacity animation (3-phase daily cycle) */
                 update_capacity(t, sim->time_of_day, reachable);
                 
-                /* Generate income (per tick, scaled) */
-                int base_income = (type_idx < ITEM_TYPE_COUNT) ? TENANT_INCOME[type_idx] : 0;
+                /* Generate income (per tick, scaled). Rent tenants use
+                 * the REAL per-class table (res 0x3E9); venue types use
+                 * the port's sales approximations. */
+                int base_income = tenant_rent(t->type, t->rent_class);
+                if (base_income == 0 && type_idx < ITEM_TYPE_COUNT)
+                    base_income = TENANT_INCOME[type_idx];
 
                 /* Retail customer competition: clustering same-type retail in a
-                 * zone dilutes each one's revenue (see game_retail_income). */
+                 * zone dilutes each one's revenue (see game_retail_income).
+                 * For shops this doubles as the port's stand-in for the EXE's
+                 * sales-grade -> rate-class feedback (MainteT 069e). */
                 base_income = game_retail_income(sim, t, base_income);
 
                 /* Rent scales with established occupancy (cap_peak): a thriving,

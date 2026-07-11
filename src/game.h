@@ -214,22 +214,45 @@ static const int STAR_POP_THRESHOLD[] = {
 };
 
 /* Income per tenant type per quarter (approximated from game mechanics) */
+/* --- Rent income by rate class — THE REAL TABLE (EXE resource 0x3E9) ---
+ * 0x200 bytes at file 0x26dc00, BE u32 x$100, indexed
+ * [item*0x10 + rate_class*4] (MoneyT 1178:0854/08ec). Dumped 2026-07-10;
+ * the office row 150/100/50/20 matches the MoneyT decode's citation, and
+ * the flat-array neighbors (0x3E8 build costs, 0x3EA maintenance) both
+ * cross-check against known values. Only RENT tenants have rows —
+ * restaurants/fast food/cinema/party hall earn patron sales instead
+ * (VenueT + the tuning sales ladders), which the port approximates below.
+ * Condos are the one-time SALE price by class, banked at move-in. */
+static const int TENANT_RENT_BY_CLASS[][4] = {
+    /* rate class:                 0 High     1 Avg      2 Low   3 V.Low */
+    [ITEM_OFFICE]       = {       15000,     10000,      5000,     2000 },
+    [ITEM_HOTEL_SINGLE] = {        3000,      2000,      1500,      500 },
+    [ITEM_HOTEL_TWIN]   = {        4500,      3000,      2000,      800 },
+    [ITEM_HOTEL_SUITE]  = {        9000,      6000,      4000,     1500 },
+    [ITEM_SHOP]         = {       20000,     15000,     10000,     4000 },
+    [ITEM_CONDO]        = {      200000,    150000,    100000,    40000 },
+    [ITEM_HOUSEKEEPING] = { 0 },  /* pad the designated array to full size */
+};
+
+/* Venue income approximations, per quarter — NOT rent: these types earn
+ * per-patron sales in the EXE (no 0x3E9 row), a system the port hasn't
+ * built yet. Values are the port's stand-ins pending the patron-AI work. */
 static const int TENANT_INCOME[] = {
     [ITEM_NONE] = 0,
     [ITEM_LOBBY] = 0,
     [ITEM_FLOOR] = 0,
-    [ITEM_OFFICE] = 8000,       /* ~$8k/quarter when occupied */
-    [ITEM_CONDO] = 0,           /* One-time sale, no recurring */
-    [ITEM_HOTEL_SINGLE] = 5000, /* Per night (per day cycle) */
-    [ITEM_HOTEL_TWIN] = 10000,
-    [ITEM_HOTEL_SUITE] = 20000,
-    [ITEM_RESTAURANT] = 15000,  /* Lunch + dinner revenue */
+    [ITEM_OFFICE] = 0,          /* real rent: TENANT_RENT_BY_CLASS */
+    [ITEM_CONDO] = 0,           /* real one-time sale: TENANT_RENT_BY_CLASS */
+    [ITEM_HOTEL_SINGLE] = 0,    /* real rent: TENANT_RENT_BY_CLASS */
+    [ITEM_HOTEL_TWIN] = 0,
+    [ITEM_HOTEL_SUITE] = 0,
+    [ITEM_RESTAURANT] = 15000,  /* Lunch + dinner sales (approx) */
     [ITEM_FAST_FOOD] = 8000,
-    [ITEM_SHOP] = 6000,
+    [ITEM_SHOP] = 0,            /* real rent: TENANT_RENT_BY_CLASS */
     [ITEM_CINEMA] = 25000,
     [ITEM_PARTY_HALL] = 10000,
     [ITEM_METRO] = 0,           /* Service, no direct income */
-    [ITEM_PARKING] = 1000,
+    [ITEM_PARKING] = 1000,      /* per-car fees unmodeled (ParkingT) */
     [ITEM_CATHEDRAL] = 0,
     [ITEM_MEDICAL] = 0,         /* Service */
     [ITEM_SECURITY] = 0,        /* Service */
@@ -241,6 +264,20 @@ static const int TENANT_INCOME[] = {
     [ITEM_ELEVATOR_EXPRESS] = 0,
     [ITEM_HOUSEKEEPING] = 0,    /* Service, no direct income */
 };
+
+/* The rent a tenant pays at its current rate class (0 for venue/service
+ * types — they use TENANT_INCOME above). VALUES are byte-real; the payout
+ * CADENCE is the port's quarter — the EXE-side consumers (MoneyT
+ * 1178:0854/08ec) have an undecoded call schedule, queued as a decomp
+ * loose end. */
+static inline int tenant_rent(const ItemType type, int rent_class)
+{
+    if (type >= (int)(sizeof TENANT_RENT_BY_CLASS / sizeof TENANT_RENT_BY_CLASS[0]))
+        return 0;
+    if (rent_class < 0) rent_class = 0;
+    if (rent_class > 3) rent_class = 3;
+    return TENANT_RENT_BY_CLASS[type][rent_class];
+}
 
 /* Population per tenant type when occupied */
 static const int TENANT_POPULATION[] = {
