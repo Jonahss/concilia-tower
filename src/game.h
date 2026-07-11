@@ -703,9 +703,7 @@ int game_retail_income(const GameSim *sim, const Tenant *t, int base_income);
  * Too many competitors in same zone = stress accumulation. */
 void game_judge_tenants(GameSim *sim, Tower *tower);
 
-/* Every-3-day pass: a content tenant eases a stressed same-type floor-mate
- * (MainteT tenant pairing — breaks move-out cascades). */
-void game_tenant_pairing(GameSim *sim, Tower *tower);
+
 
 /* The daily 5PM hotel pass, in the EXE's order: roach spread
  * (ExpandoBadHotel 1130:01e2), then the neglect fuse (HotelNeglectCheck
@@ -713,11 +711,10 @@ void game_tenant_pairing(GameSim *sim, Tower *tower);
  * game_update calls this once per day at 17:00; exposed for tests. */
 void game_hotel_demand_pass(GameSim *sim, Tower *tower);
 
-/* Every-3-day pass: persistent-occupancy dynamics keyed on cap_peak —
- * thriving offices grow a tier, a thriving (top-tier) office spreads success
- * to an adjacent same-floor office (gentrification, MainteT OfficeExpansion),
- * and happy clean hotel/suite rooms upgrade their occupancy (TenantUpgrade). */
-void game_office_dynamics(GameSim *sim, Tower *tower);
+/* The 3rd-day stressed move-out (JudgeT 1130:09e5): stressed offices,
+ * condos and shops vacate — condos charge the rate-class buy-back — and
+ * decline drags one content floor-mate to the middle band. */
+void game_stressed_moveout(GameSim *sim, Tower *tower);
 
 /* The persistent peak a freshly-built unit of this type starts at, by star
  * level (TenantMake MakeTenant). 0 = not peak-managed. */

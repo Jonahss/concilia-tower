@@ -976,31 +976,6 @@ static void test_retail_competition(void)
           "over-clustered shops earn a diluted share");
 }
 
-/* Tenant pairing: a content tenant eases a stressed same-type floor-mate. */
-static void test_tenant_pairing(void)
-{
-    printf("tenant pairing (MainteT):\n");
-    /* Build a controlled tower state directly — pairing only reads
-     * type/floor/state/stress, so we skip placement geometry. */
-    fresh();
-    tw.tenant_count = 0;
-    Tenant *ta = &tw.tenants[tw.tenant_count++];
-    *ta = (Tenant){0};
-    ta->type = ITEM_OFFICE; ta->floor = 1; ta->x = 179; ta->width = 6;
-    ta->state = TENANT_OCCUPIED; ta->stress = 0;               /* content */
-    Tenant *tb = &tw.tenants[tw.tenant_count++];
-    *tb = (Tenant){0};
-    tb->type = ITEM_OFFICE; tb->floor = 1; tb->x = 185; tb->width = 6;
-    tb->state = TENANT_STRESSED; tb->stress = 90; tb->complaints = 2;
-    game_tenant_pairing(&sim, &tw);
-    CHECK(tb->state == TENANT_OCCUPIED && tb->stress <= 50 && tb->complaints == 0,
-          "a content office stabilises a stressed same-floor office");
-
-    /* A stressed office on a DIFFERENT floor from the content one is not rescued. */
-    tb->state = TENANT_STRESSED; tb->stress = 90; tb->floor = 2;
-    game_tenant_pairing(&sim, &tw);
-    CHECK(tb->state == TENANT_STRESSED, "no content same-floor neighbour -> no rescue");
-}
 
 /* Star requirements per LevelUp 1148:007e (byte-verified 2026-07-09):
  * 3->4 = suite + recycling adequate + medical + VIP verdict;
@@ -1055,98 +1030,75 @@ static void test_star_requirements(void)
     sim.quarter = QUARTER_WEEKDAY3;
 }
 
-/* Persistent occupancy: cap_peak growth, gentrification, hotel upgrade. */
-static void test_office_dynamics(void)
+/* Construction-time occupancy tiers (TenantMake MakeTenant) — these are
+ * set once at build (and reconstructed from .TDT bytes on import); no
+ * tier-raising mechanic exists in the binary (2026-07-11 referee). */
+static void test_cap_peaks(void)
 {
-    printf("office dynamics (MainteT persistent occupancy):\n");
-
-    /* init peaks by type/star */
+    printf("construction occupancy tiers:\n");
     CHECK(game_init_cap_peak(ITEM_OFFICE, 1) == CAP_PEAK_LOW,
-          "a new office starts at the bottom tier (0x20)");
+          "fresh office starts at the low tier");
     CHECK(game_init_cap_peak(ITEM_HOTEL_SINGLE, 1) == 0x10 &&
-          game_init_cap_peak(ITEM_HOTEL_SUITE, 5) == 0x20,
-          "hotel/suite peaks scale with star (TenantMake)");
+          game_init_cap_peak(ITEM_HOTEL_SUITE, 1) == 0x18,
+          "hotel room tiers by type");
     CHECK(game_init_cap_peak(ITEM_SHOP, 5) == 0,
-          "retail is not peak-managed");
-
-    /* income/occupancy scaling denominators (cap_base_peak) */
+          "retail is not tier-managed");
     CHECK(cap_base_peak(ITEM_OFFICE) == CAP_PEAK_LOW &&
-          cap_base_peak(ITEM_HOTEL_SINGLE) == 0x10 &&
-          cap_base_peak(ITEM_HOTEL_SUITE) == 0x18 &&
-          cap_base_peak(ITEM_SHOP) == 0,
-          "scaling baselines: office 0x20, hotel 0x10, suite 0x18, retail none");
+          cap_base_peak(ITEM_CONDO) == 0,
+          "income-scaling baselines");
+}
 
-    /* Growth: a content office climbs LOW -> MID -> HIGH over passes. */
-    fresh();
-    tw.star_rating = 5;
-    tw.tenant_count = 0;
-    Tenant *o = &tw.tenants[tw.tenant_count++];
-    *o = (Tenant){0};
-    o->type = ITEM_OFFICE; o->floor = 1; o->state = TENANT_OCCUPIED;
-    o->stress = 0; o->cap_peak = CAP_PEAK_LOW;
-    game_office_dynamics(&sim, &tw);
-    CHECK(o->cap_peak == CAP_PEAK_MID, "content office grows LOW -> MID");
-    game_office_dynamics(&sim, &tw);
-    CHECK(o->cap_peak == CAP_PEAK_HIGH, "content office grows MID -> HIGH (5 star)");
-
-    /* A stressed office does not grow. */
-    Tenant *s = &tw.tenants[tw.tenant_count++];
-    *s = (Tenant){0};
-    s->type = ITEM_OFFICE; s->floor = 2; s->state = TENANT_OCCUPIED;
-    s->stress = 90; s->cap_peak = CAP_PEAK_LOW;
-    game_office_dynamics(&sim, &tw);
-    CHECK(s->cap_peak == CAP_PEAK_LOW, "a stressed office does not grow");
-
-    /* Gentrification: a top-tier office lifts a same-floor neighbour. */
-    fresh();
-    tw.star_rating = 5;
-    tw.tenant_count = 0;
-    Tenant *hi = &tw.tenants[tw.tenant_count++];
-    *hi = (Tenant){0};
-    hi->type = ITEM_OFFICE; hi->floor = 3; hi->state = TENANT_OCCUPIED;
-    hi->stress = 0; hi->cap_peak = CAP_PEAK_HIGH;
-    Tenant *lo = &tw.tenants[tw.tenant_count++];
-    *lo = (Tenant){0};
-    lo->type = ITEM_OFFICE; lo->floor = 3; lo->state = TENANT_OCCUPIED;
-    lo->stress = 50; lo->cap_peak = CAP_PEAK_LOW;   /* stressed-ish, won't grow on its own */
-    game_office_dynamics(&sim, &tw);
-    CHECK(lo->cap_peak == CAP_PEAK_HIGH,
-          "a thriving office gentrifies a same-floor neighbour");
-
-    /* An office on a DIFFERENT floor is not gentrified. */
-    fresh();
-    tw.star_rating = 5;
-    tw.tenant_count = 0;
-    Tenant *h2 = &tw.tenants[tw.tenant_count++];
-    *h2 = (Tenant){0};
-    h2->type = ITEM_OFFICE; h2->floor = 4; h2->state = TENANT_OCCUPIED;
-    h2->cap_peak = CAP_PEAK_HIGH;
-    Tenant *far = &tw.tenants[tw.tenant_count++];
-    *far = (Tenant){0};
-    far->type = ITEM_OFFICE; far->floor = 9; far->state = TENANT_OCCUPIED;
-    far->stress = 50; far->cap_peak = CAP_PEAK_LOW;
-    game_office_dynamics(&sim, &tw);
-    CHECK(far->cap_peak == CAP_PEAK_LOW, "no same-floor benefactor -> no gentrification");
-
-    /* Hotel room upgrade: happy, clean room raises occupancy a step. */
+/* The 3rd-day stressed move-out (JudgeT 1130:09e5, byte-verified
+ * 2026-07-11 — the mechanic June shipped inverted as "upgrades"). */
+static void test_stressed_moveout(void)
+{
+    printf("3rd-day stressed move-out (offices/condos/shops):\n");
     fresh();
     tw.tenant_count = 0;
-    Tenant *ht = &tw.tenants[tw.tenant_count++];
-    *ht = (Tenant){0};
-    ht->type = ITEM_HOTEL_SINGLE; ht->floor = 5; ht->state = TENANT_OCCUPIED;
-    ht->stress = 0; ht->condition = ROOM_CLEAN; ht->cap_peak = 0x10;
-    game_office_dynamics(&sim, &tw);
-    CHECK(ht->cap_peak == 0x18, "a happy clean hotel room upgrades 0x10 -> 0x18");
-    game_office_dynamics(&sim, &tw);
-    CHECK(ht->cap_peak == 0x18, "hotel single caps at 0x18");
 
-    /* A dirty room does not upgrade. */
-    Tenant *dr = &tw.tenants[tw.tenant_count++];
-    *dr = (Tenant){0};
-    dr->type = ITEM_HOTEL_SINGLE; dr->floor = 6; dr->state = TENANT_OCCUPIED;
-    dr->stress = 0; dr->condition = ROOM_DIRTY; dr->cap_peak = 0x10;
-    game_office_dynamics(&sim, &tw);
-    CHECK(dr->cap_peak == 0x10, "a dirty hotel room does not upgrade");
+    Tenant *off = &tw.tenants[tw.tenant_count++];
+    *off = (Tenant){0};
+    off->type = ITEM_OFFICE; off->floor = 3; off->x = 100; off->width = 9;
+    off->state = TENANT_STRESSED; off->stress = 90;
+
+    Tenant *neigh = &tw.tenants[tw.tenant_count++];
+    *neigh = (Tenant){0};
+    neigh->type = ITEM_OFFICE; neigh->floor = 3; neigh->x = 110; neigh->width = 9;
+    neigh->state = TENANT_OCCUPIED; neigh->stress = 0;   /* content */
+
+    Tenant *condo = &tw.tenants[tw.tenant_count++];
+    *condo = (Tenant){0};
+    condo->type = ITEM_CONDO; condo->floor = 4; condo->x = 100; condo->width = 16;
+    condo->state = TENANT_STRESSED; condo->rent_class = 1;
+
+    Tenant *hotel = &tw.tenants[tw.tenant_count++];
+    *hotel = (Tenant){0};
+    hotel->type = ITEM_HOTEL_TWIN; hotel->floor = 5; hotel->x = 100; hotel->width = 6;
+    hotel->state = TENANT_STRESSED; hotel->condition = ROOM_CLEAN;
+
+    long money0 = tw.money;
+    game_stressed_moveout(&sim, &tw);
+
+    CHECK(off->state == TENANT_ABANDONED, "stressed office moves out");
+    CHECK(!off->burned, "a move-out leaves a vacant unit, not rubble");
+    CHECK(condo->state == TENANT_ABANDONED, "stressed condo moves out");
+    CHECK(tw.money == money0 - tenant_rent(ITEM_CONDO, 1),
+          "the condo departure charges the rate-class buy-back ($150k avg)");
+    CHECK(hotel->state == TENANT_STRESSED,
+          "hotel rooms are exempt (their lifecycle is the 5PM pass)");
+    CHECK(neigh->state == TENANT_OCCUPIED && neigh->stress == 40,
+          "decline drags a content floor-mate to the middle band");
+
+    /* A content office is untouched (the June inversion would have grown it) */
+    fresh();
+    tw.tenant_count = 0;
+    Tenant *ok = &tw.tenants[tw.tenant_count++];
+    *ok = (Tenant){0};
+    ok->type = ITEM_OFFICE; ok->floor = 3; ok->x = 100; ok->width = 9;
+    ok->state = TENANT_OCCUPIED; ok->stress = 0; ok->cap_peak = CAP_PEAK_LOW;
+    game_stressed_moveout(&sim, &tw);
+    CHECK(ok->state == TENANT_OCCUPIED && ok->cap_peak == CAP_PEAK_LOW,
+          "content tenants: no move-out, and no invented tier growth");
 }
 
 /* Scheduled disasters (TimeT 10AM dispatch, byte-verified 2026-07-09/10):
@@ -1609,8 +1561,8 @@ int main(void)
     test_patrons_and_staff();
     test_money();
     test_retail_competition();
-    test_tenant_pairing();
-    test_office_dynamics();
+    test_cap_peaks();
+    test_stressed_moveout();
     test_star_requirements();
     test_promotion_cadence();
     test_medical_adequacy();

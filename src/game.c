@@ -568,7 +568,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                         /* Offices have no abandon path in the original (MainteT
                          * OfficeStressCheck): an unhappy office just rides it
                          * out — the firm stays put. Being stressed RESETS its
-                         * growth timer (game_office_dynamics won't grow a
+                         * growth timer (the old office-growth mechanic won't grow a
                          * stressed office), so stress only ever *delays* growth;
                          * it is never rewarded for it. So: clear and persist. */
                         t->stress = 0;
@@ -1161,8 +1161,7 @@ void game_update(GameSim *sim, Tower *tower)
 
             /* Tenant pairing pass — MainteT runs upgrades/pairing every 3rd day. */
             if (tower->day % 3 == 0) {
-                game_tenant_pairing(sim, tower);
-                game_office_dynamics(sim, tower);
+                game_stressed_moveout(sim, tower);
             }
 
             /* VIP visit check (from VipT seg_1240: day % 9 == 3) */
@@ -1343,30 +1342,6 @@ int game_retail_income(const GameSim *sim, const Tenant *t, int base_income)
     return base_income;
 }
 
-/* Tenant pairing (MainteT, runs every 3rd day): a content tenant (occupied,
- * low stress) reaches out to a stressed same-type neighbour on its floor and
- * eases it back below the stress threshold — a thriving tenant stabilises an
- * unhappy one, breaking move-out cascades. One rescue per content tenant; the
- * relief is temporary (the next judge pass re-stresses it if the underlying
- * cause persists), matching the decomp's stress 2->1 nudge. */
-void game_tenant_pairing(GameSim *sim, Tower *tower)
-{
-    (void)sim;
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->state != TENANT_OCCUPIED || t->stress > 10) continue;  /* content */
-        for (int j = 0; j < tower->tenant_count; j++) {
-            Tenant *n = &tower->tenants[j];
-            if (j == i || n->type != t->type || n->floor != t->floor) continue;
-            if (n->state == TENANT_STRESSED) {
-                n->stress = 50;             /* below the 70 stress threshold */
-                n->state = TENANT_OCCUPIED;
-                n->complaints = 0;
-                break;                      /* one rescue per content tenant */
-            }
-        }
-    }
-}
 
 /* Starting persistent peak for a freshly-built unit (TenantMake MakeTenant:
  * sets the capacity byte by type and star level). Offices begin at the bottom
@@ -1386,73 +1361,56 @@ uint8_t game_init_cap_peak(ItemType type, int star)
     }
 }
 
-/* Persistent-occupancy dynamics, run on the same every-3rd-day MainteT cadence
- * as tenant pairing. Three mechanics, all keyed on cap_peak (the capacity
- * byte's persistent tier), all decoded from MainteT:
+/* --- The 3rd-day stressed move-out (JudgeT 1130:09e5, byte-verified
+ * 2026-07-11 — the function long mislabeled "TenantUpgrade") ---
+ * Every 3rd day, OFFICES, CONDOS and SHOPS judged stressed vacate:
+ * offices and shops leave free; a condo departure makes the PLAYER buy
+ * the unit back at its rate-class price. Hotel rooms are exempt — their
+ * whole lifecycle is the 5PM demand pass. After the move-out, category
+ * smoothing drags one content same-type floor-mate down to the middle
+ * band: decline is contagious, and the smoothing cannot prevent the
+ * move-out (the vacate fires first in the EXE too).
  *
- *   1. GROWTH — a content, well-served office (low stress) climbs one tier
- *      (0x20→0x30→0x40). This is the engine that lets an office reach the top
- *      tier; without it OfficeStressCheck's "capacity > 0x27" path is
- *      unreachable. Inferred to seed the system the decomp's expansion math
- *      assumes already-grown offices exist.
- *   2. GENTRIFICATION (OfficeExpansion FUN_1130_01e2) — a top-tier office
- *      (cap_peak 0x40) lifts an adjacent same-floor office that's still below
- *      the top straight to the top tier. Success spreads along a floor.
- *   3. ROOM UPGRADE (TenantUpgrade FUN_1130_09e5) — a happy, clean hotel
- *      (cap_peak < 0x18) or suite (< 0x20) raises its occupancy one step.
- *
- * Star level caps the office top tier at 0x38 below 4★ (matching MakeTenant /
- * OfficeStressCheck), 0x40 at 4★+. */
-void game_office_dynamics(GameSim *sim, Tower *tower)
+ * HISTORY: June 2026 shipped this offset's mechanics inverted — "content
+ * hotel rooms upgrade their occupancy" and "office gentrification" —
+ * from a stale annotation whose category labels were backwards. Both
+ * were fabrications and are gone, as is the invented "content offices
+ * grow a tier" seed (no tier-raising code exists in the binary; office
+ * tiers come from construction star level and .TDT import bytes). EXE
+ * nuance not carried: brand-new shops (behavior tenure 0) are immune;
+ * the port has no tenure counter yet. */
+void game_stressed_moveout(GameSim *sim, Tower *tower)
 {
-    (void)sim;
-    uint8_t office_top = (tower->star_rating >= 4) ? CAP_PEAK_HIGH : CAP_PEAK_HIGH_CAPPED;
-
-    /* 1. Growth: content offices climb a tier. */
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_OFFICE || t->state != TENANT_OCCUPIED) continue;
-        if (t->stress > 10) continue;                 /* must be content */
-        uint8_t next = (t->cap_peak < CAP_PEAK_MID)  ? CAP_PEAK_MID :
-                       (t->cap_peak < CAP_PEAK_HIGH) ? office_top : t->cap_peak;
-        if (next > t->cap_peak) {
-            t->cap_peak = next;
-            if (next >= CAP_PEAK_HIGH)
-                printf("📈 Office on F%d is thriving — grown to full occupancy\n",
-                       t->floor);
+        if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
+            t->type != ITEM_SHOP) continue;
+        if (t->state != TENANT_STRESSED) continue;
+
+        if (t->type == ITEM_CONDO) {
+            int buyback = tenant_rent(ITEM_CONDO, t->rent_class);
+            tower->money -= buyback;
+            sim->expenses_this_quarter += buyback;
+            printf("\xf0\x9f\x8f\x9a Condo on F%d moved out - bought back for $%d\n",
+                   t->floor, buyback);
+        } else {
+            printf("\xf0\x9f\x93\xa6 %s on F%d moved out (stressed)\n",
+                   tower_item_name(t->type), t->floor);
         }
-    }
+        t->state = TENANT_ABANDONED;   /* vacant, re-lettable someday; no rubble */
+        t->capacity = CAP_EMPTY;
+        t->population = 0;
 
-    /* 2. Gentrification: a top-tier office lifts a same-floor neighbour. One
-     * lift per benefactor; reads only floor/type/peak, so adjacency is "same
-     * floor" (matches the zone-not-literal-adjacency reading we settled on
-     * for retail variety). */
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_OFFICE || t->cap_peak < CAP_PEAK_HIGH) continue;
+        /* Category smoothing: the departure drags one content same-type
+         * floor-mate to the middle band. */
         for (int j = 0; j < tower->tenant_count; j++) {
             Tenant *n = &tower->tenants[j];
-            if (j == i || n->type != ITEM_OFFICE || n->floor != t->floor) continue;
-            if (n->state != TENANT_OCCUPIED) continue;
-            if (n->cap_peak < office_top) {
-                n->cap_peak = office_top;
-                printf("✨ Office on F%d gentrified by a thriving neighbour\n",
-                       n->floor);
+            if (j == i || n->type != t->type || n->floor != t->floor) continue;
+            if (n->state == TENANT_OCCUPIED && n->stress <= 10) {
+                n->stress = 40;
                 break;
             }
         }
-    }
-
-    /* 3. Hotel / suite room upgrade for happy, clean rooms. */
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->state != TENANT_OCCUPIED || t->stress > 10 ||
-            t->condition != ROOM_CLEAN) continue;
-        uint8_t cap = t->cap_peak;
-        if ((t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN) && cap < 0x18)
-            t->cap_peak = cap + CAP_STEP;
-        else if (t->type == ITEM_HOTEL_SUITE && cap < 0x20)
-            t->cap_peak = cap + CAP_STEP;
     }
 }
 
