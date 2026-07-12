@@ -744,6 +744,10 @@ void game_stressed_moveout(GameSim *sim, Tower *tower);
  * consumer that executes a re-let. */
 void game_judge_daily(GameSim *sim, Tower *tower);
 void game_relet_arrivals(GameSim *sim, Tower *tower);
+/* The info-dialog price control (InfoDlgT 1100:0bfe): write the rate
+ * class and immediately re-judge the unit. Returns 1 if the change
+ * re-armed a dark vacancy. */
+int game_set_rent_class(GameSim *sim, Tower *tower, Tenant *t, int cls);
 
 /* The persistent peak a freshly-built unit of this type starts at, by star
  * level (TenantMake MakeTenant). 0 = not peak-managed. */

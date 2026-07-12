@@ -1025,6 +1025,57 @@ static void test_occupancy_lifecycle(void)
           "a re-let resets the stress window and tenure");
 }
 
+/* The info-dialog price control (InfoDlgT 1100:0b93-0c5e): the sole
+ * sim-time rate-class writer, with the EXE's IMMEDIATE re-judge — a
+ * rent cut revives a condemned unit on the click, not at dawn. */
+static void test_rent_control(void)
+{
+    printf("rent control (price selector + instant re-judge):\n");
+    fresh();
+    tw.star_rating = 1;
+    tw.day = 1;
+    uint16_t off = fplace(ITEM_OFFICE, 3, 100);
+    Tenant *o = tenant(off);
+    o->state = TENANT_ABANDONED;          /* stress-vacated, frozen memories */
+    o->demand_armed = 0;
+    o->demand_category = 0;
+    o->pool_stress_total = 400; o->pool_stress_trips = 2;  /* avg 200 */
+    o->rent_class = 1;
+
+    /* unchanged class = no side effects (@0bdd early return) */
+    CHECK(game_set_rent_class(&sim, &tw, o, 1) == 0 &&
+          o->demand_category == 0 && !o->demand_armed,
+          "re-selecting the current class is a no-op");
+    CHECK(game_set_rent_class(&sim, &tw, o, 4) == 0 && o->rent_class == 1,
+          "out-of-range class is rejected");
+    /* a modest cut isn't enough against avg 200 (200-30 >= bar 150) */
+    CHECK(game_set_rent_class(&sim, &tw, o, 2) == 0 &&
+          o->rent_class == 2 && !o->demand_armed,
+          "a modest cut can fail to clear the bar (170 vs 150)");
+    /* the bottom class forces content and re-arms ON THE CLICK */
+    CHECK(game_set_rent_class(&sim, &tw, o, 3) == 1 &&
+          o->demand_armed && o->demand_category == 2,
+          "Very Low revives the condemned unit instantly");
+
+    /* raising the rent on an occupied unit re-judges instantly too */
+    uint16_t of2 = fplace(ITEM_OFFICE, 4, 100);
+    Tenant *p = tenant(of2);
+    p->state = TENANT_OCCUPIED;
+    p->pool_stress_total = 260; p->pool_stress_trips = 2;  /* avg 130 */
+    p->rent_class = 1; p->demand_category = 1;
+    game_set_rent_class(&sim, &tw, p, 0);                  /* +30 = 160 */
+    CHECK(p->demand_category == 0,
+          "a rent hike re-judges the unit stressed on the click");
+
+    /* hotel rooms take the class (income/pickiness) but keep the 5PM judge */
+    uint16_t hr = fplace(ITEM_HOTEL_SINGLE, 5, 100);
+    Tenant *h = tenant(hr);
+    h->state = TENANT_OCCUPIED; h->rent_class = 1; h->demand_category = 2;
+    CHECK(game_set_rent_class(&sim, &tw, h, 0) == 0 &&
+          h->rent_class == 0 && h->demand_category == 2,
+          "a hotel room takes the class without an office-style judge");
+}
+
 /* Metro/parking money (res 0x3EA, byte-verified 2026-07-11): $100k per
  * station + $10k per ramp at the quarterly settlement; parking earns and
  * costs nothing per space or car. */
@@ -2022,6 +2073,7 @@ int main(void)
     test_schedules();
     test_infra_upkeep();
     test_occupancy_lifecycle();
+    test_rent_control();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

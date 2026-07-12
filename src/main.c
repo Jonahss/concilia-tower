@@ -4136,6 +4136,23 @@ static int inspect_cinema_hall(const Tenant *t)
     return t && t->type == ITEM_CINEMA && t->width >= 20;
 }
 
+/* Types with a price row in res 0x3E9 get the rent control (the EXE's
+ * dialog-type gate @1100:0bae admits exactly the priced classes). */
+static int inspect_priced(const Tenant *t)
+{
+    return t && (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+                 t->type == ITEM_SHOP   || item_is_hotel_room(t->type));
+}
+
+static const char *RENT_CLASS_NAME[4] = { "High", "Avg", "Low", "V.Low" };
+
+static SDL_Rect inspect_rent_btn_rect(int which, int lines)
+{
+    return (SDL_Rect){ game.inspect_x + 8 + which * 40,
+                       game.inspect_y + WIN_TITLEBAR_H + 8 + lines*14 + 2,
+                       37, 16 };
+}
+
 static SDL_Rect inspect_movie_btn_rect(int which, int lines)
 {
     return (SDL_Rect){ game.inspect_x + 8,
@@ -4161,10 +4178,13 @@ static void inspect_popup_metrics(int *lines, int *body_h)
     if (inspect_cinema_hall(t)) n += 3;                     /* Film/Draw/Today */
     if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
         t->type == ITEM_SHOP) n += 2;                       /* Doors/Customers */
+    if (inspect_priced(t)) n++;                             /* Rent/Price line */
     *lines = n;
     /* 8px pad + 14px lines + 24px Close row, plus two 20px change-movie
-     * button rows on a theater hall. */
-    *body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0);
+     * button rows on a theater hall, or one rent-class button row on a
+     * priced unit (the two never co-occur — cinemas have no price row). */
+    *body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0)
+                              + (inspect_priced(t) ? 22 : 0);
 }
 
 static void render_inspect_popup(void)
@@ -4177,7 +4197,7 @@ static void render_inspect_popup(void)
         "Occupied", "Closing", "Vacant", "Stressed", "Abandoned" };
     SDL_Color black = { 0, 0, 0, 255 };
 
-    char ln[10][40];
+    char ln[12][40];
     int n = 0, type_idx = (int)t->type;
     int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
                t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
@@ -4231,9 +4251,23 @@ static void render_inspect_popup(void)
         snprintf(ln[n++], 40, "Draw: %d per showing", game_movie_quota(t));
         snprintf(ln[n++], 40, "Today: %d patrons", t->patrons_today);
     }
+    /* The price line + class buttons (the EXE's dialog item 0xD custom
+     * control). Condos show the one-time sale price, hotel rooms the
+     * per-stay rate, offices/shops the quarterly rent. */
+    if (inspect_priced(t)) {
+        char amt[24];
+        format_money(tenant_rent(t->type, t->rent_class), amt, sizeof amt);
+        if (t->type == ITEM_CONDO)
+            snprintf(ln[n++], 40, "Price: %s", amt);
+        else if (item_is_hotel_room(t->type))
+            snprintf(ln[n++], 40, "Rate: %s/stay", amt);
+        else
+            snprintf(ln[n++], 40, "Rent: %s/qtr", amt);
+    }
 
     int wx = game.inspect_x, wy = game.inspect_y;
-    int body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0);
+    int body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0)
+                               + (inspect_priced(t) ? 22 : 0);
     draw_win31_titlebar(wx, wy, INSPECT_W, tower_item_name(t->type));
     SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, INSPECT_W, body_h };
     SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
@@ -4254,6 +4288,30 @@ static void render_inspect_popup(void)
             SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
             SDL_RenderDrawRect(game.renderer, &r);
             stats_label(r.x + 8, r.y + 1, MOVIE_BTN[b], black);
+        }
+    }
+
+    if (inspect_priced(t)) {
+        for (int b = 0; b < 4; b++) {
+            SDL_Rect r = inspect_rent_btn_rect(b, n);
+            int cur = (t->rent_class == b);
+            SDL_SetRenderDrawColor(game.renderer,
+                                   cur ? 255 : 168, cur ? 255 : 168,
+                                   cur ? 255 : 168, 255);
+            SDL_RenderFillRect(game.renderer, &r);
+            SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+            SDL_RenderDrawRect(game.renderer, &r);
+            if (cur) {   /* double border = the selected tier */
+                SDL_Rect in = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
+                SDL_RenderDrawRect(game.renderer, &in);
+            }
+            int tw, th;
+            SDL_Texture *tex = render_text(RENT_CLASS_NAME[b], black, &tw, &th);
+            if (tex) {
+                SDL_Rect dst = { r.x + (r.w - tw) / 2, r.y + 1, tw, th };
+                SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+            }
         }
     }
 
@@ -4286,6 +4344,20 @@ static int inspect_popup_click(int mx, int my)
                 snprintf(msg, sizeof msg, "New movie showing! - $%s",
                          hit ? "300,000" : "150,000");
                 add_event_message(msg);
+                return 1;
+            }
+        }
+    }
+    if (inspect_priced(t)) {
+        for (int b = 0; b < 4; b++) {
+            SDL_Rect r = inspect_rent_btn_rect(b, lines);
+            if (point_in_rect(mx, my, r)) {
+                if (game_set_rent_class(&game.sim, &game.tower, t, b)) {
+                    char msg[EVENT_MSG_LEN];
+                    snprintf(msg, sizeof msg, "%s on F%d back on the market",
+                             tower_item_name(t->type), t->floor);
+                    add_event_message(msg);
+                }
                 return 1;
             }
         }
@@ -5180,6 +5252,15 @@ static void handle_event(SDL_Event *ev)
                         game.inspect_y = ev->button.y - 40;
                         if (game.inspect_x + INSPECT_W > game.screen_w)
                             game.inspect_x = game.screen_w - INSPECT_W - 8;
+                        /* keep the whole body (incl. button rows) on
+                         * screen — basement clicks used to hang off the
+                         * bottom edge */
+                        int pl, pbh;
+                        inspect_popup_metrics(&pl, &pbh);
+                        if (game.inspect_y + WIN_TITLEBAR_H + pbh >
+                            game.screen_h)
+                            game.inspect_y = game.screen_h -
+                                             WIN_TITLEBAR_H - pbh - 8;
                         if (game.inspect_y < 0) game.inspect_y = 8;
                     } else {
                         game.inspect_open = 0;   /* clicked empty space */

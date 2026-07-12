@@ -1497,6 +1497,32 @@ static void judge_one_unit(GameSim *sim, Tower *tower, Tenant *t)
     (void)sim;
 }
 
+/* The info-dialog price control (InfoDlgT 1100:0b93-0c5e) — the game's
+ * ONLY sim-time rate-class writer. An unchanged class returns with no
+ * side effects (@0bdd); otherwise write +0x16 (@0bfe) and IMMEDIATELY
+ * re-judge the unit (@0c2b lcall JudgeTenant). Because the judge's tail
+ * re-arms a vacant unit whenever its fresh category climbs off 0,
+ * cutting the rent revives a condemned unit the moment the player
+ * clicks — not at the next dawn. Hotel rooms take the new class too
+ * (checkout income + guest pickiness) but keep their own 5PM judge.
+ * Returns 1 when the change put a dark unit back on the market. */
+int game_set_rent_class(GameSim *sim, Tower *tower, Tenant *t, int cls)
+{
+    if (!t || cls < 0 || cls > 3 || t->rent_class == cls) return 0;
+    t->rent_class = (uint8_t)cls;
+    if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
+        t->type != ITEM_SHOP) return 0;
+    judge_one_unit(sim, tower, t);
+    if (t->state == TENANT_ABANDONED && !t->demand_armed &&
+        t->demand_category != 0) {
+        t->demand_armed = 1;
+        printf("🔑 Vacant %s on F%d is back on the market (rent change)\n",
+               tower_item_name(t->type), t->floor);
+        return 1;
+    }
+    return 0;
+}
+
 /* The 4:59AM judge (JudgeTenant tail 1130:09bb): categorize every
  * office/condo/shop — EXCEPT vacant-and-armed units (their movers are
  * already on the way) — then re-arm any vacant unit whose category
