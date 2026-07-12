@@ -1464,6 +1464,18 @@ uint8_t game_init_cap_peak(ItemType type, int star)
 static void judge_one_unit(GameSim *sim, Tower *tower, Tenant *t)
 {
     int metric;
+    if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD) {
+        /* The rest/FF arm (JudgeT @07ac/@0760, shop-judge referee
+         * 2026-07-11): yesterday's CUSTOMERS vs the 50/35/25 income
+         * ladder — no stress, no rate class. They can never move out;
+         * the category feeds the eval map and the info popup. (The
+         * 4th category at >=50 is real in the bytes; its consumer is
+         * still undecoded.) */
+        int c = t->customers_today;
+        t->demand_category = c >= 50 ? 3 : c >= 35 ? 2 : c >= 25 ? 1 : 0;
+        (void)sim; (void)tower;
+        return;
+    }
     if (t->type == ITEM_SHOP) {
         /* Shops judge on yesterday's DEMAND: leftover walk-in quota +
          * customers vs thresholds (20, 25), the bar shifted by rate
@@ -1598,7 +1610,8 @@ void game_judge_daily(GameSim *sim, Tower *tower)
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
-            t->type != ITEM_SHOP) continue;
+            t->type != ITEM_SHOP && t->type != ITEM_RESTAURANT &&
+            t->type != ITEM_FAST_FOOD) continue;
         int vacant = t->state == TENANT_ABANDONED;
         /* TENANT_VACANT is the port's "leased, closed overnight" state —
          * at 4:59AM every healthy office is in it, so the judge must

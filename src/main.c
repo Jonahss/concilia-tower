@@ -3018,8 +3018,25 @@ static void render_minimap(void)
         } else if (is_shell) {
             r = 70; g = 70; b = 70;        /* shell only in overlay modes */
         } else if (game.map_mode == 1) {
-            if (t->state == TENANT_VACANT || t->state == TENANT_EMPTY ||
-                t->state == TENANT_CONSTRUCTION) { r = g = b = 200; }
+            /* Eval reads the JUDGE'S verdict where one exists — the same
+             * demand categories that drive move-outs, re-lets, and hotel
+             * booking (2 content cyan / 1 middle yellow / 0 stressed
+             * red). ABANDONED stays red: it's the rescue target the map
+             * is for. Types without a judge fall back to live stress. */
+            int judged = (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+                          t->type == ITEM_SHOP ||
+                          t->type == ITEM_RESTAURANT ||
+                          t->type == ITEM_FAST_FOOD ||
+                          item_is_hotel_room(t->type)) &&
+                         t->demand_category != 0xFF;
+            if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
+                { r = g = b = 200; }
+            else if (judged) {
+                if (t->demand_category == 0)      { r = 230; g = 40; b = 40; }
+                else if (t->demand_category == 1) { r = 220; g = 210; b = 40; }
+                else                              { r = 60; g = 220; b = 230; }
+            }
+            else if (t->state == TENANT_VACANT) { r = g = b = 200; }
             else if (t->stress >= 67 || t->state == TENANT_STRESSED ||
                      t->state == TENANT_ABANDONED) { r = 230; g = 40; b = 40; }
             else if (t->stress >= 34) { r = 220; g = 210; b = 40; }
@@ -4228,6 +4245,13 @@ static void render_inspect_popup(void)
                  t->demand_category == 0    ? "Stressed"
                : t->demand_category == 1    ? "OK"
                : t->demand_category == 2    ? "Good" : "New");
+    else if ((t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD) &&
+             t->demand_category != 0xFF)
+        /* the rest/FF arm's ladder verdict (yesterday's customers) */
+        snprintf(ln[n++], 40, "Business: %s",
+                 t->demand_category == 0    ? "Losing money"
+               : t->demand_category == 1    ? "Fair"
+               : t->demand_category == 2    ? "Good" : "Packed");
     else if (res || comm)
         snprintf(ln[n++], 40, "Satisfaction: %s",
                  t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");

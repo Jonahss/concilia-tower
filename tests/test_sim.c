@@ -1029,6 +1029,20 @@ static void test_occupancy_lifecycle(void)
           "the mover arrives: unit re-lets and banks the class-1 lump");
     CHECK(r->pool_stress_trips == 0 && r->tenure == 0,
           "a re-let resets the stress window and tenure");
+
+    /* rest/FF arm categories (JudgeT @07ac/@0760): yesterday's
+     * customers vs the 50/35/25 ladder — eval-map food, no move-out */
+    uint16_t rf = fplace(ITEM_RESTAURANT, 7, 100);
+    Tenant *rt = tenant(rf);
+    rt->state = TENANT_OCCUPIED; rt->customers_today = 55;
+    game_judge_daily(&sim, &tw);
+    CHECK(rt->demand_category == 3, "55 customers = the packed 4th tier");
+    rt->customers_today = 20;
+    game_judge_daily(&sim, &tw);
+    CHECK(rt->demand_category == 0, "under 25 customers = the loss tier");
+    game_stressed_moveout(&sim, &tw);
+    CHECK(rt->state == TENANT_OCCUPIED,
+          "a loss-tier restaurant still never moves out");
 }
 
 /* The info-dialog price control (InfoDlgT 1100:0b93-0c5e): the sole
