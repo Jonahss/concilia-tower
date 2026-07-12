@@ -33,6 +33,7 @@
 #include "game.h"
 
 static uint8_t sched_mode_now(const PeopleSim *ps, const ElevatorShaft *s);
+static void release_car(Tower *tower, Person *p);
 
 #define GROUND_IDX  (TOWER_LOBBY_FLOOR - TOWER_MIN_FLOOR)
 
@@ -659,6 +660,7 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         /* commuters/patrons leave at ground; staff arrive back at their
          * unit — either way the return trip ends the entity */
         deliver_stress(ps, tower, p);
+        release_car(tower, p);
         p->home_tenant = 0;
         p->state = PERSON_FREE;
         return;
@@ -1041,31 +1043,44 @@ static Tenant *pick_retail(Tower *tower, ItemType kind, int floor, int seed,
     return NULL;
 }
 
-/* A random usable parking floor, or -1 (ParkingT: the EXE assigns a
- * UNIFORM RANDOM usable space, not the nearest — 1198:06e7). Parking is
- * the original's elevator-bypass valve: drivers enter and leave at their
- * car's floor, splitting off the lobby/express crush. PROXY: "usable
- * space" = a reachable occupied parking floor; the space/quota/ramp-chain
- * model (512-space cap, per-category quotas) awaits buildable ramps. */
-static int parking_entry_floor(Tower *tower, const uint8_t *reach, int seed)
+/* Assign a car (UseCarPerson 1198:06e7 + the gate counts 002f/00d9):
+ * pick a UNIFORM RANDOM usable space — not the nearest — and count the
+ * car against the category's quota (quota = 2 x usable spaces for BOTH
+ * admitting categories; double-parking is real, the quota is the only
+ * limiter). Returns the space's floor index and increments the counter,
+ * or -1 (lot full / no chain / unreachable pick). Parking is the
+ * original's elevator-bypass valve: drivers enter and leave at their
+ * car's floor, splitting off the lobby/express crush.
+ * PORT GUARD (divergence, deliberate): a space whose floor has no
+ * public-transport reach rejects the car — the EXE would strand the
+ * person; we treat it like a failed park instead. */
+int people_parking_assign(Tower *tower, const uint8_t *reach, int suite,
+                          int seed)
 {
-    int n = 0;
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_PARKING || t->state != TENANT_OCCUPIED) continue;
-        int f = floor_to_index(t->floor);
-        if (f >= 0 && f < TOWER_FLOOR_COUNT && reach[f]) n++;
-    }
-    if (!n) return -1;
+    int *cars = suite ? &tower->cars_suite : &tower->cars_office;
+    if (tower->usable_spaces <= 0 ||
+        *cars >= 2 * tower->usable_spaces) return -1;
+    int n = tower->usable_spaces;
     int pick = ((seed % n) + n) % n, k = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_PARKING || t->state != TENANT_OCCUPIED) continue;
+        if (t->type != ITEM_PARKING || !t->space_usable) continue;
+        if (k++ != pick) continue;
         int f = floor_to_index(t->floor);
-        if (f >= 0 && f < TOWER_FLOOR_COUNT && reach[f] && k++ == pick)
-            return f;
+        if (f < 0 || f >= TOWER_FLOOR_COUNT || !reach[f]) return -1;
+        (*cars)++;
+        return f;
     }
     return -1;
+}
+
+/* The car leaves with its owner (InParkingCar 1198:031a releases the
+ * gate count). Called on every path that retires a person for good. */
+static void release_car(Tower *tower, Person *p)
+{
+    if (p->parked_cat == 1 && tower->cars_office > 0) tower->cars_office--;
+    else if (p->parked_cat == 2 && tower->cars_suite > 0) tower->cars_suite--;
+    p->parked_cat = 0;
 }
 
 /* How many visitors one metro pumps into the tower per time-of-day phase.
@@ -1082,7 +1097,6 @@ static int parking_entry_floor(Tower *tower, const uint8_t *reach, int seed)
 static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                         int hour, const uint8_t *reach_public)
 {
-    int park = parking_entry_floor(tower, reach_public, frame);
     if ((uint8_t)tod != ps->cur_phase) {
         ps->cur_phase = (uint8_t)tod;
         memset(ps->spawned, 0, sizeof(ps->spawned));
@@ -1092,7 +1106,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             Person *p = &ps->people[i];
             if (!p->home_tenant || p->state != PERSON_AT_DEST) continue;
             Tenant *t = tower_tenant(tower, p->home_tenant);
-            if (!t) { p->home_tenant = 0; p->state = PERSON_FREE; continue; }
+            if (!t) { release_car(tower, p);
+                      p->home_tenant = 0; p->state = PERSON_FREE; continue; }
             int is_office = t->type == ITEM_OFFICE;
             int is_hotel = t->type == ITEM_HOTEL_SINGLE ||
                            t->type == ITEM_HOTEL_TWIN ||
@@ -1209,19 +1224,26 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
          * same way) — with no parking, suites host only their carless
          * first guest. PROXY: person ids = spawn order. The old
          * "alternate commuters drive" rule was the port's invention. */
-        int entry = GROUND_IDX;
+        int entry = GROUND_IDX, cat = 0;
         if (inbound && tower->star_rating >= 3) {
             if (t->type == ITEM_HOTEL_SUITE && ps->spawned[i] >= 1) {
+                int park = people_parking_assign(tower, reach_public, 1, frame + i);
                 if (park < 0) continue;       /* visit canceled */
-                entry = park;
+                entry = park; cat = 2;
             } else if (t->type == ITEM_OFFICE && ps->spawned[i] == 2 &&
-                       ((t->floor + i) & 3) == 1 && park >= 0) {
-                entry = park;
+                       ((t->floor + i) & 3) == 1) {
+                int park = people_parking_assign(tower, reach_public, 0, frame + i);
+                if (park >= 0) { entry = park; cat = 1; }
+                /* failed park = the worker walks in via the lobby */
             }
         }
         int sp = spawn_person(ps, tower, t, entry, fidx, 0);
+        if (!sp && cat) {   /* people table full — put the car back */
+            if (cat == 1) tower->cars_office--; else tower->cars_suite--;
+        }
         if (sp) {
             ps->people[sp - 1].entry_floor = (uint8_t)entry;
+            ps->people[sp - 1].parked_cat = (uint8_t)cat;
             if (patron)
                 ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
             if (walkin) {

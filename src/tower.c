@@ -175,6 +175,41 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
     if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
         type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0) return 0;
+
+    /* Parking (ParkingT, byte-verified 2026-07-11 referee):
+     * one ramp strip per basement floor (real .TDT saves store exactly
+     * one); spaces need a same-floor ramp FIRST (CheckParkingGate,
+     * build msg 0x22) and respect the global 512-space cap (msg 0x1E).
+     * Chain usability is NOT a build gate — the EXE lets you place a
+     * disconnected ramp and just marks its spaces unusable at the next
+     * CheckAllParking sweep. */
+    if (type == ITEM_RAMP) {
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == ITEM_RAMP && t->floor == floor) {
+                printf("  [reject] Ramp at F%d: floor already has a ramp\n",
+                       floor);
+                return 0;
+            }
+        }
+    }
+    if (type == ITEM_PARKING) {
+        int has_ramp = 0, spaces = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == ITEM_RAMP && t->floor == floor) has_ramp = 1;
+            if (t->type == ITEM_PARKING) spaces++;
+        }
+        if (!has_ramp) {
+            printf("  [reject] Parking at F%d: build a ramp on this floor "
+                   "first\n", floor);
+            return 0;
+        }
+        if (spaces >= 512) {
+            printf("  [reject] Parking: the 512-space cap is reached\n");
+            return 0;
+        }
+    }
     
     /* Check for overlap on ALL floors this item occupies */
     if (!is_transport) {

@@ -106,6 +106,10 @@ typedef struct {
     uint8_t  entry_floor;   /* floor this visitor leaves through (ground for
                              * street patrons/commuters; the metro floor for
                              * metro visitors). Set at spawn. */
+    uint8_t  parked_cat;    /* car on the lot: 0 none / 1 office / 2 suite —
+                             * released against the tower's category counter
+                             * when the person leaves for good (ParkingT
+                             * gate counts, 1198:002f/031a) */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
     int      wait_start;    /* sim frame when the queue was joined (+0xA) */
     int      x;             /* walking-origin x (home tenant x, GetPersonX) */
@@ -245,6 +249,11 @@ void people_init(PeopleSim *ps);
 /* Rebuild gap map + shafts from the tower. Cheap when nothing changed
  * (diffs the transport layout; resets cars/queues only on change). */
 void people_rebuild_transport(PeopleSim *ps, Tower *tower);
+/* Car assignment (UseCarPerson 1198:06e7): uniform-random usable space,
+ * 2N-per-category quota. Returns the space's floor index (and counts
+ * the car) or -1. suite selects the category. Exposed for tests. */
+int people_parking_assign(Tower *tower, const uint8_t *reach, int suite,
+                          int seed);
 
 /* One simulation tick: spawning, trips, queues, cars, stress delivery.
  * frame = global tick counter, tod = TimeOfDay (game.h value), hour =

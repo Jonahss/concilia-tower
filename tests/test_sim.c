@@ -420,15 +420,17 @@ static void test_parking_cars(void)
     of->id = 0xF02; of->type = ITEM_OFFICE; of->floor = (int8_t)ofl;
     of->x = BX; of->width = 9; of->state = TENANT_OCCUPIED;
 
-    /* parking on f2 (constructed directly — placement is basement-only) */
-    Tenant *pk = &tw.tenants[tw.tenant_count++];
-    *pk = (Tenant){0};
-    pk->id = 0xF01; pk->type = ITEM_PARKING; pk->floor = 2; pk->x = BX;
-    pk->width = 6; pk->state = TENANT_OCCUPIED;
-    int pf = floor_to_index(2);
+    /* a real garage now: B1 ramp + space, on the chain */
+    uint16_t rmp = fplace(ITEM_RAMP, -1, 120);
+    uint16_t spc = fplace(ITEM_PARKING, -1, 100);
+    tenant(rmp)->state = TENANT_OCCUPIED;
+    tenant(spc)->state = TENANT_OCCUPIED;
+    place(ITEM_ELEVATOR_SHAFT, -1, 250);
+    int pf = floor_to_index(-1);
 
     people_rebuild_transport(&sim.people, &tw);
     game_update_reachability(&sim, &tw);
+    game_parking_recompute(&sim, &tw);
 
     int via_park = 0, via_lobby = 0;
     for (int frame = 0; frame < 3000; frame++) {
@@ -452,13 +454,15 @@ static void test_parking_cars(void)
     for (int f = 0; f <= 4; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
     Tenant *st = tenant(ste);
     st->state = TENANT_OCCUPIED; st->demand_armed = 1;
-    Tenant *pk2 = &tw.tenants[tw.tenant_count++];
-    *pk2 = (Tenant){0};
-    pk2->id = 0xF03; pk2->type = ITEM_PARKING; pk2->floor = 1; pk2->x = 100;
-    pk2->width = 6; pk2->state = TENANT_OCCUPIED;
-    int pf2 = floor_to_index(1);
+    uint16_t rmp2 = fplace(ITEM_RAMP, -1, 120);
+    uint16_t spc2 = fplace(ITEM_PARKING, -1, 100);
+    tenant(rmp2)->state = TENANT_OCCUPIED;
+    tenant(spc2)->state = TENANT_OCCUPIED;
+    place(ITEM_ELEVATOR_SHAFT, -1, 250);
+    int pf2 = floor_to_index(-1);
     people_rebuild_transport(&sim.people, &tw);
     game_update_reachability(&sim, &tw);
+    game_parking_recompute(&sim, &tw);
     int drove = 0;
     for (int frame = 0; frame < 4000 && !drove; frame++) {
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
@@ -470,11 +474,13 @@ static void test_parking_cars(void)
     }
     CHECK(drove, "a suite guest parks and enters at the car's floor");
 
-    /* no parking: the suite hosts only its carless first guest */
-    pk2->state = TENANT_EMPTY;
+    /* no parking: the suite hosts only its carless first guest
+     * (demolish the ramp — the chain dies, the space goes dark) */
+    tower_remove(&tw, rmp2);
     memset(&sim.people, 0, sizeof(sim.people));
     people_rebuild_transport(&sim.people, &tw);
     game_update_reachability(&sim, &tw);
+    game_parking_recompute(&sim, &tw);
     for (int frame = 0; frame < 4000; frame++)
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
                       sim.reach_public, sim.reach_service);
@@ -1074,6 +1080,86 @@ static void test_rent_control(void)
     CHECK(game_set_rent_class(&sim, &tw, h, 0) == 0 &&
           h->rent_class == 0 && h->demand_category == 2,
           "a hotel room takes the class without an office-style judge");
+}
+
+/* Buildable parking (ParkingT, byte-verified 2026-07-11 referee):
+ * build gates (same-floor ramp, one ramp/floor, 512 cap), the
+ * B1-anchored same-x ramp chain, the >=4-cell gap rule, and the
+ * per-category car quotas with double-parking. */
+static void test_parking_model(void)
+{
+    printf("parking (ramps/chain/gap/quota):\n");
+    fresh();
+    /* widen the ground floor so basement items have support */
+    for (int cx = 100; cx < 179; cx += 4) place(ITEM_LOBBY, 0, cx);
+
+    /* build gates (through the real placement path) */
+    CHECK(place(ITEM_PARKING, -1, 100) == 0,
+          "a space needs a ramp on its floor first");
+    uint16_t r1 = place(ITEM_RAMP, -1, 120);
+    CHECK(r1 != 0, "a B1 ramp places");
+    CHECK(place(ITEM_RAMP, -1, 140) == 0, "one ramp per floor");
+    uint16_t s1 = place(ITEM_PARKING, -1, 100);
+    CHECK(s1 != 0, "a space places once the ramp exists");
+
+    /* chain: B2 ramp at a DIFFERENT x doesn't chain; same x does
+     * (fixtures constructed directly — the chain logic is the subject) */
+    tenant(r1)->state = TENANT_OCCUPIED;
+    tenant(s1)->state = TENANT_OCCUPIED;
+    uint16_t r2 = fplace(ITEM_RAMP, -2, 160);
+    uint16_t s2 = fplace(ITEM_PARKING, -2, 200);
+    tenant(r2)->state = TENANT_OCCUPIED;
+    tenant(s2)->state = TENANT_OCCUPIED;
+    game_parking_recompute(&sim, &tw);
+    CHECK(tenant(s1)->space_usable, "B1 space on the chain is usable");
+    CHECK(!tenant(s2)->space_usable,
+          "a B2 ramp at a different x does NOT chain");
+    CHECK(tw.usable_spaces == 1, "usable count sees only the chain");
+    /* re-anchor B2's ramp at the same x as B1's — it chains, but the
+     * 64 bare cells between ramp and space still sever the drive path
+     * (>=4-cell gap rule) */
+    tower_remove(&tw, r2);
+    r2 = fplace(ITEM_RAMP, -2, 120);
+    tenant(r2)->state = TENANT_OCCUPIED;
+    game_parking_recompute(&sim, &tw);
+    CHECK(!tenant(s2)->space_usable && tw.usable_spaces == 1,
+          "a same-x ramp chains, but bare floor severs the far space");
+
+    /* pave the drive path except a 4-cell hole at 196..199 — still
+     * severed; close the hole to 3 cells and the space comes back */
+    for (int cx = 136; cx < 196; cx++)
+        tw.grid[floor_to_index(-2)][cx].type = ITEM_FLOOR;
+    game_parking_recompute(&sim, &tw);
+    CHECK(!tenant(s2)->space_usable,
+          "a 4-cell bare gap severs the floor past it");
+    tw.grid[floor_to_index(-2)][196].type = ITEM_FLOOR;
+    game_parking_recompute(&sim, &tw);
+    CHECK(tenant(s2)->space_usable && tw.usable_spaces == 2,
+          "shrinking the gap to 3 cells restores the space");
+
+    /* quotas: 2 usable spaces -> 4 cars per category (2N each,
+     * double-parking is real — the quota is the only limiter) */
+    tw.cars_office = 0; tw.cars_suite = 0;
+    uint8_t reach[TOWER_FLOOR_COUNT];
+    memset(reach, 1, sizeof reach);
+    int admitted = 0;
+    for (int k = 0; k < 10; k++)
+        if (people_parking_assign(&tw, reach, 0, k) >= 0) admitted++;
+    CHECK(admitted == 4 && tw.cars_office == 4,
+          "office cars admit to 2N then the lot is full");
+    CHECK(people_parking_assign(&tw, reach, 1, 0) >= 0 &&
+          tw.cars_suite == 1,
+          "the suite category has its own independent 2N quota");
+    tw.cars_office = 99;
+    game_parking_recompute(&sim, &tw);
+    CHECK(tw.cars_office == 2 * tw.usable_spaces,
+          "car counters clamp to the 2N quota on recompute");
+
+    /* demolishing the B1 ramp darkens the whole garage */
+    tower_remove(&tw, r1);
+    game_parking_recompute(&sim, &tw);
+    CHECK(tw.usable_spaces == 0 && !tenant(s1)->space_usable,
+          "no B1 ramp, no usable garage");
 }
 
 /* Metro/parking money (res 0x3EA, byte-verified 2026-07-11): $100k per
@@ -2074,6 +2160,7 @@ int main(void)
     test_infra_upkeep();
     test_occupancy_lifecycle();
     test_rent_control();
+    test_parking_model();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

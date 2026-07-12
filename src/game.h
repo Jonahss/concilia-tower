@@ -749,6 +749,12 @@ void game_relet_arrivals(GameSim *sim, Tower *tower);
  * re-armed a dark vacancy. */
 int game_set_rent_class(GameSim *sim, Tower *tower, Tenant *t, int cls);
 
+/* Parking usability (ParkingT CheckAllParking): mark each space usable
+ * iff its floor's ramp chains from B1 (vertical same-x stack) and no
+ * >=4-cell bare gap cuts the floor. Runs daily at 7AM + on build/
+ * demolish/import. */
+void game_parking_recompute(GameSim *sim, Tower *tower);
+
 /* The persistent peak a freshly-built unit of this type starts at, by star
  * level (TenantMake MakeTenant). 0 = not peak-managed. */
 uint8_t game_init_cap_peak(ItemType type, int star);

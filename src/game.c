@@ -1065,6 +1065,9 @@ void game_update(GameSim *sim, Tower *tower)
     if (reach_throttle-- <= 0) {
         game_update_reachability(sim, tower);
         people_rebuild_transport(&sim->people, tower);
+        /* Usability is layout-derived too (the EXE also recomputes on
+         * build/demolish, not just the daily 7AM sweep). */
+        game_parking_recompute(sim, tower);
         reach_throttle = 15;
     }
 
@@ -1098,6 +1101,8 @@ void game_update(GameSim *sim, Tower *tower)
             for (int i = 0; i < tower->tenant_count; i++)
                 if (tower->tenants[i].type == ITEM_MEDICAL)
                     tower->tenants[i].patients_today = 0;
+            /* CheckAllParking (TimeT ft-0 row = 7:00AM) */
+            game_parking_recompute(sim, tower);
         }
         evaluate_star_rating(sim, tower);
     }
@@ -1247,15 +1252,7 @@ void game_update(GameSim *sim, Tower *tower)
              * the person via their parked car) — no usable parking, no
              * VIP visit (the EXE's VoidVipVisit on a failed park;
              * binding is MEDIUM-HIGH per the 2026-07-11 referee). */
-            int vip_can_park = 0;
-            for (int i = 0; i < tower->tenant_count && !vip_can_park; i++) {
-                Tenant *pt = &tower->tenants[i];
-                int pf = floor_to_index(pt->floor);
-                if (pt->type == ITEM_PARKING &&
-                    pt->state == TENANT_OCCUPIED &&
-                    pf >= 0 && pf < TOWER_FLOOR_COUNT &&
-                    sim->reach_public[pf]) vip_can_park = 1;
-            }
+            int vip_can_park = tower->usable_spaces > 0;
             if (tower->day % 9 == 3 && tower->star_rating >= 3 &&
                 !vip_can_park) {
                 printf("👔 VIP visit canceled — nowhere to park the car.\n");
@@ -1494,6 +1491,75 @@ static void judge_one_unit(GameSim *sim, Tower *tower, Tenant *t)
                                         : TUNING.judge_moderate;
     t->demand_category = metric >= bar ? 0
                        : metric >= DEMAND_HAPPY_BAR ? 1 : 2;
+    (void)sim;
+}
+
+/* ================================================================
+ * Parking usability (ParkingT CheckAllParking, TimeT ft-0 row —
+ * byte-verified 2026-07-11 referee)
+ * ================================================================
+ * A space is USABLE iff its floor's ramp is on the chain anchored at
+ * B1 — ramps must stack vertically at the same x to extend the chain
+ * downward — and no >=4-cell bare gap on the floor cuts the drive
+ * path between the ramp and the space. Recomputed daily at 7AM and on
+ * build/demolish. Disconnected floors keep their spaces, dark. */
+void game_parking_recompute(GameSim *sim, Tower *tower)
+{
+    /* One ramp per basement floor (build-gated); chain from B1 down. */
+    int ramp_x[TOWER_FLOOR_COUNT];
+    uint8_t chained[TOWER_FLOOR_COUNT];
+    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) {
+        ramp_x[i] = -1;
+        chained[i] = 0;
+    }
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_RAMP || t->state == TENANT_EMPTY ||
+            t->state == TENANT_CONSTRUCTION) continue;
+        int f = floor_to_index(t->floor);
+        if (f >= 0 && f < TOWER_FLOOR_COUNT) ramp_x[f] = t->x;
+    }
+    for (int floor = -1; floor >= TOWER_MIN_FLOOR; floor--) {
+        int f = floor_to_index(floor);
+        if (ramp_x[f] < 0) break;                    /* chain ends */
+        if (floor < -1) {
+            int above = floor_to_index(floor + 1);
+            if (!chained[above] || ramp_x[f] != ramp_x[above]) break;
+        }
+        chained[f] = 1;
+    }
+
+    tower->usable_spaces = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_PARKING) continue;
+        int f = floor_to_index(t->floor);
+        int ok = f >= 0 && f < TOWER_FLOOR_COUNT && chained[f];
+        if (ok) {
+            /* Walk from the ramp toward the space; a run of >= 4 bare
+             * cells severs the floor past it (referee verdict 6). */
+            int rx = ramp_x[f], step = (t->x > rx) ? 1 : -1;
+            int from = (step > 0) ? rx + ITEM_WIDTH[ITEM_RAMP] : rx - 1;
+            int gap = 0;
+            for (int cx = from; ok && cx != t->x && cx >= 0 &&
+                                cx < TOWER_WIDTH; cx += step) {
+                if (tower->grid[f][cx].type == ITEM_NONE) {
+                    if (++gap >= 4) ok = 0;
+                } else gap = 0;
+            }
+        }
+        t->space_usable = (uint8_t)ok;
+        t->space_ordinal = (uint16_t)(ok ? tower->usable_spaces : 0xFFFF);
+        if (ok) tower->usable_spaces++;
+    }
+
+    /* Cars never outlive their space's usability window in a way the
+     * quota math can see — clamp the counters so a demolished garage
+     * doesn't pin the categories full forever. */
+    if (tower->cars_office > 2 * tower->usable_spaces)
+        tower->cars_office = 2 * tower->usable_spaces;
+    if (tower->cars_suite > 2 * tower->usable_spaces)
+        tower->cars_suite = 2 * tower->usable_spaces;
     (void)sim;
 }
 
@@ -2812,7 +2878,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 10u  /* v10: the occupancy lifecycle (shared demand
+#define SAVE_VERSION 11u  /* v11: parking (space_usable, car counters,
+                           * Person.parked_cat) */
+                          /* v10: the occupancy lifecycle (shared demand
                            * bytes for office/condo/shop; tenure).
                            * v9: occupant sprites in GameSim (AnimPeple).
                            * v8: retail patron economy in Tenant (service

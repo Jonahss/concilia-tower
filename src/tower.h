@@ -368,6 +368,14 @@ typedef struct {
                               the map's Rent overlay (file tenant +0x0F;
                               JudgeT adjusts it in the EXE) */
 
+    /* --- Parking space (ITEM_PARKING only) --- */
+    uint8_t  space_usable; /* on the B1-anchored ramp chain, not cut off by
+                              a >=4-cell bare gap (ParkingT CheckAllParking;
+                              recomputed daily at 7AM + on build/demolish) */
+    uint16_t space_ordinal;/* position among usable spaces (recomputed with
+                              space_usable) — spaces with ordinal < parked
+                              cars render a car, the rest an empty bay */
+
     /* --- .TDT round-trip side data (preserved verbatim across import/export) --- */
     /* Slot in the file's 512-entry retail subtype table, stored +1 so
      * 0 = none. Set on import from tenant byte +0x06; allocated at
@@ -417,6 +425,14 @@ typedef struct {
      * after the serializer proper; preserved for round-trip. */
     char      twr_names[20][16];
     int       twr_name_count;
+
+    /* --- Parking (ParkingT, byte-verified 2026-07-11 referee) --- */
+    int       usable_spaces;   /* spaces on the B1 ramp chain (recomputed) */
+    int       cars_office;     /* cars in per admitting category; quota =
+                                  2 x usable_spaces EACH (double-parking is
+                                  real — the quota is the limiter, not
+                                  per-space occupancy) */
+    int       cars_suite;
 } Tower;
 
 /* Vertical transport categories */

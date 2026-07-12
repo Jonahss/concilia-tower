@@ -477,9 +477,10 @@ static const MenuItem menu_build_trans[] = {
     { NULL, ITEM_NONE, ACT_NONE },
     { "Lobby\tL",         ITEM_LOBBY,        ACT_NONE },
     { "Parking\tK",       ITEM_PARKING,      ACT_NONE },
+    { "Parking Ramp",     ITEM_RAMP,         ACT_NONE },
     { "Metro Station\tM", ITEM_METRO,        ACT_NONE },
 };
-#define MENU_BUILD_TRANS_COUNT 6
+#define MENU_BUILD_TRANS_COUNT 7
 
 /* Build > Services */
 static const MenuItem menu_build_svc[] = {
@@ -1239,14 +1240,21 @@ static void render_tower(void)
                      * 3-frame sheet (0 dark, 1 lit, 2+ party). */
                     frame_idx = tenant->venue_state == 0 ? 0
                               : tenant->venue_state == 1 ? 1 : 2;
-                } else if (tenant->type == ITEM_PARKING && nframes >= 2) {
-                    /* Parking (Jonah): frame 0 = red X (inaccessible); 1..n-1 are
-                     * car-bay VARIANTS (cosmetic, not occupancy). Red X when the
-                     * floor can't be reached, else a stable per-tenant variant. */
-                    int pf = floor_to_index(tenant->floor);
-                    int reachable = (pf >= 0 && pf < TOWER_FLOOR_COUNT &&
-                                     game.sim.reach_public[pf]);
-                    frame_idx = reachable ? (1 + (tenant->id % (nframes - 1))) : 0;
+                } else if (tenant->type == ITEM_PARKING && nframes >= 15) {
+                    /* Parking: 15-frame composite. Sheets dumped from the
+                     * EXE 2026-07-12: 0x86A8 = ONE empty-bay frame, 0x86A9
+                     * = red X + 13 car variants. So composite frame 0 =
+                     * empty bay, 1 = X, 2-14 = cars. (The June "frame 0 =
+                     * X" annotation was wrong — the old variant math both
+                     * leaked X's onto good spaces and never showed an
+                     * empty bay.) A space draws a car while the garage's
+                     * parked-car count covers its ordinal — the garage
+                     * fills by day and empties at night. */
+                    int parked = game.tower.cars_office +
+                                 game.tower.cars_suite;
+                    frame_idx = !tenant->space_usable ? 1
+                              : (tenant->space_ordinal < parked)
+                                    ? 2 + (tenant->id % 13) : 0;
                 } else if (tenant->type == ITEM_RECYCLING && nframes >= 5) {
                     /* Recycling (Jonah): the frames are a trash-accumulation
                      * cycle. We don't model a fill level, so loop it slowly —
@@ -3154,7 +3162,10 @@ static const ToolButton tool_buttons[] = {
     /* Elevator group: standard / service / express (click-and-hold) */
     { "ELV",  ITEM_ELEVATOR_SHAFT, 4,  160, 170, 180,
       { ITEM_ELEVATOR_SHAFT, ITEM_ELEVATOR_SERVICE, ITEM_ELEVATOR_EXPRESS }, { 4, 5, 6 }, 3 },
-    TB("PKG",  ITEM_PARKING,       17,  160, 160, 160),
+    /* Parking group: spaces / ramp (click-and-hold). Spaces are gated on
+     * a same-floor ramp, so the ramp rides along in the pull-down. */
+    { "PKG",  ITEM_PARKING,       17,  160, 160, 160,
+      { ITEM_PARKING, ITEM_RAMP }, { 17, 16 }, 2 },
     TB("RCY",  ITEM_RECYCLING,     18,  100, 180, 100),
     TB("MTR",  ITEM_METRO,         19,  100, 100, 120),
     TB("CTH",  ITEM_CATHEDRAL,     20,  230, 220, 200),

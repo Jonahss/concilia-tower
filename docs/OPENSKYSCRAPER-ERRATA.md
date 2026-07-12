@@ -253,3 +253,20 @@ draw gate) disagrees on every count:
 Evidence: seg_11c0 raw (`FUN_11c0_024a` scan/assign, `FUN_11c0_0428`
 36x36 rect one row above at `crane_x*8 - scroll`, gate in
 `FUN_11c0_0000`).
+
+## Parking-space sheets 0x86A8/0x86A9: not "departing/arriving"
+
+OpenSkyscraper's `SimTowerLoader.cpp` labels the two parking bitmaps
+`car/departing` (0x86A8) and `car/arriving` (0x86A9) and merges them
+as one strip. Dumping the DIBs (2026-07-12) shows they're the parking
+SPACE's frame set, not car-motion frames:
+
+- **0x86A8** is a single 32x24 frame: the **empty bay**.
+- **0x86A9** is 14 frames: the **red X** (space unusable — off the
+  B1-anchored ramp chain, ParkingT CheckAllParking) followed by
+  **13 parked-car variants**.
+
+So the merged 15-frame strip is: empty bay, X, then 13 cars. Nothing
+in either sheet animates arrival or departure; the EXE picks a car
+frame per occupied space (random 1-of-13 at park time, 1198:031a
+path) and the X/empty frames by usability/occupancy.
