@@ -1514,7 +1514,7 @@ void game_judge_daily(GameSim *sim, Tower *tower)
         if (!vacant && t->state != TENANT_OCCUPIED &&
             t->state != TENANT_STRESSED &&
             t->state != TENANT_VACANT) continue;
-        if (vacant && t->demand_armed) continue;
+        if (vacant && t->demand_armed && t->type != ITEM_SHOP) continue;
         judge_one_unit(sim, tower, t);
         if (vacant && !t->demand_armed && t->demand_category != 0) {
             t->demand_armed = 1;
@@ -1551,16 +1551,13 @@ void game_stressed_moveout(GameSim *sim, Tower *tower)
             t->state != TENANT_VACANT)   /* leased-but-closed-overnight */
             continue;
         if (t->demand_category != 0) continue;
-        if (t->type == ITEM_SHOP) continue;
-        /* SHOPS EXEMPT PENDING DECODE: the shop demand judge as ported
-         * ((quota_left + customers) vs (20,25)+class-adj) evicts every
-         * BARKLE basement shop whenever the rainy-day quota cap (18)
-         * feeds a settlement judge — a collision the real calendar hits
-         * every 24 days (day = 20 mod 24), which the real game visibly
-         * survives. The 0xDDAC/AE thresholds and JudgeT 069e's rainy
-         * interaction were flagged out-of-scope by both 2026-07-11
-         * referees; shop move-outs stay off until that decode lands.
-         * (Shop categories still compute for display/re-arming.) */
+        /* Tenure 0 = the first-settlement immunity — and ShopVacate
+         * RESETS tenure to 0 (seg48 @123b), so a freshly re-let shop
+         * gets the same grace. This is half of why the EXE's every-24th
+         * -day rainy/settlement eviction wave is a blink, not a purge
+         * (shop-judge referee 2026-07-11): evicted shops keep their
+         * scores, keep trading vacant, and re-let within ~1.5 days. */
+        if (t->type == ITEM_SHOP && t->tenure == 0) continue;
 
         if (t->type == ITEM_CONDO) {
             int buyback = tenant_rent(ITEM_CONDO, t->rent_class);
@@ -1941,8 +1938,13 @@ void game_retail_hourly(GameSim *sim, Tower *tower)
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (!is_retail(t->type)) continue;
-        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION ||
-            t->state == TENANT_ABANDONED) continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
+            continue;
+        /* A VACANT shop's record still runs its day (shop-judge referee:
+         * the vacant record opens on its residual score — that quota is
+         * what re-arms and re-lets it). Vacant restaurants/FF can't
+         * exist (they never move out). */
+        if (t->state == TENANT_ABANDONED && t->type != ITEM_SHOP) continue;
         int is_rest = t->type == ITEM_RESTAURANT;
         if ((h == 10 && !is_rest) || (h == 17 && is_rest))
             retail_open_one(sim, tower, t);

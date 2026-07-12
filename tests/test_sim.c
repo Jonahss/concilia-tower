@@ -960,15 +960,31 @@ static void test_occupancy_lifecycle(void)
     CHECK(c->state == TENANT_ABANDONED && tw.money == money0 - 150000,
           "condo departure charges the class-1 buy-back ($150k)");
 
-    /* Shops: move-out GATED pending the threshold decode (the ported
-     * judge purges towers on rainy-settlement collisions the real game
-     * survives — 0xDDAC/AE referee queued). Categories still compute. */
+    /* Shops: the eviction blink (shop-judge referee 2026-07-11) — a
+     * tenured cat-0 shop vacates, keeps its scores, and its tenure
+     * reset buys the one-settlement immunity that makes the every-24th
+     * -day rainy collision a blink instead of a purge. */
     uint16_t sh = fplace(ITEM_SHOP, 6, 100);
     Tenant *s = tenant(sh);
-    s->state = TENANT_OCCUPIED; s->demand_category = 0; s->tenure = 5;
+    s->state = TENANT_OCCUPIED; s->demand_category = 0; s->tenure = 0;
     game_stressed_moveout(&sim, &tw);
-    CHECK(s->state == TENANT_OCCUPIED,
-          "shop move-outs stay off until the threshold decode");
+    CHECK(s->state == TENANT_OCCUPIED, "a first-quarter shop is immune");
+    s->tenure = 2;
+    s->retail_score[0] = 23;
+    game_stressed_moveout(&sim, &tw);
+    CHECK(s->state == TENANT_ABANDONED && s->tenure == 0 &&
+          s->retail_score[0] == 23,
+          "eviction keeps the scores and resets tenure (the blink)");
+    /* the vacant shop trades on: opens on its residual score, and a
+     * fresh (weekday) demand day re-arms it without a price cut */
+    tw.day = 1; sim.hour = 10;
+    game_retail_hourly(&sim, &tw);
+    CHECK(s->retail_open && s->retail_quota == 23,
+          "a vacant shop still opens on its residual score");
+    s->customers_today = 23; s->retail_quota = 0;
+    game_judge_daily(&sim, &tw);
+    CHECK(s->demand_armed,
+          "a good trading day re-arms the vacancy - no price cut needed");
 
     /* shop demand judge: quota_left + customers vs (20,25) + class adj */
     s->state = TENANT_OCCUPIED;

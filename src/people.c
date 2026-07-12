@@ -1117,8 +1117,7 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
          * Windows: office weekday morning, condo morning (no dice gate
          * worth modeling at one mover), shop from 10AM. */
         if (t->state == TENANT_ABANDONED && t->demand_armed &&
-            (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
-             t->type == ITEM_SHOP)) {
+            (t->type == ITEM_OFFICE || t->type == ITEM_CONDO)) {
             int window =
                 (t->type == ITEM_OFFICE && tod == TOD_MORNING &&
                  tower->day % 3 != 2) ||
@@ -1132,7 +1131,10 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 ps->spawned[i]++;
             continue;
         }
-        if (t->state != TENANT_OCCUPIED) continue;
+        /* vacant-but-armed shops keep trading (their pool re-lets them) */
+        if (t->state != TENANT_OCCUPIED &&
+            !(t->type == ITEM_SHOP && t->state == TENANT_ABANDONED &&
+              t->demand_armed)) continue;
         /* Hotel guests spawn only for rooms the 5PM demand pass armed —
          * the EXE's +0x14 booking gate (UniPeple 1220:3032). This is what
          * keeps dirty and infested rooms guest-free: they can never arm. */
@@ -1146,8 +1148,13 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
          * 10AM-5PM and rush 5-9PM; restaurants 5-9PM, then the stragglers
          * pour in until 11PM. */
         int walkin = 0;
-        if (is_retail_kind(t->type) && t->retail_open &&
-            t->retail_quota > 0) {
+        /* A vacant, armed shop's pool flows exactly like a live one's —
+         * the first walk-in to arrive IS the re-let (shop-judge referee:
+         * the own pool re-lets the same day the residual score arms). */
+        int shop_relet = t->type == ITEM_SHOP &&
+                         t->state == TENANT_ABANDONED && t->demand_armed;
+        if ((is_retail_kind(t->type) && t->retail_open &&
+             t->retail_quota > 0) || (shop_relet && t->retail_quota > 0)) {
             int roll = 0;
             if (t->type == ITEM_RESTAURANT)
                 roll = (hour >= 17 && hour < 21) ? 12
