@@ -232,6 +232,12 @@ typedef struct {
      * the "wants dinner" status ONCE at check-in). One bit per tenant,
      * cleared with the phase reset. */
     uint8_t  dinner_sent[MAX_TENANTS / 8];
+
+    /* Movers who just reached a VACANT, armed office/condo/shop — the
+     * re-let events, consumed by game_relet_arrivals (banks the move-in
+     * lump and flips the unit occupied). */
+    uint16_t relet_arrival_tenant[16];
+    int      relet_arrivals;
 } PeopleSim;
 
 void people_init(PeopleSim *ps);

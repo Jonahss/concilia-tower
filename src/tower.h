@@ -295,36 +295,43 @@ typedef struct {
                                 (hard cap 40/day — InMedicalPeple 1170:0291;
                                 a full center turns patients away SILENTLY) */
 
-    /* --- Hotel demand model (EXE tenant bytes +0x14/+0x15/+0x17, decoded
-     *     by referee_infested_checkin_2026-07-10) --- */
-    uint8_t  open_for_booking; /* EXE +0x14 — "this room takes guests tonight".
-                                * THE booking gate: a parked guest's sim arm
-                                * returns immediately when it's 0 (UniPeple
-                                * 1220:3032), so a room that never arms never
-                                * rents. Armed/disarmed by the daily 5PM pass;
-                                * cleared by checkout, roach spread, and the
-                                * neglect pass. Nothing in the EXE can arm a
-                                * dirty or infested room. */
-    uint8_t  demand_category;  /* EXE +0x15 — yesterday-evening's demand verdict:
-                                * 2 = guests happy (avg stress < 80)
-                                * 1 = acceptable   (avg stress < the star bar)
-                                * 0 = stressed out (avg stress >= 150/200) —
-                                *     disarmed unless a same-floor category-2
-                                *     room vouches for it (the pairing rescue,
-                                *     JudgeT 1130:0f57). */
-    uint8_t  neglect_days;     /* EXE +0x17 — consecutive 5PM passes spent
+    /* --- The demand model (EXE tenant bytes +0x14/+0x15/+0x17) — SHARED
+     *     by two systems on the same bytes: hotel rooms on the 5PM pass
+     *     (referee_infested_checkin_2026-07-10) and office/condo/shop on
+     *     the daily 4:59AM judge (referee_vacancy_relet_2026-07-11). --- */
+    uint8_t  demand_armed; /* EXE +0x14 —
+                                * HOTEL: "takes guests tonight" — the booking
+                                * gate (UniPeple 1220:3032); armed/disarmed by
+                                * the 5PM pass; nothing can arm a dirty or
+                                * infested room.
+                                * OFFICE/CONDO/SHOP: "on the market" — a
+                                * VACANT unit's movers only travel while
+                                * armed. Cleared at vacate; re-armed only by
+                                * the daily judge (category != 0) or the
+                                * move-out pairing. */
+    uint8_t  demand_category;  /* EXE +0x15 — the judge's verdict:
+                                * 2 = content (metric < 80)
+                                * 1 = middle  (metric < the star bar 150/200)
+                                * 0 = stressed — hotel rooms are disarmed
+                                *     for the night (unless paired);
+                                *     office/condo/shop move OUT on the
+                                *     3rd-day tick and won't re-arm while
+                                *     judged 0. 0xFF = not yet judged. */
+    uint8_t  tenure;     /* EXE +0x17 — dual-purpose by type:
+                                * HOTEL: consecutive 5PM passes spent
                                 * dirty-and-unrented; at exactly 3 the room
-                                * turns INFESTED. Reset by check-in only —
-                                * a maid cleaning the room does NOT reset it
-                                * (byte-verified wrinkle: EndClean never
-                                * touches it, only HotelCheckIn does). */
-    /* Guest elevator-stress accumulator feeding the demand verdict. The EXE
-     * keeps this per-person (+0x0E total / +0x09 periods) and averages the
-     * room's guests at 5PM; the port banks the same "felt" wait-stress
-     * (post lobby-forgiveness, people.c deliver_stress) per ROOM and resets
-     * when the room re-arms — same signal, one aggregation level up. */
-    uint16_t guest_stress_total;
-    uint16_t guest_stress_trips;
+                                * turns INFESTED (reset by check-in only —
+                                * maids never touch it).
+                                * SHOP: quarters since (re)let — tenure 0
+                                * shops are immune to the stress move-out. */
+    /* Pool elevator-stress accumulator feeding the demand verdicts. The
+     * EXE keeps this per-person (+0x0E total / +0x09 periods) and averages
+     * the unit's people at judge time; the port banks the same "felt"
+     * wait-stress (post lobby-forgiveness, people.c deliver_stress) per
+     * UNIT and resets when the unit re-arms/re-lets. FROZEN while vacant
+     * — the frozen bad memory is what keeps a vacated unit condemned. */
+    uint16_t pool_stress_total;
+    uint16_t pool_stress_trips;
 
     /* --- Venues (VenueT seg_1180, byte-verified 2026-07-02 annotation) ---
      * Cinemas and party halls run a daily show cycle: reset at 10AM (film

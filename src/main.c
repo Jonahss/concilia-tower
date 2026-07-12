@@ -4190,7 +4190,14 @@ static void render_inspect_popup(void)
         snprintf(ln[n++], 40, "People: %d", t->population);
     if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0)
         snprintf(ln[n++], 40, "Income: $%d/qtr", TENANT_INCOME[type_idx]);
-    if (res || comm)
+    if (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+        t->type == ITEM_SHOP)
+        /* the daily judge's verdict — what move-outs and re-lets read */
+        snprintf(ln[n++], 40, "Satisfaction: %s",
+                 t->demand_category == 0    ? "Stressed"
+               : t->demand_category == 1    ? "OK"
+               : t->demand_category == 2    ? "Good" : "New");
+    else if (res || comm)
         snprintf(ln[n++], 40, "Satisfaction: %s",
                  t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");
     if (t->type == ITEM_OFFICE)

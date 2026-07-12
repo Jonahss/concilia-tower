@@ -574,14 +574,20 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
         if (felt >= TUNING.judge_stressed)      t->stress += 15;
         else if (felt >= TUNING.judge_moderate) t->stress += 5;
         if (t->stress > 100) t->stress = 100;
-        /* Hotel rooms also bank the raw felt stress for the 5PM demand
-         * verdict (the EXE keeps this per-guest, +0x0E/+0x09, and averages
-         * at the pass — the port aggregates at the room). */
-        if (item_is_hotel_room(t->type) &&
-            t->guest_stress_trips < 0xFFFF) {
-            unsigned tot = t->guest_stress_total + (unsigned)felt;
-            t->guest_stress_total = (uint16_t)(tot > 0xFFFF ? 0xFFFF : tot);
-            t->guest_stress_trips++;
+        /* Hotel rooms, offices and condos bank the raw felt stress for
+         * their demand verdicts — the 5PM pass for rooms, the daily
+         * 4:59AM judge for the others. The EXE keeps this per-person as
+         * total(+0x0E) / PERIODS LIVED(+0x09) — JudgeT 1130:0360 — not
+         * per-trip: an office worker banks 2 trips' stress but lives ~6
+         * periods a day, so the divisor grows 3 per arrival. A hotel
+         * guest's stay spans about as many periods as trips, so rooms
+         * keep the 1:1 divisor (their live-verified behavior). */
+        if ((item_is_hotel_room(t->type) || t->type == ITEM_OFFICE ||
+             t->type == ITEM_CONDO) &&
+            t->pool_stress_trips < 0xFFF0) {
+            unsigned tot = t->pool_stress_total + (unsigned)felt;
+            t->pool_stress_total = (uint16_t)(tot > 0xFFFF ? 0xFFFF : tot);
+            t->pool_stress_trips += item_is_hotel_room(t->type) ? 1 : 3;
         }
     }
     ps->wait_total += p->wait_accum;
@@ -668,7 +674,7 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
     Tenant *t = tower_tenant(tower, p->home_tenant);
     if (t && !p->going_home && item_is_hotel_room(t->type)) {
         t->hosted = 1;
-        t->neglect_days = 0;
+        t->tenure = 0;
     }
     /* A worker at their desk — candidate for the sick-worker roll */
     if (t && !p->going_home && t->type == ITEM_OFFICE &&
@@ -680,6 +686,14 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         ps->venue_arrivals < (int)(sizeof ps->venue_arrival_tenant /
                                    sizeof ps->venue_arrival_tenant[0]))
         ps->venue_arrival_tenant[ps->venue_arrivals++] = p->home_tenant;
+    /* A mover reaching a vacant, armed unit — the re-let event. */
+    if (t && !p->going_home && t->state == TENANT_ABANDONED &&
+        t->demand_armed &&
+        (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+         t->type == ITEM_SHOP) &&
+        ps->relet_arrivals < (int)(sizeof ps->relet_arrival_tenant /
+                                   sizeof ps->relet_arrival_tenant[0]))
+        ps->relet_arrival_tenant[ps->relet_arrivals++] = p->home_tenant;
     /* A customer at a retail door — queued for the InRestPeple pass
      * (game_retail_arrivals): admission, customer count, service grade.
      * Street walk-ins are the ones who entered at ground. */
@@ -1055,10 +1069,12 @@ static int parking_entry_floor(Tower *tower, const uint8_t *reach, int seed)
 }
 
 /* How many visitors one metro pumps into the tower per time-of-day phase.
- * The decomp's exact spawn curve lives in the undecoded high-offset UniPeple
- * behaviour funcs; this is a tractable stand-in — enough to make the metro the
- * tower's visible traffic source without flooding the entity pool. */
-#define METRO_VISITORS_PER_PHASE 8
+ * The EXE pool is 240 persons per station at ~1-in-36 dice per 16-frame
+ * sim visit over the 10AM-5PM window (1220:51dc, byte-verified 2026-07-11)
+ * — roughly 300 visitor trips a day. The port's per-tick pacing roll
+ * yields ~70 per phase against this cap, landing in the right range
+ * (the old cap of 8 starved every ground-zone shop into eviction). */
+#define METRO_VISITORS_PER_PHASE 80
 
 /* Phase transitions drive trips:
  *   MORNING: office workers arrive       EVENING: they go home
@@ -1094,13 +1110,35 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
     /* stagger inbound spawns: one person per tenant per 8 ticks */
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
+        /* Re-let movers (2026-07-11 vacancy referee): a VACANT office/
+         * condo/shop dispatches its pool ONLY while the demand flag is
+         * armed — the same first-let code path in the EXE. One mover;
+         * their arrival banks the move-in and flips the unit occupied.
+         * Windows: office weekday morning, condo morning (no dice gate
+         * worth modeling at one mover), shop from 10AM. */
+        if (t->state == TENANT_ABANDONED && t->demand_armed &&
+            (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+             t->type == ITEM_SHOP)) {
+            int window =
+                (t->type == ITEM_OFFICE && tod == TOD_MORNING &&
+                 tower->day % 3 != 2) ||
+                (t->type == ITEM_CONDO && tod == TOD_MORNING) ||
+                (t->type == ITEM_SHOP && hour >= 10 && hour < 17);
+            if (!window || ps->spawned[i] >= 1) continue;
+            if (!depart_roll(frame, i, 12)) continue;
+            int vfx = floor_to_index(t->floor);
+            if (vfx < 0 || vfx >= TOWER_FLOOR_COUNT) continue;
+            if (spawn_person(ps, tower, t, GROUND_IDX, vfx, 0))
+                ps->spawned[i]++;
+            continue;
+        }
         if (t->state != TENANT_OCCUPIED) continue;
         /* Hotel guests spawn only for rooms the 5PM demand pass armed —
          * the EXE's +0x14 booking gate (UniPeple 1220:3032). This is what
          * keeps dirty and infested rooms guest-free: they can never arm. */
         int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING) ||
                       (item_is_hotel_room(t->type) && tod == TOD_EVENING &&
-                       t->open_for_booking);
+                       t->demand_armed);
 
         /* Retail walk-ins: the venue's own street pool, gated by today's
          * quota (Restaurant.c: quota gate 10b3 counts down at dispatch).
@@ -1181,7 +1219,14 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
             if (walkin) {
                 ps->people[sp - 1].stay = (uint8_t)(8 + (i * 5) % 12);
+                /* The EXE counts walk-ins at DISPATCH (quota gate
+                 * 11a8:1148), not at the door — an evening walk-in
+                 * still riding at close still counts toward the day's
+                 * demand. (No-route trips roll back in the EXE; the
+                 * port's rare late failures overcount by a hair.) */
                 t->retail_quota--;         /* the dispatch gate (+6) */
+                if (t->customers_today < 0xFFFF) t->customers_today++;
+                if (t->walkins_today < 0xFF) t->walkins_today++;
             } else {
                 ps->spawned[i]++;
             }
@@ -1249,7 +1294,7 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
              * (MakeMetroStation 11f8:2181, byte-verified 2026-07-11). */
             if (hour < 10 || hour >= 17) continue;
             if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
-            if (!depart_roll(frame, i, 6)) continue;
+            if (!depart_roll(frame, i, 3)) continue;  /* ~the EXE's 300/day */
             fidx = floor_to_index(t->floor + 2);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
                 !reach_public[fidx]) continue;

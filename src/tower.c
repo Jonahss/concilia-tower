@@ -407,6 +407,10 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->zone = (floor >= 0) ? floor / 15 : 0;  /* JudgeT: 7 zones of 15 floors */
     t->upgrade_day = 0;
     t->rent_class = 1;
+    /* Fresh units start on the market with no verdict yet (creation
+     * defaults, 2026-07-11 vacancy referee: armed=1, category=0xFF) */
+    t->demand_armed = 1;
+    t->demand_category = 0xFF;
     if (type == ITEM_CINEMA)          t->movie_id = (uint8_t)(rand() % 14);
     else if (type == ITEM_PARTY_HALL) t->movie_id = 0xFF;  /* Average until JudgeT moves it */
     
@@ -599,6 +603,10 @@ uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
     t->capacity = CAP_MIN;
     t->zone = (floor >= 0) ? floor / 15 : 0;
     t->rent_class = 1;
+    /* Fresh units start on the market with no verdict yet (creation
+     * defaults, 2026-07-11 vacancy referee: armed=1, category=0xFF) */
+    t->demand_armed = 1;
+    t->demand_category = 0xFF;
     if (type == ITEM_CINEMA)          t->movie_id = (uint8_t)(rand() % 14);
     else if (type == ITEM_PARTY_HALL) t->movie_id = 0xFF;
 

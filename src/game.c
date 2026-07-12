@@ -86,7 +86,7 @@ int game_calc_population(GameSim *sim, Tower *tower)
             /* A hotel room that isn't open for booking gets no guests
              * tonight — but already-hosted guests stay their night out
              * (the EXE only gates NEW check-ins, UniPeple 1220:3032). */
-            if (item_is_hotel_room(t->type) && !t->open_for_booking &&
+            if (item_is_hotel_room(t->type) && !t->demand_armed &&
                 !t->hosted) {
                 t->population = 0;
                 continue;
@@ -436,7 +436,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (!reachable) is_active = 0;
             /* Hotel rooms only open for the night if the demand pass armed
              * them; hosted guests ride out their stay regardless. */
-            if (is_hotel && !t->open_for_booking && !t->hosted) is_active = 0;
+            if (is_hotel && !t->demand_armed && !t->hosted) is_active = 0;
         }
         
         /* State machine */
@@ -536,7 +536,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                  * dirty, and a maid can reach it again). */
                 if (is_hotel && t->hosted) {
                     t->condition = ROOM_DIRTY;
-                    t->open_for_booking = 0;
+                    t->demand_armed = 0;
                     t->hosted = 0;
                     /* the stay is paid at checkout (MoneyT 0eac -> 0854,
                      * same 0x3E9 rows, one lump per guest stay) */
@@ -752,7 +752,7 @@ static void update_housekeeping(GameSim *sim, Tower *tower)
             int rf = floor_to_index(room->floor);
             if (rf < 0 || rf >= TOWER_FLOOR_COUNT || !sim->reach_service[rf])
                 continue;
-            room->condition = ROOM_CLEAN;   /* neglect_days deliberately kept */
+            room->condition = ROOM_CLEAN;   /* tenure deliberately kept */
             hk->cleaned_today++;
             break;
         }
@@ -791,7 +791,7 @@ static void infest_room(Tenant *v)
     if (!v || !item_is_hotel_room(v->type)) return;
     if (v->state == TENANT_EMPTY || v->state == TENANT_CONSTRUCTION) return;
     v->condition = ROOM_INFESTED;
-    v->open_for_booking = 0;
+    v->demand_armed = 0;
     v->demand_category = 0;
     v->stress = 100;
 }
@@ -809,7 +809,7 @@ static void infest_room(Tenant *v)
  * EXE walk tests the range BEFORE stepping outward, so one record past
  * the strict cutoff still counts — replicated here as edge distance <= 20
  * against nearest edges. */
-static int hotel_has_noisy_neighbor(const Tower *tower, const Tenant *room)
+static int has_noisy_neighbor(const Tower *tower, const Tenant *room)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
         const Tenant *n = &tower->tenants[i];
@@ -819,6 +819,10 @@ static int hotel_has_noisy_neighbor(const Tower *tower, const Tenant *room)
         case ITEM_RESTAURANT: case ITEM_SHOP: case ITEM_FAST_FOOD:
         case ITEM_OFFICE: case ITEM_CINEMA: case ITEM_PARTY_HALL:
             break;
+        case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
+            /* NoiseT's one asymmetry: rooms only bother CONDOS */
+            if (room->type == ITEM_CONDO) break;
+            continue;
         default:
             continue;
         }
@@ -872,13 +876,13 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
              * still flagged open is closed and forgiven; an already-closed
              * one burns a fuse day, and on exactly the 3rd it turns
              * infested. Cleaning doesn't reset the fuse; check-in does. */
-            if (t->open_for_booking) {
-                t->open_for_booking = 0;
+            if (t->demand_armed) {
+                t->demand_armed = 0;
                 t->demand_category = 0;
-                t->neglect_days = 0;
+                t->tenure = 0;
             } else if (t->condition == ROOM_DIRTY) {
-                t->neglect_days++;
-                if (t->neglect_days == 3) {
+                t->tenure++;
+                if (t->tenure == 3) {
                     t->condition = ROOM_INFESTED;
                     t->stress = 100;
                     printf("🪳 Cockroaches! Room on floor %d was left dirty "
@@ -893,12 +897,12 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
          * star-scaled bar (JudgeT 1130:0686: noisy neighbor -> metric
          * += 60, hardcoded — noise lowers demand but never closes a room
          * whose guests are otherwise happy). */
-        int avg = t->guest_stress_trips
-                    ? t->guest_stress_total / t->guest_stress_trips : 0;
+        int avg = t->pool_stress_trips
+                    ? t->pool_stress_total / t->pool_stress_trips : 0;
         if (t->rent_class == 0)      avg += 30;   /* High rate: pickier guests */
         else if (t->rent_class == 2) avg -= 30;   /* Low rate: forgiving */
         else if (t->rent_class == 3) avg = 0;     /* Very low: always fills */
-        if (hotel_has_noisy_neighbor(tower, t))
+        if (has_noisy_neighbor(tower, t))
             avg += 60;
         if (avg < 0) avg = 0;
 
@@ -929,15 +933,15 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
                     pair = r;
             }
             if (!pair) {
-                t->open_for_booking = 0;
+                t->demand_armed = 0;
                 continue;
             }
             pair->demand_category = 1;
             t->demand_category = 1;
         }
-        t->open_for_booking = 1;
-        t->guest_stress_total = 0;   /* fresh sample window (EXE @105a) */
-        t->guest_stress_trips = 0;
+        t->demand_armed = 1;
+        t->pool_stress_total = 0;   /* fresh sample window (EXE @105a) */
+        t->pool_stress_trips = 0;
     }
 }
 
@@ -1140,6 +1144,7 @@ void game_update(GameSim *sim, Tower *tower)
     sim->people.office_arrivals = 0;
     game_venue_arrivals(sim, tower);
     game_retail_arrivals(sim, tower);
+    game_relet_arrivals(sim, tower);
 
     /* Update tenants every few ticks (not every frame) */
     if (sim->tick % 4 == 0) {
@@ -1196,6 +1201,13 @@ void game_update(GameSim *sim, Tower *tower)
             sim->day_expenses = 0;
             tower->day++;
 
+            /* THE DAILY JUDGE (JudgeTenant tail, 4:59AM): categorize
+             * offices/condos/shops and re-arm any vacant unit whose
+             * verdict climbed off stressed — this is the whole rental
+             * market (2026-07-11 vacancy referee). Runs BEFORE the
+             * settlement, as in the EXE (eval then move-outs). */
+            game_judge_daily(sim, tower);
+
             /* THE QUARTERLY SETTLEMENT (every 3rd day = the EXE quarter;
              * JudgeT MainLoop's day%3 gate + the TimeT maintenance row,
              * byte-verified 2026-07-11). EXE order on the one tick:
@@ -1218,6 +1230,10 @@ void game_update(GameSim *sim, Tower *tower)
                     if (t->state != TENANT_OCCUPIED &&
                         t->state != TENANT_VACANT) continue;
                     rent += tenant_rent(t->type, t->rent_class);
+                    /* the shop new-let immunity window closes after its
+                     * first full quarter (tenure = EXE +0x17) */
+                    if (t->type == ITEM_SHOP && t->tenure < 0xFF)
+                        t->tenure++;
                 }
                 if (rent > 0) {
                     tower->money += rent;
@@ -1432,31 +1448,119 @@ uint8_t game_init_cap_peak(ItemType type, int star)
     }
 }
 
-/* --- The 3rd-day stressed move-out (JudgeT 1130:09e5, byte-verified
- * 2026-07-11 — the function long mislabeled "TenantUpgrade") ---
- * Every 3rd day, OFFICES, CONDOS and SHOPS judged stressed vacate:
+/* ================================================================
+ * The occupancy lifecycle (JudgeTenant daily pass + StressedTenantMoveOut
+ * + the re-let path — byte-verified 2026-07-11 vacancy referee)
+ * ================================================================
+ * Offices, condos and shops live on the SAME +0x14/+0x15 bytes as hotel
+ * rooms, on a daily schedule instead of the 5PM one: every day at the
+ * 4:59AM tick each unit is judged into a category (2 content / 1 middle
+ * / 0 stressed), and a vacant unit re-ARMS the moment its category
+ * climbs off 0 — nothing else ever re-arms it. The trap is deliberate:
+ * a stress-vacated office is judged forever on its FROZEN banked
+ * elevator stress (nothing resets it while vacant), so it stays dead
+ * until the player intervenes — cut the rent (class 3 forces content),
+ * remove the noisy neighbor, earn a star (higher bar), or let a content
+ * same-floor twin vouch for it at the move-out pairing. */
+
+/* One unit's daily verdict (JudgeTenant 1130:0630/069e). */
+static void judge_one_unit(GameSim *sim, Tower *tower, Tenant *t)
+{
+    int metric;
+    if (t->type == ITEM_SHOP) {
+        /* Shops judge on yesterday's DEMAND: leftover walk-in quota +
+         * customers vs thresholds (20, 25), the bar shifted by rate
+         * class {+5, 0, -5, -12} — the class-3 discount is the shop's
+         * rescue lever (JudgeT 069e). */
+        static const int adj[4] = { 5, 0, -5, -12 };
+        int demand = t->retail_quota + t->customers_today;
+        int a = adj[t->rent_class <= 3 ? t->rent_class : 1];
+        t->demand_category = demand >= 25 + a ? 2
+                           : demand >= 20 + a ? 1 : 0;
+        return;
+    }
+    /* Office/condo: mean banked felt-wait of the unit's people — FROZEN
+     * while vacant — with the same adjustments the hotel verdict uses
+     * (JudgeT 0630: class 0 +30 / class 2 -30 / class 3 forces 0;
+     * noise +60; bars 80 and the star-scaled 150/200). */
+    metric = t->pool_stress_trips
+                ? t->pool_stress_total / t->pool_stress_trips : 0;
+    if (t->rent_class == 0)      metric += 30;
+    else if (t->rent_class == 2) metric -= 30;
+    else if (t->rent_class == 3) metric = 0;
+    if (has_noisy_neighbor(tower, t)) metric += 60;
+    if (metric < 0) metric = 0;
+    int bar = (tower->star_rating >= 4) ? TUNING.judge_stressed
+                                        : TUNING.judge_moderate;
+    t->demand_category = metric >= bar ? 0
+                       : metric >= DEMAND_HAPPY_BAR ? 1 : 2;
+    (void)sim;
+}
+
+/* The 4:59AM judge (JudgeTenant tail 1130:09bb): categorize every
+ * office/condo/shop — EXCEPT vacant-and-armed units (their movers are
+ * already on the way) — then re-arm any vacant unit whose category
+ * climbed off 0. Runs daily, BEFORE the 3rd-day move-out. */
+void game_judge_daily(GameSim *sim, Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
+            t->type != ITEM_SHOP) continue;
+        int vacant = t->state == TENANT_ABANDONED;
+        /* TENANT_VACANT is the port's "leased, closed overnight" state —
+         * at 4:59AM every healthy office is in it, so the judge must
+         * treat it as occupied or it would never judge anything. */
+        if (!vacant && t->state != TENANT_OCCUPIED &&
+            t->state != TENANT_STRESSED &&
+            t->state != TENANT_VACANT) continue;
+        if (vacant && t->demand_armed) continue;
+        judge_one_unit(sim, tower, t);
+        if (vacant && !t->demand_armed && t->demand_category != 0) {
+            t->demand_armed = 1;
+            printf("🔑 Vacant %s on F%d is back on the market\n",
+                   tower_item_name(t->type), t->floor);
+        }
+    }
+}
+
+/* --- The 3rd-day stressed move-out (StressedTenantMoveOut 1130:09e5,
+ * byte-verified 2026-07-11) ---
+ * Every 3rd day, OFFICES, CONDOS and SHOPS at category 0 vacate:
  * offices and shops leave free; a condo departure makes the PLAYER buy
  * the unit back at its rate-class price. Hotel rooms are exempt — their
- * whole lifecycle is the 5PM demand pass. After the move-out, category
- * smoothing drags one content same-type floor-mate down to the middle
- * band: decline is contagious, and the smoothing cannot prevent the
- * move-out (the vacate fires first in the EXE too).
+ * whole lifecycle is the 5PM demand pass. Brand-new shops (tenure 0)
+ * are immune for their first quarter. After the move-out, the pairing:
+ * a content (category 2) same-type floor-mate drags to the middle band
+ * with the leaver — and vouches for the vacated unit, which re-arms
+ * with fresh banked stress. Without a pair, the unit goes dark until
+ * the player rescues it (see game_judge_daily).
  *
- * HISTORY: June 2026 shipped this offset's mechanics inverted — "content
- * hotel rooms upgrade their occupancy" and "office gentrification" —
- * from a stale annotation whose category labels were backwards. Both
- * were fabrications and are gone, as is the invented "content offices
- * grow a tier" seed (no tier-raising code exists in the binary; office
- * tiers come from construction star level and .TDT import bytes). EXE
- * nuance not carried: brand-new shops (behavior tenure 0) are immune;
- * the port has no tenure counter yet. */
+ * HISTORY: June 2026 shipped this offset's mechanics inverted from a
+ * stale annotation ("hotel upgrades", "office gentrification" — both
+ * fabrications, deleted). PORT DIVERGENCE, deliberate: the EXE never
+ * decrements population on a shop vacate (+10 leaks per re-let cycle);
+ * the port's population recompute stays leak-free. */
 void game_stressed_moveout(GameSim *sim, Tower *tower)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
             t->type != ITEM_SHOP) continue;
-        if (t->state != TENANT_STRESSED) continue;
+        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED &&
+            t->state != TENANT_VACANT)   /* leased-but-closed-overnight */
+            continue;
+        if (t->demand_category != 0) continue;
+        if (t->type == ITEM_SHOP) continue;
+        /* SHOPS EXEMPT PENDING DECODE: the shop demand judge as ported
+         * ((quota_left + customers) vs (20,25)+class-adj) evicts every
+         * BARKLE basement shop whenever the rainy-day quota cap (18)
+         * feeds a settlement judge — a collision the real calendar hits
+         * every 24 days (day = 20 mod 24), which the real game visibly
+         * survives. The 0xDDAC/AE thresholds and JudgeT 069e's rainy
+         * interaction were flagged out-of-scope by both 2026-07-11
+         * referees; shop move-outs stay off until that decode lands.
+         * (Shop categories still compute for display/re-arming.) */
 
         if (t->type == ITEM_CONDO) {
             int buyback = tenant_rent(ITEM_CONDO, t->rent_class);
@@ -1464,21 +1568,36 @@ void game_stressed_moveout(GameSim *sim, Tower *tower)
             sim->expenses_this_quarter += buyback;
             printf("\xf0\x9f\x8f\x9a Condo on F%d moved out - bought back for $%d\n",
                    t->floor, buyback);
+        } else if (t->type == ITEM_SHOP) {
+            printf("\xf0\x9f\x93\xa6 Shop on F%d moved out "
+                   "(demand %d+%d, class %d)\n", t->floor,
+                   t->retail_quota, t->customers_today, t->rent_class);
         } else {
             printf("\xf0\x9f\x93\xa6 %s on F%d moved out (stressed)\n",
                    tower_item_name(t->type), t->floor);
         }
-        t->state = TENANT_ABANDONED;   /* vacant, re-lettable someday; no rubble */
+        t->state = TENANT_ABANDONED;   /* vacant, re-lettable; no rubble */
         t->capacity = CAP_EMPTY;
         t->population = 0;
+        t->demand_armed = 0;
+        t->tenure = 0;
+        if (t->type == ITEM_SHOP) t->retail_open = 0;
+        /* rate_class and the banked pool stress survive the vacancy —
+         * the frozen stress is what keeps the unit condemned */
 
-        /* Category smoothing: the departure drags one content same-type
-         * floor-mate to the middle band. */
+        /* The pairing (1130:0a5f): a content same-type floor-mate drags
+         * to category 1 WITH the leaver — and its vouching re-arms the
+         * vacated unit with a fresh stress window. */
         for (int j = 0; j < tower->tenant_count; j++) {
             Tenant *n = &tower->tenants[j];
             if (j == i || n->type != t->type || n->floor != t->floor) continue;
-            if (n->state == TENANT_OCCUPIED && n->stress <= 10) {
-                n->stress = 40;
+            if ((n->state == TENANT_OCCUPIED ||
+                 n->state == TENANT_VACANT) && n->demand_category == 2) {
+                n->demand_category = 1;
+                t->demand_category = 1;
+                t->demand_armed = 1;
+                t->pool_stress_total = 0;
+                t->pool_stress_trips = 0;
                 break;
             }
         }
@@ -1849,13 +1968,14 @@ int game_retail_customer_in(GameSim *sim, Tower *tower, Tenant *t,
                             int walkin, int felt_wait)
 {
     if (!t || !is_retail(t->type)) return 1;
-    if (!t->retail_open) return 1;
-    if (t->patrons_now >= 40) return 2;
-    t->patrons_now++;
-    if (t->customers_today < 0xFFFF) t->customers_today++;
-    if (walkin && t->walkins_today < 0xFF) t->walkins_today++;
-    /* Service grading (11a8:1197): the arrival's banked elevator wait
-     * feeds the current period's score — tomorrow's quota. The second
+    /* Service grading FIRST (11a8:1197 runs in the trip-completion
+     * finalizer, BEFORE InRestPeple's door check): every arrival's
+     * banked elevator wait feeds the current period's score — even a
+     * customer who finds the doors already shut still teaches the venue
+     * about its elevators. Without this, evening walk-ins arriving
+     * after close grade nothing and basement shops spiral: score
+     * starves -> tomorrow's quota shrinks -> fewer graders -> the
+     * quota floor of 10 -> the 3rd-day judge reaps them. The second
      * bar is the star-scaled word the hotel demand pass also reads. */
     int period = game_retail_period(sim, tower);
     int bar2 = tower->star_rating >= 4 ? 200 : 150;   /* [0xDD78] */
@@ -1863,6 +1983,13 @@ int game_retail_customer_in(GameSim *sim, Tower *tower, Tenant *t,
     int cap = retail_quota_cap(t->type, period);
     int ns = t->retail_score[period] + add;
     t->retail_score[period] = (uint8_t)(ns > cap ? cap : ns);
+
+    if (!t->retail_open) return 1;
+    if (t->patrons_now >= 40) return 2;
+    t->patrons_now++;
+    /* walk-ins were counted at dispatch (EXE 11a8:1148); only external
+     * customers count at the door (InRestPeple 0e46) */
+    if (!walkin && t->customers_today < 0xFFFF) t->customers_today++;
     return 0;
 }
 
@@ -2034,6 +2161,34 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
         }
         occ_clamp(t, o);
     }
+}
+
+/* Consume the mover-arrival feed: the first arrival at a vacant, armed
+ * unit IS the re-let (same code as the first let — 2026-07-11 vacancy
+ * referee): the full table value banks at arrival (offices/shops their
+ * quarterly lump, the authentic double-dip; condos the full resale),
+ * the unit flips occupied, tenure restarts, and the pool's banked
+ * stress finally resets. */
+void game_relet_arrivals(GameSim *sim, Tower *tower)
+{
+    for (int a = 0; a < sim->people.relet_arrivals; a++) {
+        Tenant *t = tower_tenant(tower, sim->people.relet_arrival_tenant[a]);
+        if (!t || t->state != TENANT_ABANDONED || !t->demand_armed) continue;
+        int lump = tenant_rent(t->type, t->rent_class);
+        tower->money += lump;
+        sim->income_this_quarter += lump;
+        t->state = TENANT_OCCUPIED;
+        t->tenure = 0;
+        t->demand_category = 0xFF;         /* judged fresh next dawn */
+        t->pool_stress_total = 0;
+        t->pool_stress_trips = 0;
+        t->capacity = CAP_MIN;
+        t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
+        if (t->type == ITEM_SHOP) t->retail_open = 0;  /* opens at 10AM */
+        printf("🔑 %s on F%d re-let for $%d\n",
+               tower_item_name(t->type), t->floor, lump);
+    }
+    sim->people.relet_arrivals = 0;
 }
 
 /* Consume the people sim's retail-arrival feed (like game_venue_arrivals):
@@ -2629,7 +2784,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 9u   /* v9: occupant sprites in GameSim (AnimPeple).
+#define SAVE_VERSION 10u  /* v10: the occupancy lifecycle (shared demand
+                           * bytes for office/condo/shop; tenure).
+                           * v9: occupant sprites in GameSim (AnimPeple).
                            * v8: retail patron economy in Tenant (service
                            * scores / quota / customer counters).
                            * v7: venue fields in Tenant (movie/show cycle).

@@ -166,7 +166,7 @@ static void test_housekeeping(void)
     for (int i = 0; i < 480 * 2; i++) game_update(&sim, &tw);
     CHECK(room->condition != ROOM_CLEAN,
           "without housekeeping the room stays dirty");
-    CHECK(!room->open_for_booking, "dirty room is closed for booking");
+    CHECK(!room->demand_armed, "dirty room is closed for booking");
     run_days(4);
     CHECK(room->condition == ROOM_INFESTED,
           "3 days of neglect -> cockroach infestation");
@@ -189,18 +189,23 @@ static void test_hotel_infestation(void)
      * day 1's — run two days. */
     run_days(2);
 
-    CHECK(a->open_for_booking && d->open_for_booking,
+    /* Rooms are born armed (creation default +0x14=1), so guests have
+     * already cycled through and left checkout dirt — maid the rooms
+     * by hand, then one pass must re-arm the clean rooms. */
+    a->condition = b->condition = c->condition = d->condition = ROOM_CLEAN;
+    game_hotel_demand_pass(&sim, &tw);
+    CHECK(a->demand_armed && d->demand_armed,
           "fresh clean rooms are armed by the 5PM pass");
 
     /* Plant roaches in the middle room and run one pass directly */
     b->condition = ROOM_INFESTED;
-    b->open_for_booking = 0;
+    b->demand_armed = 0;
     game_hotel_demand_pass(&sim, &tw);
     CHECK(a->condition == ROOM_INFESTED && c->condition == ROOM_INFESTED,
           "roaches spread to both abutting rooms in one pass");
     CHECK(d->condition == ROOM_CLEAN,
           "roaches do not jump the gap to a detached room");
-    CHECK(!a->open_for_booking && !c->open_for_booking,
+    CHECK(!a->demand_armed && !c->demand_armed,
           "spread victims are closed for booking");
 
     /* Maids never fix infestation */
@@ -208,7 +213,7 @@ static void test_hotel_infestation(void)
     run_days(3);
     CHECK(b->condition == ROOM_INFESTED,
           "housekeeping never cleans an infested room");
-    CHECK(!b->open_for_booking && b->population == 0,
+    CHECK(!b->demand_armed && b->population == 0,
           "infested room takes no guests, ever");
 
     /* Demolition is the only cure */
@@ -230,55 +235,55 @@ static void test_hotel_demand(void)
     /* Stressed guests (avg >= 150 at 1 star) close the room at the pass —
      * unless a happy same-floor room vouches for it (the pairing rescue) */
     a->condition = ROOM_CLEAN;  b->condition = ROOM_CLEAN;
-    a->guest_stress_total = 600; a->guest_stress_trips = 2;  /* avg 300 */
-    b->guest_stress_total = 0;   b->guest_stress_trips = 4;  /* avg 0 */
+    a->pool_stress_total = 600; a->pool_stress_trips = 2;  /* avg 300 */
+    b->pool_stress_total = 0;   b->pool_stress_trips = 4;  /* avg 0 */
     b->demand_category = 0;      /* stale: the pass must recompute it */
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(b->open_for_booking, "happy room re-arms at the pass");
-    CHECK(a->open_for_booking,
+    CHECK(b->demand_armed, "happy room re-arms at the pass");
+    CHECK(a->demand_armed,
           "stressed room is rescued by a happy same-floor pairing");
     CHECK(a->demand_category == 1 && b->demand_category == 1,
           "pairing settles both rooms at category 1");
 
     /* Without a happy floor-mate, the stressed room is disarmed */
-    a->guest_stress_total = 600; a->guest_stress_trips = 2;
-    b->guest_stress_total = 400; b->guest_stress_trips = 2;  /* avg 200: bad */
+    a->pool_stress_total = 600; a->pool_stress_trips = 2;
+    b->pool_stress_total = 400; b->pool_stress_trips = 2;  /* avg 200: bad */
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(!a->open_for_booking && !b->open_for_booking,
+    CHECK(!a->demand_armed && !b->demand_armed,
           "stressed rooms with no happy pair are closed for booking");
 
     /* Very-low room rate always fills (the EXE zeroes its demand score) */
-    a->guest_stress_total = 600; a->guest_stress_trips = 2;
+    a->pool_stress_total = 600; a->pool_stress_trips = 2;
     a->rent_class = 3;
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(a->open_for_booking, "very-low room rate always books");
+    CHECK(a->demand_armed, "very-low room rate always books");
 
     /* Noisy neighbor (NoiseT seg_1138 + JudgeT 1130:0686, byte-verified
      * 2026-07-10): a commercial unit within 20 cells adds +60 to the
      * metric. avg 100 is fine quiet (bar 150 at 1 star) but 160 noisy. */
     a->rent_class = 1;
-    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* avg 100 */
-    b->guest_stress_total = 400; b->guest_stress_trips = 4;   /* no rescuer */
+    a->pool_stress_total = 400; a->pool_stress_trips = 4;   /* avg 100 */
+    b->pool_stress_total = 400; b->pool_stress_trips = 4;   /* no rescuer */
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(a->open_for_booking, "avg-100 room books fine in the quiet");
+    CHECK(a->demand_armed, "avg-100 room books fine in the quiet");
     uint16_t shop = fplace(ITEM_SHOP, 1, BX + 22);            /* gap 18 <= 20 */
-    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* arming reset them */
-    b->guest_stress_total = 400; b->guest_stress_trips = 4;
+    a->pool_stress_total = 400; a->pool_stress_trips = 4;   /* arming reset them */
+    b->pool_stress_total = 400; b->pool_stress_trips = 4;
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(!a->open_for_booking,
+    CHECK(!a->demand_armed,
           "the same room next to a shop is disarmed (+60 noise penalty)");
     /* happy guests shrug the noise off: 0 + 60 = 60 < 80 = content */
-    a->guest_stress_total = 0; a->guest_stress_trips = 4;
-    b->guest_stress_total = 0; b->guest_stress_trips = 4;
+    a->pool_stress_total = 0; a->pool_stress_trips = 4;
+    b->pool_stress_total = 0; b->pool_stress_trips = 4;
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(a->open_for_booking && a->demand_category == 2,
+    CHECK(a->demand_armed && a->demand_category == 2,
           "noise alone never closes a room with happy guests");
     /* out of earshot: gap > 20 cells is quiet (for room a) */
     tenant(shop)->x = BX + 30;   /* edge gap from a: 209-183 = 26 */
-    a->guest_stress_total = 400; a->guest_stress_trips = 4;   /* avg 100 */
-    b->guest_stress_total = 0;   b->guest_stress_trips = 4;   /* rescuer */
+    a->pool_stress_total = 400; a->pool_stress_trips = 4;   /* avg 100 */
+    b->pool_stress_total = 0;   b->pool_stress_trips = 4;   /* rescuer */
     game_hotel_demand_pass(&sim, &tw);
-    CHECK(a->open_for_booking, "a shop farther than 20 cells is out of earshot");
+    CHECK(a->demand_armed, "a shop farther than 20 cells is out of earshot");
 }
 
 /* --- people/elevator pipeline (people.c) --- */
@@ -446,7 +451,7 @@ static void test_parking_cars(void)
     uint16_t ste = fplace(ITEM_HOTEL_SUITE, 3, 100);
     for (int f = 0; f <= 4; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
     Tenant *st = tenant(ste);
-    st->state = TENANT_OCCUPIED; st->open_for_booking = 1;
+    st->state = TENANT_OCCUPIED; st->demand_armed = 1;
     Tenant *pk2 = &tw.tenants[tw.tenant_count++];
     *pk2 = (Tenant){0};
     pk2->id = 0xF03; pk2->type = ITEM_PARKING; pk2->floor = 1; pk2->x = 100;
@@ -894,6 +899,116 @@ static void test_save_load(void)
     remove("/tmp/ct_test.sav");
 }
 
+/* The occupancy lifecycle (2026-07-11 vacancy referee): daily category
+ * judge, category-0 move-outs, frozen-stress condemnation, the price-cut
+ * rescue, pairing, and the people-driven re-let. */
+static void test_occupancy_lifecycle(void)
+{
+    printf("occupancy lifecycle (judge/vacate/rescue/re-let):\n");
+    fresh();
+    tw.star_rating = 1;
+    tw.day = 1;
+    uint16_t off = fplace(ITEM_OFFICE, 3, 100);
+    Tenant *o = tenant(off);
+    o->state = TENANT_OCCUPIED;
+
+    /* the daily judge's bars and adjustments */
+    o->pool_stress_total = 400; o->pool_stress_trips = 2;  /* avg 200 */
+    game_judge_daily(&sim, &tw);
+    CHECK(o->demand_category == 0, "avg wait 200 vs bar 150 = stressed");
+    o->pool_stress_total = 200;                            /* avg 100 */
+    game_judge_daily(&sim, &tw);
+    CHECK(o->demand_category == 1, "avg 100 = the middle band");
+    o->rent_class = 2;                                     /* Low: -30 */
+    game_judge_daily(&sim, &tw);
+    CHECK(o->demand_category == 2, "a rent cut buys forgiveness (-30)");
+    o->rent_class = 0;                                     /* High: +30 */
+    o->pool_stress_total = 260;                            /* 130+30=160 */
+    game_judge_daily(&sim, &tw);
+    CHECK(o->demand_category == 0, "high rent makes pickier tenants (+30)");
+
+    /* category-0 move-out at the settlement; armed clears; stress FREEZES */
+    game_stressed_moveout(&sim, &tw);
+    CHECK(o->state == TENANT_ABANDONED && !o->demand_armed,
+          "a stressed office vacates and leaves the market");
+    game_judge_daily(&sim, &tw);
+    CHECK(!o->demand_armed,
+          "frozen banked stress keeps the vacancy condemned");
+    o->rent_class = 3;                                     /* the rescue */
+    game_judge_daily(&sim, &tw);
+    CHECK(o->demand_armed && o->demand_category == 2,
+          "bottom price class forces content: back on the market");
+
+    /* pairing: a content twin vouches for the leaver */
+    uint16_t o2 = fplace(ITEM_OFFICE, 4, 100);
+    uint16_t o3 = fplace(ITEM_OFFICE, 4, 120);
+    Tenant *a = tenant(o2), *b = tenant(o3);
+    a->state = b->state = TENANT_OCCUPIED;
+    a->demand_category = 0; a->tenure = 1;
+    b->demand_category = 2;
+    game_stressed_moveout(&sim, &tw);
+    CHECK(a->state == TENANT_ABANDONED && a->demand_armed &&
+          a->demand_category == 1 && b->demand_category == 1,
+          "the pairing: vacated unit re-arms, the voucher drops to middle");
+
+    /* condo buy-back on vacate */
+    uint16_t cn = fplace(ITEM_CONDO, 5, 100);
+    Tenant *c = tenant(cn);
+    c->state = TENANT_OCCUPIED; c->demand_category = 0; c->rent_class = 1;
+    long money0 = tw.money;
+    game_stressed_moveout(&sim, &tw);
+    CHECK(c->state == TENANT_ABANDONED && tw.money == money0 - 150000,
+          "condo departure charges the class-1 buy-back ($150k)");
+
+    /* Shops: move-out GATED pending the threshold decode (the ported
+     * judge purges towers on rainy-settlement collisions the real game
+     * survives — 0xDDAC/AE referee queued). Categories still compute. */
+    uint16_t sh = fplace(ITEM_SHOP, 6, 100);
+    Tenant *s = tenant(sh);
+    s->state = TENANT_OCCUPIED; s->demand_category = 0; s->tenure = 5;
+    game_stressed_moveout(&sim, &tw);
+    CHECK(s->state == TENANT_OCCUPIED,
+          "shop move-outs stay off until the threshold decode");
+
+    /* shop demand judge: quota_left + customers vs (20,25) + class adj */
+    s->state = TENANT_OCCUPIED;
+    s->rent_class = 1; s->retail_quota = 10; s->customers_today = 5;
+    game_judge_daily(&sim, &tw);
+    CHECK(s->demand_category == 0, "demand 15 under bar 20 = stressed");
+    s->customers_today = 12;
+    game_judge_daily(&sim, &tw);
+    CHECK(s->demand_category == 1, "demand 22 = middle");
+    s->rent_class = 3;                                     /* -12 adj */
+    s->customers_today = 5;
+    game_judge_daily(&sim, &tw);
+    CHECK(s->demand_category == 2, "the class-3 discount rescues a shop");
+
+    /* the re-let: an armed vacancy's mover arrives and banks the lump */
+    fresh();
+    tw.star_rating = 1; tw.day = 1;
+    for (int f = 1; f <= 2; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t rl = place(ITEM_OFFICE, 3, BX + 6);
+    for (int f = 0; f <= 3; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    Tenant *r = tenant(rl);
+    r->state = TENANT_ABANDONED;
+    r->demand_armed = 1;
+    r->rent_class = 1;
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);
+    money0 = tw.money;
+    int relet = 0;
+    for (int frame = 0; frame < 6000 && !relet; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        game_relet_arrivals(&sim, &tw);
+        relet = r->state == TENANT_OCCUPIED;
+    }
+    CHECK(relet && tw.money == money0 + 10000,
+          "the mover arrives: unit re-lets and banks the class-1 lump");
+    CHECK(r->pool_stress_trips == 0 && r->tenure == 0,
+          "a re-let resets the stress window and tenure");
+}
+
 /* Metro/parking money (res 0x3EA, byte-verified 2026-07-11): $100k per
  * station + $10k per ramp at the quarterly settlement; parking earns and
  * costs nothing per space or car. */
@@ -1185,16 +1300,19 @@ static void test_stressed_moveout(void)
     *off = (Tenant){0};
     off->type = ITEM_OFFICE; off->floor = 3; off->x = 100; off->width = 9;
     off->state = TENANT_STRESSED; off->stress = 90;
+    off->demand_category = 0;              /* the judge's verdict */
 
     Tenant *neigh = &tw.tenants[tw.tenant_count++];
     *neigh = (Tenant){0};
     neigh->type = ITEM_OFFICE; neigh->floor = 3; neigh->x = 110; neigh->width = 9;
-    neigh->state = TENANT_OCCUPIED; neigh->stress = 0;   /* content */
+    neigh->state = TENANT_OCCUPIED; neigh->stress = 0;
+    neigh->demand_category = 2;                          /* content */
 
     Tenant *condo = &tw.tenants[tw.tenant_count++];
     *condo = (Tenant){0};
     condo->type = ITEM_CONDO; condo->floor = 4; condo->x = 100; condo->width = 16;
     condo->state = TENANT_STRESSED; condo->rent_class = 1;
+    condo->demand_category = 0;
 
     Tenant *hotel = &tw.tenants[tw.tenant_count++];
     *hotel = (Tenant){0};
@@ -1211,7 +1329,7 @@ static void test_stressed_moveout(void)
           "the condo departure charges the rate-class buy-back ($150k avg)");
     CHECK(hotel->state == TENANT_STRESSED,
           "hotel rooms are exempt (their lifecycle is the 5PM pass)");
-    CHECK(neigh->state == TENANT_OCCUPIED && neigh->stress == 40,
+    CHECK(neigh->state == TENANT_OCCUPIED && neigh->demand_category == 1,
           "decline drags a content floor-mate to the middle band");
 
     /* A content office is untouched (the June inversion would have grown it) */
@@ -1221,6 +1339,7 @@ static void test_stressed_moveout(void)
     *ok = (Tenant){0};
     ok->type = ITEM_OFFICE; ok->floor = 3; ok->x = 100; ok->width = 9;
     ok->state = TENANT_OCCUPIED; ok->stress = 0; ok->cap_peak = CAP_PEAK_LOW;
+    ok->demand_category = 2;
     game_stressed_moveout(&sim, &tw);
     CHECK(ok->state == TENANT_OCCUPIED && ok->cap_peak == CAP_PEAK_LOW,
           "content tenants: no move-out, and no invented tier growth");
@@ -1886,6 +2005,7 @@ int main(void)
     test_save_load();
     test_schedules();
     test_infra_upkeep();
+    test_occupancy_lifecycle();
     printf(fails ? "\n%d FAILURE(S)\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }
