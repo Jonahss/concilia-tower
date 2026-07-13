@@ -198,7 +198,6 @@ typedef struct {
                               * (>= 2500 pop per center -> inadequate, trucks
                               * stop, star 4/5 blocked). Dynamic, can flip back. */
     int has_metro;           /* 0xB3E8 >= 0 — metro station built */
-    int has_medical;         /* a medical center exists (flavor events) */
     int medical_adequate;    /* 0xB92D — armed =1 every 7AM at star>=3
                               * (MedicalDailyTick 1170:011f tail), cleared
                               * ONLY when a sick worker finds no center
@@ -506,17 +505,6 @@ typedef struct {
     int  y;         /* Pixel position (increases) */
 } SantaState;
 
-/* --- Medical emergencies (CheckMedicalEmergency, seg_11e8) ---
- * A medical center occasionally handles an on-site emergency. Cosmetic/flavor
- * (no penalty) — faithful to the EXE skeleton, which only fires it when a
- * medical center exists. */
-typedef struct {
-    int active;
-    int floor;      /* floor of the emergency */
-    int timer;      /* ticks until paramedics clear the scene */
-    int notice;     /* one-shot signal for the UI feed */
-} MedicalState;
-
 /* --- Analytics: per-quarter time series for the stats window ---
  * One sample at the end of every quarter (4/day). 1024 samples = 256
  * game days of history in a ring buffer. */
@@ -645,8 +633,6 @@ typedef struct {
     /* Random events */
     EventState    event;
 
-    /* Medical emergencies (flavor) */
-    MedicalState  medical;
     
     /* VIP system (from VipT seg_1240) */
     int           vip_visiting;    /* VIP currently in tower */
@@ -834,10 +820,6 @@ void game_animate_occupants(GameSim *sim, Tower *tower);
  * (center full — silent), 2 = admitted. Exposed for tests; game_update
  * rolls it on 1-in-10 of office arrivals at star>=3. */
 int game_medical_seek(GameSim *sim, Tower *tower, int from_floor);
-
-/* Medical emergencies (flavor — only with a medical center, no penalty) */
-void game_try_medical(GameSim *sim, Tower *tower);
-void game_update_medical(GameSim *sim);
 
 /* Stories of the ground lobby (0 if none, capped at 3) — drives the
  * grand-lobby wait-forgiveness bonus. */

@@ -1268,10 +1268,9 @@ static void render_tower(void)
                     else
                         frame_idx = (tod == TOD_NIGHT || tod == TOD_EVENING) ? 4 : 3;
                 } else if (tenant->type == ITEM_MEDICAL && nframes >= 3) {
-                    /* Medical (Jonah's decode): 0 active, 1 clean/idle, 2 night. */
-                    if (game.sim.time_of_day == TOD_NIGHT) frame_idx = 2;
-                    else if (game.sim.medical.active)      frame_idx = 0;
-                    else                                    frame_idx = 1;
+                    /* Medical: 1 clean/idle by day, 2 at night. Frame 0 was the
+                     * fabricated "emergency" state — no real trigger exists. */
+                    frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2 : 1;
                 } else if (tenant->type == ITEM_CINEMA && nframes >= 4) {
                     /* Cinema: the venue state IS the sprite frame (the EXE
                      * renderer draws slot+6 directly, seg_1038:0396) —
@@ -4086,32 +4085,6 @@ static void render_fire_glow(void)
     SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
 }
 
-/* Medical emergency: a flashing red-cross marker bobbing over the affected
- * floor while the paramedics (your medical center) are on scene. */
-static void render_medical(void)
-{
-    if (!game.sim.medical.active) return;
-    int lobby_sx, lobby_sy;
-    grid_to_screen(0, 0, &lobby_sx, &lobby_sy);
-    int fy  = lobby_sy - game.sim.medical.floor * CELL_H;
-    int bob = (game.sim.frame % 24 < 12) ? 0 : 3;
-    int sz  = 18;
-    int bx  = lobby_sx + (TOWER_WIDTH / 2) * CELL_W;
-    int y   = fy - sz - 6 + bob;
-    if (game.sim.frame % 16 < 8) {       /* blink */
-        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-        SDL_Rect box = { bx, y, sz, sz };
-        SDL_RenderFillRect(game.renderer, &box);
-        SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 255);
-        SDL_RenderDrawRect(game.renderer, &box);
-        SDL_SetRenderDrawColor(game.renderer, 220, 0, 0, 255);
-        SDL_Rect v = { bx + sz / 2 - 2, y + 3, 4, sz - 6 };
-        SDL_Rect h = { bx + 3, y + sz / 2 - 2, sz - 6, 4 };
-        SDL_RenderFillRect(game.renderer, &v);
-        SDL_RenderFillRect(game.renderer, &h);
-    }
-}
-
 /* Star-promotion certificate — a celebratory gold-framed card. SimTower has
  * no certificate bitmap (promotions fire event animations 0xBD4+star), so
  * this is a port-authored flourish built from the real star sprites. */
@@ -4464,7 +4437,6 @@ static void render(void)
     render_occupants();    /* interior people, under the hall/queue crowds */
     render_people();
     render_events();       /* fire/bomb effects ON TOP of the burning floors */
-    render_medical();      /* medical-emergency marker over the affected floor */
     render_fire_glow();    /* warm tint washed over the world while it burns */
     render_crane();
     render_build_ghost();
@@ -6284,11 +6256,6 @@ int main(int argc, char *argv[])
         game.cert_star = atoi(getenv("CT_CERT"));
         game.cert_timer = 100000;
     }
-    if (getenv("CT_MEDICAL")) {        /* demo: force a medical emergency */
-        game.sim.medical.active = 1;
-        game.sim.medical.floor = atoi(getenv("CT_MEDICAL"));
-        game.sim.medical.timer = 100000;
-    }
     (void)show_underground;
     game.zoom = 1.0f;
     
@@ -6422,13 +6389,11 @@ int main(int argc, char *argv[])
                 prev_damage = game.sim.event.damage_cost;
             }
 
-            /* Medical emergency (one-shot feed). */
-            if (game.sim.medical.notice) {
-                char buf[48];
-                snprintf(buf, sizeof buf, "Medical emergency on floor %d!",
-                         game.sim.medical.floor);
-                add_event_message(buf);
-                game.sim.medical.notice = 0;
+            /* Medical shortage nag (the real MedicalT mechanic, MoreMedical-
+             * Please): a sick worker couldn't reach a center. One-shot feed. */
+            if (game.sim.medical_nag) {
+                add_event_message("A sick worker found no medical center - build more!");
+                game.sim.medical_nag = 0;
             }
 
             /* Star-promotion certificate: consume the sim's pending flag. */

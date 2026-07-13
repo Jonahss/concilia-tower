@@ -189,7 +189,6 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
         case ITEM_SECURITY:  sim->promo.has_security = 1;  break;
         case ITEM_RECYCLING: recycling_centers++;          break;
         case ITEM_METRO:     sim->promo.has_metro = 1;     break;
-        case ITEM_MEDICAL:   sim->promo.has_medical = 1;   break;  /* existence */
         case ITEM_CATHEDRAL: sim->promo.has_cathedral = 1; break;
         case ITEM_HOTEL_SUITE:
             sim->promo.has_suite = 1;
@@ -1179,9 +1178,6 @@ void game_update(GameSim *sim, Tower *tower)
      * From JudgeT: commercial tenants accumulate stress from competition */
     if (sim->tick % 120 == 0 && sim->tick > 0) {
         game_judge_tenants(sim, tower);
-
-        /* A medical emergency, sometimes (needs a medical center, no disaster) */
-        game_try_medical(sim, tower);
     }
 
     /* The 10AM disaster dispatch: a fire every 84th day, a bomb threat
@@ -1193,7 +1189,6 @@ void game_update(GameSim *sim, Tower *tower)
 
     /* Update active events (fire spread, bomb countdown) */
     game_update_event(sim, tower);
-    game_update_medical(sim);
 
     /* Update Santa position */
     game_update_santa(sim);
@@ -2380,42 +2375,12 @@ int game_medical_seek(GameSim *sim, Tower *tower, int from_floor)
     return 2;
 }
 
-/* ================================================================
- * Medical emergencies (CheckMedicalEmergency, seg_11e8)
- * ================================================================
- * Faithful to the EXE skeleton: only fires when a medical center exists and
- * no disaster is running, at ~1% per evaluation. In the original it's purely
- * cosmetic (activates an emergency animation + a sound, no penalty). Here it
- * surfaces as a brief alert at a tenant floor — the medical center handles
- * it, so it's flavor, not a threat. */
-void game_try_medical(GameSim *sim, Tower *tower)
-{
-    if (sim->medical.active || sim->event.active || sim->event.pending) return;
-    if (!sim->promo.has_medical) return;
-    if ((rand() % 100) != 0) return;
-
-    /* Pick a random occupied tenant floor. */
-    int occ_floors[128], n = 0;
-    for (int i = 0; i < tower->tenant_count && n < 128; i++) {
-        if (tower->tenants[i].state == TENANT_OCCUPIED &&
-            tower->tenants[i].floor > 0)
-            occ_floors[n++] = tower->tenants[i].floor;
-    }
-    if (n == 0) return;
-
-    sim->medical.active = 1;
-    sim->medical.floor  = occ_floors[rand() % n];
-    sim->medical.timer  = 240;   /* paramedics on scene for a few seconds */
-    sim->medical.notice = 1;     /* one-shot for the UI feed */
-}
-
-void game_update_medical(GameSim *sim)
-{
-    if (!sim->medical.active) return;
-    if (--sim->medical.timer <= 0) {
-        sim->medical.active = 0;
-    }
-}
+/* NOTE: there is no "medical emergency" event in SimTower. A prior port had a
+ * game_try_medical/game_update_medical pair citing "CheckMedicalEmergency,
+ * seg_11e8", but the reconciliation referee (referee_medical_reconcile_
+ * 2026-07-13) proved that segment holds only MakeLobby + DoRandomSubwayInOut —
+ * the "emergency" was a fabrication re-skinned from the metro-train routine.
+ * Deleted. The real medical mechanic is game_medical_seek (above). */
 
 /* ================================================================
  * Santa Easter egg (from SantaT seg_11b8)

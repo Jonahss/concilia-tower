@@ -2059,35 +2059,28 @@ static void test_flavor(void)
     *g2 = (Tenant){0}; g2->type = ITEM_LOBBY; g2->floor = 2; g2->state = TENANT_OCCUPIED;
     CHECK(game_lobby_height(&tw) == 1, "lobby floors 0 and 2 (gap) -> height 1");
 
-    /* medical never fires without a medical center */
+    /* The REAL medical mechanic (MoreMedicalPlease): a sick worker seeks a
+     * center. There is no "medical emergency" event — that was a fabrication,
+     * deleted (referee_medical_reconcile_2026-07-13). */
     fresh();
-    sim.promo.has_medical = 0;
+    sim.medical_adequate = 1;
     Tenant *o = &tw.tenants[tw.tenant_count++];
     *o = (Tenant){0}; o->type = ITEM_OFFICE; o->floor = 6; o->state = TENANT_OCCUPIED;
-    int fired = 0;
-    for (int i = 0; i < 5000 && !fired; i++) {
-        game_try_medical(&sim, &tw);
-        if (sim.medical.active) fired = 1;
-    }
-    CHECK(!fired, "no medical center -> no medical emergency");
+    int r = game_medical_seek(&sim, &tw, 6);
+    CHECK(r == 0, "sick worker, no medical center -> not found");
+    CHECK(!sim.medical_adequate && sim.medical_nag,
+          "no center clears medical adequacy and raises the shortage nag");
 
-    /* with a medical center it eventually fires, on an occupied floor */
+    /* With a reachable medical center, the worker is admitted and adequacy holds. */
     fresh();
-    sim.promo.has_medical = 1;   /* flavor events gate on existence */
+    sim.medical_adequate = 1;
+    Tenant *med = &tw.tenants[tw.tenant_count++];
+    *med = (Tenant){0}; med->type = ITEM_MEDICAL; med->floor = 6; med->state = TENANT_OCCUPIED;
     Tenant *o2 = &tw.tenants[tw.tenant_count++];
     *o2 = (Tenant){0}; o2->type = ITEM_OFFICE; o2->floor = 6; o2->state = TENANT_OCCUPIED;
-    int got = 0;
-    for (int i = 0; i < 20000 && !got; i++) {
-        game_try_medical(&sim, &tw);
-        if (sim.medical.active) got = 1;
-    }
-    CHECK(got, "medical center -> emergency eventually fires");
-    CHECK(sim.medical.floor == 6 && sim.medical.notice,
-          "emergency lands on the occupied floor and raises a notice");
-
-    sim.medical.timer = 1;
-    game_update_medical(&sim);
-    CHECK(!sim.medical.active, "medical emergency clears when its timer runs out");
+    int r2 = game_medical_seek(&sim, &tw, 6);
+    CHECK(r2 == 2, "sick worker with a reachable medical center -> admitted");
+    CHECK(sim.medical_adequate, "adequacy stays set when a center is found");
 }
 
 /* Auto-fill: gaps between tenants on a row become plain floor (no
