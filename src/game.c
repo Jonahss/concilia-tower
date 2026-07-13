@@ -8,6 +8,7 @@
  *   - Time:        seg_11d8 (TimeT) / seg_1020 (AnimeT)
  */
 #include "game.h"
+#include "sound_hook.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -478,6 +479,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (t->type == ITEM_CONDO) {
                 int sale = tenant_rent(ITEM_CONDO, t->rent_class);
                 income += sale;
+                play_snd(SND_CASH);   /* condo sale lump (referee row 1) */
                 printf("\xf0\x9f\x8f\xa0 Condo on F%d sold for $%d\n",
                        t->floor, sale);
             }
@@ -539,6 +541,11 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                     /* the stay is paid at checkout (MoneyT 0eac -> 0854,
                      * same 0x3E9 rows, one lump per guest stay) */
                     income += tenant_rent(t->type, t->rent_class);
+                    /* Cash "ka-ching" is the EXE's checkout sound, throttled
+                     * to ~every 2nd checkout (MoneyT counter 0x31b8;
+                     * referee row 1). Avoids a wall of dings at nightfall. */
+                    static int checkout_ctr = 0;
+                    if ((++checkout_ctr & 1) == 0) play_snd(SND_CASH);
                 }
             }
             break;
@@ -2221,7 +2228,10 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
          * borrows venue_state (unused for metro) as "train in". */
         if (t->type == ITEM_METRO) {
             if (sim->hour >= 10 && sim->hour < 17) {
-                if (rand() % 7 == 0) t->venue_state = !t->venue_state;
+                if (rand() % 7 == 0) {
+                    t->venue_state = !t->venue_state;
+                    play_snd(SND_METRO);   /* train in/out (referee row 11) */
+                }
             } else {
                 t->venue_state = 0;
             }

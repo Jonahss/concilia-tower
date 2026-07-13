@@ -31,6 +31,7 @@
 
 #include "people.h"
 #include "game.h"
+#include "sound_hook.h"
 
 static uint8_t sched_mode_now(const PeopleSim *ps, const ElevatorShaft *s);
 static void release_car(Tower *tower, Person *p);
@@ -888,8 +889,16 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     if (!c->active) return;
 
     if (c->door_timer) {
-        if (c->door_timer == DOOR_OPEN_TICKS)
+        if (c->door_timer == DOOR_OPEN_TICKS) {
+            /* Arrival "ding" (#6001): the EXE gates on the car's requested-stop
+             * byte [bx+0x2A6C] for this floor (our dest_count), read before
+             * unboarding clears it — so a car dings once on arriving at a
+             * requested stop, not on every door re-open.
+             * referee_sound_events_2026-07-13.md row 9. */
+            if (c->dest_count[c->floor])
+                play_snd(SND_ELEV_DING);
             unboard_at_floor(ps, tower, s, c, frame);
+        }
         if (c->door_timer & 1) {
             if (c->door_timer == 1) {
                 while (board_one(ps, tower, s, c, frame)) {}

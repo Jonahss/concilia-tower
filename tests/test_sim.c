@@ -1,8 +1,8 @@
 /* test_sim.c — checks for transport reachability, housekeeping, and the
  * people/elevator pipeline.
  * Build: gcc -o /tmp/test_sim tests/test_sim.c src/tower.c src/game.c \
- *            src/people.c src/twr.c -Isrc -lm
- * No SDL needed — pure simulation. */
+ *            src/people.c src/twr.c src/sound_hook.c -Isrc -lm
+ * No SDL needed — pure simulation (sound_hook.c is a no-op stub here). */
 #include <stdio.h>
 #include <string.h>
 #include "game.h"

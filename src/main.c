@@ -19,6 +19,8 @@
 #include "tower.h"
 #include "game.h"
 #include "twr.h"
+#include "audio.h"
+#include "sound_hook.h"
 
 /* ---------- Window / display ---------- */
 #define WINDOW_W    960
@@ -5434,6 +5436,40 @@ static void init_fonts(void)
 }
 
 /* ---------- Main ---------- */
+
+/* Sound: the sim triggers effects through g_sound_hook (sound_hook.h). This
+ * shim forwards to the audio mixer. Set after audio init. */
+static void sound_shim(int wav_id)
+{
+    if (getenv("CT_SOUND_DEBUG")) {
+        /* tally by id; dumped by the capture-exit path */
+        extern void snd_tally(int);
+        snd_tally(wav_id);
+    }
+    /* Mix headroom: the EXE's WAVs are already near full-scale, so overlapping
+     * voices would hard-clip. WaveMix attenuates per active channel; 0.6 keeps
+     * a busy tower's mix clean. */
+    audio_play((uint16_t)wav_id, 0.6f);
+}
+
+/* debug tally (CT_SOUND_DEBUG) */
+static int s_tally_ids[64], s_tally_cnt[64], s_tally_n = 0;
+void snd_tally(int id)
+{
+    for (int i = 0; i < s_tally_n; i++)
+        if (s_tally_ids[i] == id) { s_tally_cnt[i]++; return; }
+    if (s_tally_n < 64) { s_tally_ids[s_tally_n] = id; s_tally_cnt[s_tally_n] = 1; s_tally_n++; }
+}
+static void snd_tally_dump(void)
+{
+    for (int i = 0; i < s_tally_n; i++)
+        printf("  sound 0x%04X fired %d times\n", s_tally_ids[i], s_tally_cnt[i]);
+}
+
+/* Headless capture mode: when CT_SOUND_CAPTURE=<path> is set the game opens no
+ * audio device, records the sim's sounds, and writes a WAV at exit. */
+static int g_sound_capture = 0;
+
 int main(int argc, char *argv[])
 {
     const char *exe_path = NULL;
@@ -5511,6 +5547,19 @@ int main(int argc, char *argv[])
     
     /* Load sprites */
     sprites_init(&game.sprites, &game.exe, game.renderer);
+
+    /* Audio: decode the EXE's 55 WAV effects and wire the sim's sound hook.
+     * CT_SOUND_CAPTURE=<path> renders a WAV headless (no device) instead of
+     * playing live. Event->sound map: referee_sound_events_2026-07-13.md. */
+    g_sound_capture = getenv("CT_SOUND_CAPTURE") != NULL;
+    if (g_sound_capture ? (audio_init_capture() == 0) : (audio_init() == 0)) {
+        int nclips = audio_load_from_ne(&game.exe);
+        printf("Audio: %d sound effects loaded%s\n", nclips,
+               g_sound_capture ? " (capture mode)" : "");
+        g_sound_hook = sound_shim;
+        if (g_sound_capture) audio_capture_begin();
+        play_snd(SND_STARTUP);          /* intro jingle (referee row 23) */
+    }
 
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
@@ -6291,6 +6340,24 @@ int main(int argc, char *argv[])
                 prev_santa = game.sim.santa.active;
             }
 
+            /* Wedding / TOWER (5-star) promotion music (referee row 6):
+             * ChurchT StartMarry plays it as the ceremony begins. */
+            {
+                static int prev_wedding = 0;
+                if (game.sim.wedding.active && !prev_wedding)
+                    play_snd(SND_WEDDING);
+                prev_wedding = game.sim.wedding.active;
+            }
+
+            /* Bomb/terror explosion (referee row 2): fired as the blast lands,
+             * i.e. when the destroyed-value counter jumps. */
+            {
+                static int prev_damage = 0;
+                if (game.sim.event.damage_cost > prev_damage)
+                    play_snd(SND_EXPLOSION);
+                prev_damage = game.sim.event.damage_cost;
+            }
+
             /* Medical emergency (one-shot feed). */
             if (game.sim.medical.notice) {
                 char buf[48];
@@ -6327,6 +6394,15 @@ int main(int argc, char *argv[])
                 if (game.rainy_day) add_event_message("Bad weather incoming...");
                 else add_event_message("Nice weather today!");
             }
+
+            /* Day-clock chimes (referee rows 12,15): the EXE rings the tower on
+             * hour boundaries. Wired for the two cleanly hour-mapped ones; the
+             * special-day fanfares (8:00/8:30) and evening chime need the EXE
+             * frame_time<->hour mapping verified, so they're deferred. */
+            if (prev_hour != game.sim.hour) {
+                if (game.sim.hour == 7)      play_snd(SND_NEWDAY);
+                else if (game.sim.hour == 9) play_snd(SND_CHIME_9AM);
+            }
             
             /* Star rating change */
             if (game.tower.star_rating != prev_star) {
@@ -6355,7 +6431,24 @@ int main(int argc, char *argv[])
         clamp_camera();
         render();
         frame++;
-        
+
+        /* Capture mode: mix one frame's worth of audio (60fps -> real-time
+         * pacing) into the WAV buffer, then stop after CT_SOUND_FRAMES. */
+        if (g_sound_capture) {
+            audio_advance(AUDIO_DEV_FREQ / 60);
+            int cap_frames = getenv("CT_SOUND_FRAMES")
+                             ? atoi(getenv("CT_SOUND_FRAMES")) : 600;
+            if (frame >= cap_frames) {
+                const char *p = getenv("CT_SOUND_CAPTURE");
+                if (audio_capture_write_wav(p) == 0)
+                    printf("Sound capture written to %s (%d frames)\n", p, frame);
+                else
+                    fprintf(stderr, "Sound capture: nothing recorded\n");
+                if (getenv("CT_SOUND_DEBUG")) snd_tally_dump();
+                game.running = 0;
+            }
+        }
+
         /* Auto-screenshot: run sim for a bit first so tenants wake up.
          * SHOT_FRAME=N overrides how long the sim runs before the capture. */
         static int shot_frame = 0;
