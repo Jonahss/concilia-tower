@@ -4527,6 +4527,7 @@ static void drag_place_units(void)
             if (f == f1) break;
         }
         if (placed > 0) {
+            play_snd(SND_BUILD_PLACE);   /* shaft extend (referee row 17) */
             printf("Drag-extended %s at x=%d by %d floor(s)\n",
                    tower_item_name(game.build_type), x, placed);
         } else {
@@ -4552,6 +4553,7 @@ static void drag_place_units(void)
     }
     
     if (placed > 0) {
+        play_snd(SND_BUILD_PLACE);   /* place/stamp confirm (referee row 17) */
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
     }
@@ -5271,9 +5273,10 @@ static void handle_event(SDL_Event *ev)
                     uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
                     if (tid) {
                         ItemType ty = game.tower.grid[fidx][game.mouse_cell].type;
-                        if (tower_remove(&game.tower, tid))
+                        if (tower_remove(&game.tower, tid)) {
+                            play_snd(SND_DELETE);   /* referee row 22 */
                             printf("Demolish: %s\n", tower_item_name(ty));
-                        else
+                        } else
                             printf("Can't demolish %s\n", tower_item_name(ty));
                     }
                 }

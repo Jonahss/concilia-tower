@@ -469,6 +469,9 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                 t->state = TENANT_MOVING_IN;
                 t->capacity = CAP_MIN;
                 t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
+                /* Build-complete jingle, random of two (referee row 21:
+                 * (rand%2)+0x2714). Fires as a unit finishes construction. */
+                play_snd((rand() & 1) ? SND_BUILD_DONE1 : SND_BUILD_DONE0);
             }
             break;
             
