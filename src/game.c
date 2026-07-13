@@ -2221,14 +2221,16 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
             occ_clamp(t, o);
             continue;
         }
-        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
-            continue;
-
         /* Metro train (DoRandomSubwayInOut 11e8:0273, byte-verified
          * 2026-07-11): pure cosmetics — a 1%/tick present/absent toggle
          * while 10AM-5PM, parked overnight empty. The port piggybacks
          * on this 16-frame pass (1 - 0.99^16 ~ a 1-in-7 flip) and
-         * borrows venue_state (unused for metro) as "train in". */
+         * borrows venue_state (unused for metro) as "train in".
+         * Runs BEFORE the occupancy gate: metro is infrastructure with no
+         * tenant occupancy — the daily judge vacates it, but the EXE's
+         * subway toggle never checks occupancy, so gating it on OCCUPIED
+         * (as we did) silently killed both the train animation and its
+         * sound on every real save. */
         if (t->type == ITEM_METRO) {
             if (sim->hour >= 10 && sim->hour < 17) {
                 if (rand() % 7 == 0) {
@@ -2240,6 +2242,9 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
             }
             continue;
         }
+
+        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
+            continue;
 
         switch (t->type) {
         case ITEM_OFFICE:
