@@ -4849,6 +4849,10 @@ static void execute_menu_item(const MenuItem *item)
             return;
         }
         game.build_type = item->build_type;
+        /* Toolbar-button click (#7002), suppressed during fire/emergency like
+         * the EXE (event_flags & 9 == 0). referee_sound_events row 20. */
+        if (!game.sim.event.active)
+            play_snd(SND_BUILD_TOOL);
         printf("Build: %s\n", tower_item_name(game.build_type));
     }
     switch (item->action) {
