@@ -602,9 +602,50 @@ static void grid_to_screen(int floor, int cell, int *sx, int *sy)
 {
     int world_x = cell * CELL_W;
     int world_y = -floor * CELL_H;
-    
+
     *sx = world_x - (int)game.cam_fx + game.screen_w / 2;
     *sy = world_y - (int)game.cam_fy + game.screen_h / 2;
+}
+
+/* Ambient background murmur (referee event #24 + referee_ambient_timing):
+ * each tick, 1-in-16, sample one of 6 on-screen probe points and play the
+ * ambient tied to the tenant type there — so the bed reflects what's on
+ * screen and changes as you scroll. Window 10AM-1AM, muted during a disaster.
+ * Cinema's 9xxx soundtrack pool is deferred (needs show-state sub-index). */
+static void ambient_tick(void)
+{
+    int hr = game.sim.hour;
+    if (!(hr >= 10 || hr < 1)) return;      /* 10:00 AM .. 1:00 AM window */
+    if (game.sim.event.active) return;       /* fire/emergency suppresses ambient */
+    if (rand() % 16 != 0) return;            /* 1-in-16 per tick */
+
+    int sel = rand() % 6;                     /* probe: {mid,¾-down} × {¼,½,¾} */
+    int frac = sel % 3;                       /* 0,1,2 -> ¼,½,¾ */
+    int sx = game.screen_w * (frac + 1) / 4;
+    int sy = (sel < 3) ? game.screen_h / 2 : game.screen_h * 3 / 4;
+
+    int floor, cell;
+    screen_to_grid(sx, sy, &floor, &cell);
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT || cell < 0 || cell >= TOWER_WIDTH)
+        return;
+    if (!game.tower.grid[fidx][cell].tenant_id) return;   /* empty sky -> silent */
+
+    int id = 0;
+    switch (game.tower.grid[fidx][cell].type) {
+    case ITEM_RESTAURANT:   id = (rand() & 1) ? AMB_RESTAURANT_A : AMB_RESTAURANT_B; break;
+    case ITEM_OFFICE:       id = AMB_OFFICE; break;
+    case ITEM_HOTEL_SINGLE:
+    case ITEM_HOTEL_TWIN:
+    case ITEM_HOTEL_SUITE:  id = AMB_HOTEL; break;
+    case ITEM_CONDO:        id = (rand() % 10 == 0) ? AMB_CONDO_RARE : AMB_HOTEL; break;
+    case ITEM_SHOP:
+    case ITEM_FAST_FOOD:    id = (rand() & 1) ? AMB_RESTAURANT_B : AMB_SHOP_FF_B; break;
+    case ITEM_PARKING:      id = (rand() & 1) ? AMB_PARKING_A : AMB_PARKING_B; break;
+    case ITEM_PARTY_HALL:   id = AMB_PARTY; break;
+    default: return;   /* cinema deferred; other/infrastructure types silent */
+    }
+    play_snd(id);
 }
 
 /* Keep the camera within the world. cam_fy is the world-Y at screen center;
@@ -5454,9 +5495,15 @@ static void sound_shim(int wav_id)
         snd_tally(wav_id);
     }
     /* Mix headroom: the EXE's WAVs are already near full-scale, so overlapping
-     * voices would hard-clip. WaveMix attenuates per active channel; 0.6 keeps
-     * a busy tower's mix clean. */
-    audio_play((uint16_t)wav_id, 0.6f);
+     * voices would hard-clip. WaveMix attenuates per active channel; 0.55 keeps
+     * a busy tower's mix clean. The ambient bed is always on, so it plays
+     * quieter (0.35) to leave room for foreground dings/chimes on top. */
+    int amb = (wav_id == AMB_RESTAURANT_A || wav_id == AMB_RESTAURANT_B ||
+               wav_id == AMB_OFFICE || wav_id == AMB_HOTEL ||
+               wav_id == AMB_CONDO_RARE || wav_id == AMB_SHOP_FF_B ||
+               wav_id == AMB_PARKING_A || wav_id == AMB_PARKING_B ||
+               wav_id == AMB_PARTY);
+    audio_play((uint16_t)wav_id, amb ? 0.35f : 0.55f);
 }
 
 /* debug tally (CT_SOUND_DEBUG) */
@@ -6402,14 +6449,30 @@ int main(int argc, char *argv[])
                 else add_event_message("Nice weather today!");
             }
 
-            /* Day-clock chimes (referee rows 12,15): the EXE rings the tower on
-             * hour boundaries. Wired for the two cleanly hour-mapped ones; the
-             * special-day fanfares (8:00/8:30) and evening chime need the EXE
-             * frame_time<->hour mapping verified, so they're deferred. */
-            if (prev_hour != game.sim.hour) {
-                if (game.sim.hour == 7)      play_snd(SND_NEWDAY);
-                else if (game.sim.hour == 9) play_snd(SND_CHIME_9AM);
+            /* Day-clock chimes (referee_ambient_timing Q2). The EXE fires these
+             * at exact times of day; the port's clock is uniform with real
+             * minutes, so fire on the minute we cross each target. The 8:00 and
+             * 8:30 fanfares only ring on a "special day" = every 8th day while
+             * below 5 stars (the rainy-morning flag). The dawn jingle is 5:30 AM
+             * (not 7:00), with a day%5==4 variant. */
+            {
+                static int prev_hm = -1;
+                int hm = game.sim.hour * 60 + game.sim.minute;
+                int special = (game.tower.day % 8 == 4) && (game.tower.star_rating < 5);
+                #define CHIME_CROSS(t) (prev_hm >= 0 && prev_hm < (t) && hm >= (t))
+                if (CHIME_CROSS(5*60+30))
+                    play_snd((game.tower.day % 5 == 4) ? SND_NEWDAY_SPEC : SND_NEWDAY);
+                if (special && CHIME_CROSS(8*60))     play_snd(SND_FANFARE_8AM);
+                if (special && CHIME_CROSS(8*60+30))  play_snd(SND_FANFARE_830);
+                if (CHIME_CROSS(9*60))                play_snd(SND_CHIME_9AM);
+                if (CHIME_CROSS(18*60))               play_snd(SND_EVENING);
+                #undef CHIME_CROSS
+                prev_hm = hm;
             }
+
+            /* Ambient soundscape: sample an on-screen cell, play its type's bed. */
+            if (game.sim.speed != SPEED_PAUSED)
+                ambient_tick();
             
             /* Star rating change */
             if (game.tower.star_rating != prev_star) {

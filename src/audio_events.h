@@ -39,4 +39,17 @@
 #define SND_DELETE      0x9B5B  /* #7003  demolish / delete      row 22         */
 #define SND_STARTUP     0xCE20  /* #20000 startup / intro jingle row 23         */
 
+/* Ambient background pool (referee event #24 + referee_ambient_timing).
+ * Selected by the tenant type at a random on-screen cell; resource = id|0x8000.
+ * Cinema's 9xxx soundtrack pool is deferred (needs show-state sub-index). */
+#define AMB_RESTAURANT_A 0x8568  /* #1384 restaurant murmur   */
+#define AMB_RESTAURANT_B 0x8569  /* #1385 (also shop/fastfood) */
+#define AMB_OFFICE       0x85A8  /* #1448 office ambience      */
+#define AMB_HOTEL        0x8629  /* #1577 hotel (also condo)   */
+#define AMB_CONDO_RARE   0x8628  /* #1576 condo, 1-in-10       */
+#define AMB_SHOP_FF_B    0x8668  /* #1640 shop / fast food alt */
+#define AMB_PARKING_A    0x86A8  /* #1704 parking              */
+#define AMB_PARKING_B    0x86A9  /* #1705 parking alt          */
+#define AMB_PARTY        0x8B28  /* #2856 party hall           */
+
 #endif /* AUDIO_EVENTS_H */

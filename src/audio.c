@@ -52,23 +52,33 @@ int audio_is_enabled(void) { return A.enabled; }
 void audio_set_enabled(int on) { A.enabled = on ? 1 : 0; }
 
 /* ---- the mixer (audio-thread + offline both) ---- */
+#define MIX_MAX_FRAMES 2048
 void audio_mix_s16(int16_t *out, int frames)
 {
-    memset(out, 0, (size_t)frames * sizeof(int16_t));
+    /* Accumulate all voices in 32-bit, then limit once — mixing into the int16
+     * output per-voice would clamp intermediate sums and distort overlaps. */
+    int32_t acc[MIX_MAX_FRAMES];
+    if (frames > MIX_MAX_FRAMES) frames = MIX_MAX_FRAMES;
+    memset(acc, 0, (size_t)frames * sizeof(int32_t));
+
     for (int v = 0; v < MAX_VOICES; v++) {
         Voice *vo = &A.voices[v];
         if (!vo->active || !vo->clip) continue;
         const Clip *c = vo->clip;
         int n = frames;
         if (vo->pos + n > c->frames) n = c->frames - vo->pos;
-        for (int i = 0; i < n; i++) {
-            int s = out[i] + (int)(c->pcm[vo->pos + i] * vo->gain);
-            if (s >  32767) s =  32767;
-            if (s < -32768) s = -32768;
-            out[i] = (int16_t)s;
-        }
+        for (int i = 0; i < n; i++)
+            acc[i] += (int32_t)(c->pcm[vo->pos + i] * vo->gain);
         vo->pos += n;
         if (vo->pos >= c->frames) { vo->active = 0; vo->clip = NULL; }
+    }
+
+    /* Soft knee above 24000 so busy moments compress instead of hard-clipping. */
+    for (int i = 0; i < frames; i++) {
+        int32_t s = acc[i];
+        int neg = s < 0; if (neg) s = -s;
+        if (s > 24000) { s = 24000 + (s - 24000) / 4; if (s > 32767) s = 32767; }
+        out[i] = (int16_t)(neg ? -s : s);
     }
 }
 
@@ -207,6 +217,20 @@ static int is_low_class(uint16_t ne_id)
     return ne_id == SND_ELEV_DING || ne_id == SND_ELEV_DEPART;
 }
 
+/* Ambient murmurs are multi-second beds; cap them to one voice so scrolling
+ * swaps the bed rather than layering murmurs into mud. */
+#define AMBIENT_MAX 1
+static int is_ambient(uint16_t ne_id)
+{
+    switch (ne_id) {
+    case AMB_RESTAURANT_A: case AMB_RESTAURANT_B: case AMB_OFFICE:
+    case AMB_HOTEL: case AMB_CONDO_RARE: case AMB_SHOP_FF_B:
+    case AMB_PARKING_A: case AMB_PARKING_B: case AMB_PARTY:
+        return 1;
+    default: return 0;
+    }
+}
+
 /* ---- playback ---- */
 void audio_play(uint16_t ne_id, float gain)
 {
@@ -214,14 +238,17 @@ void audio_play(uint16_t ne_id, float gain)
     const Clip *c = find_clip(ne_id);
     if (!c) return;
     if (A.dev) SDL_LockAudioDevice(A.dev);
-    int slot = -1, low_active = 0;
+    int slot = -1, low_active = 0, amb_active = 0;
     for (int v = 0; v < MAX_VOICES; v++) {
+        uint16_t vid = A.voices[v].active && A.voices[v].clip ? A.voices[v].clip->ne_id : 0;
         if (!A.voices[v].active) { if (slot < 0) slot = v; continue; }
-        if (is_low_class(A.voices[v].clip ? A.voices[v].clip->ne_id : 0)) low_active++;
+        if (is_low_class(vid)) low_active++;
+        if (is_ambient(vid))   amb_active++;
     }
-    /* Drop a low-class sound if its budget is full (rather than let dings
-     * pile up into a continuous wall). */
+    /* Drop a sound whose class budget is full (dings pile into a wall;
+     * ambient murmurs into mud) rather than steal a voice. */
     if (is_low_class(ne_id) && low_active >= LOW_CLASS_MAX) slot = -1;
+    if (is_ambient(ne_id)   && amb_active >= AMBIENT_MAX)   slot = -1;
     if (slot >= 0) {
         A.voices[slot].clip = c;
         A.voices[slot].pos = 0;
