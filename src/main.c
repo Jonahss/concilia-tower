@@ -6317,7 +6317,17 @@ int main(int argc, char *argv[])
         while (SDL_PollEvent(&ev)) {
             handle_event(&ev);
         }
-        
+
+        /* Build-drag clatter (#7001, referee row 18): a looping sound that
+         * rings while a build is being dragged out and stops on release. */
+        {
+            static int prev_drag = 0;
+            int drag_now = game.dragging && game.build_type != ITEM_NONE;
+            if (drag_now && !prev_drag)      audio_start_loop(SND_BUILD_DRAG, 0.5f);
+            else if (!drag_now && prev_drag) audio_stop_loop();
+            prev_drag = drag_now;
+        }
+
         /* Advance simulation */
         {
             int prev_hour = game.sim.hour;

@@ -48,6 +48,11 @@ void audio_play(uint16_t ne_id, float gain);
 void audio_set_enabled(int on);
 int  audio_is_enabled(void);
 
+/* Looping playback for held actions (the build-drag clatter, referee row 18).
+ * start_loop is idempotent for the same clip; only one loop plays at a time. */
+void audio_start_loop(uint16_t ne_id, float gain);
+void audio_stop_loop(void);
+
 /* Offline/headless capture: begin accumulating the mixed output, then write it
  * to a mono 16-bit WAV. Used to verify playback and to send clips to Discord.
  * Between begin and write, drive the game (or audio_advance) so voices fire. */

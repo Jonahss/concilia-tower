@@ -21,6 +21,7 @@ typedef struct {
     int   pos;            /* next sample index */
     float gain;
     int   active;
+    int   loop;           /* restart at end instead of deactivating */
 } Voice;
 
 static struct {
@@ -70,7 +71,10 @@ void audio_mix_s16(int16_t *out, int frames)
         for (int i = 0; i < n; i++)
             acc[i] += (int32_t)(c->pcm[vo->pos + i] * vo->gain);
         vo->pos += n;
-        if (vo->pos >= c->frames) { vo->active = 0; vo->clip = NULL; }
+        if (vo->pos >= c->frames) {
+            if (vo->loop) vo->pos = 0;          /* restart the held loop */
+            else { vo->active = 0; vo->clip = NULL; }
+        }
     }
 
     /* Soft knee above 24000 so busy moments compress instead of hard-clipping. */
@@ -254,7 +258,43 @@ void audio_play(uint16_t ne_id, float gain)
         A.voices[slot].pos = 0;
         A.voices[slot].gain = gain;
         A.voices[slot].active = 1;
+        A.voices[slot].loop = 0;
     }
+    if (A.dev) SDL_UnlockAudioDevice(A.dev);
+}
+
+void audio_start_loop(uint16_t ne_id, float gain)
+{
+    if (!A.ready || !A.enabled) return;
+    const Clip *c = find_clip(ne_id);
+    if (!c) return;
+    if (A.dev) SDL_LockAudioDevice(A.dev);
+    int slot = -1;
+    for (int v = 0; v < MAX_VOICES; v++) {
+        if (A.voices[v].active && A.voices[v].loop) {
+            if (A.voices[v].clip == c) { if (A.dev) SDL_UnlockAudioDevice(A.dev); return; }
+            A.voices[v].active = 0; A.voices[v].clip = NULL; A.voices[v].loop = 0;
+        }
+        if (!A.voices[v].active && slot < 0) slot = v;
+    }
+    if (slot >= 0) {
+        A.voices[slot].clip = c;
+        A.voices[slot].pos = 0;
+        A.voices[slot].gain = gain;
+        A.voices[slot].active = 1;
+        A.voices[slot].loop = 1;
+    }
+    if (A.dev) SDL_UnlockAudioDevice(A.dev);
+}
+
+void audio_stop_loop(void)
+{
+    if (!A.ready) return;
+    if (A.dev) SDL_LockAudioDevice(A.dev);
+    for (int v = 0; v < MAX_VOICES; v++)
+        if (A.voices[v].active && A.voices[v].loop) {
+            A.voices[v].active = 0; A.voices[v].clip = NULL; A.voices[v].loop = 0;
+        }
     if (A.dev) SDL_UnlockAudioDevice(A.dev);
 }
 
