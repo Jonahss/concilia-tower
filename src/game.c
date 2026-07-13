@@ -277,19 +277,17 @@ void game_wedding_daily(GameSim *sim, Tower *tower)
  * time_period >= 4 (5:00 PM onward, running through the night to the 7AM
  * reset) and is_weekend != 1 (LevelUp @00de/@00e5 and @011e/@0125) — big
  * promotions only land on weekday evenings. The 2->3 branch has no clock
- * gate; early promotions come any time. Mapped to this sim's calendar:
- * evening-or-night hours, outside the weekend quarter (the port runs the
- * EXE's WD1/WD2/WE day-cycle as quarters within its 24h day, so the
- * weekend quarter plays the EXE's weekend day). */
-static int promotion_window_open(const GameSim *sim)
+ * gate; early promotions come any time. is_weekend is the EXE's real
+ * [0xB3A0] day flag (every 3rd day) — reconciled 2026-07-12 from the
+ * June model that treated the nightly 11pm-5am slice as "the weekend". */
+static int promotion_window_open(const GameSim *sim, const Tower *tower)
 {
     int evening_or_later = (sim->hour >= 17 || sim->hour < 7);
-    return evening_or_later && sim->quarter != QUARTER_WEEKEND;
+    return evening_or_later && !game_is_weekend(tower);
 }
 
 int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
 {
-    (void)tower;
     switch (target_star) {
     case 1: return 1;  /* Starting star, always OK */
     case 2: return 1;  /* Just need population */
@@ -307,7 +305,7 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
                sim->promo.recycling_adequate &&
                sim->promo.medical_adequate &&
                sim->promo.vip_visited &&
-               promotion_window_open(sim);
+               promotion_window_open(sim, tower);
     case 5:
         /* 4->5 branch: metro ([0xB3E8] >= 0) + recycling adequate +
          * medical adequate + the weekday-evening window. NO VIP re-check
@@ -316,7 +314,7 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
         return sim->promo.has_metro &&
                sim->promo.recycling_adequate &&
                sim->promo.medical_adequate &&
-               promotion_window_open(sim);
+               promotion_window_open(sim, tower);
     case 6:
         /* TOWER: special event, not automatic */
         return 0;
@@ -1019,8 +1017,9 @@ static void quarter_closeout(GameSim *sim, Tower *tower)
         };
     }
 
-    printf("📊 End of %s: Income $%ld, Expenses $%ld, Balance $%ld, Pop %d, "
-           "Commuters %d (avg wait %d)\n",
+    printf("📊 %s day %d, %s close: Income $%ld, Expenses $%ld, "
+           "Balance $%ld, Pop %d, Commuters %d (avg wait %d)\n",
+           game_is_weekend(tower) ? "WE" : "WD", tower->day,
            game_quarter_name((Quarter)((sim->quarter - 1 + QUARTER_COUNT) % QUARTER_COUNT)),
            sim->income_this_quarter, sim->expenses_this_quarter,
            tower->money, tower->population,
@@ -1109,7 +1108,7 @@ void game_update(GameSim *sim, Tower *tower)
 
     /* Schedule clock for the elevator tables (EXE 0xB3A0/0xB3A1: the
      * weekend day-type + the 7 periods that slice the day) */
-    sim->people.sched_day = (sim->quarter == QUARTER_WEEKEND);
+    sim->people.sched_day = (uint8_t)game_is_weekend(tower);
     if (day_ticks > 0) {
         int per = (int)((long)tick_in_day * 7 / day_ticks);
         sim->people.sched_period = (uint8_t)(per < 0 ? 0 : per > 6 ? 6 : per);
@@ -1390,8 +1389,10 @@ void game_format_time(GameSim *sim, char *buf, int bufsize)
 
 const char *game_quarter_name(Quarter q)
 {
+    /* Intra-day bookkeeping slices — NOT the EXE's WD/WE days (those
+     * are day%3; see game_is_weekend). */
     static const char *names[] = {
-        "Weekday 1", "Weekday 2", "Weekday 3", "Weekend"
+        "Q1 (5-11a)", "Q2 (11a-5p)", "Q3 (5-11p)", "Q4 (11p-5a)"
     };
     if (q >= 0 && q < QUARTER_COUNT) return names[q];
     return "???";
@@ -1976,7 +1977,7 @@ int game_retail_period(const GameSim *sim, const Tower *tower)
 {
     (void)sim;
     if (tower->day % 8 == 4 && tower->star_rating < 5) return 2;
-    if (tower->day % 3 == 2) return 1;
+    if (game_is_weekend(tower)) return 1;
     return 0;
 }
 
@@ -2158,7 +2159,7 @@ static void occ_roll_office(const Tenant *t, TenantOccupants *o)
 static void occ_roll_condo(const GameSim *sim, const Tower *tower,
                            const Tenant *t, TenantOccupants *o)
 {
-    int weekend = tower->day % 3 == 2;         /* 0xB3A0 */
+    int weekend = game_is_weekend(tower);      /* 0xB3A0 */
     int daytime = sim->hour < 17;              /* period < 4 */
     int night = sim->time_of_day == TOD_NIGHT; /* [0x3218] lights-out */
     o->count = 3;

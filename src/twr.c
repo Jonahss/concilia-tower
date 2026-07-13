@@ -348,8 +348,11 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
 
     /* === wire the simulation === */
     game_init(sim);
-    sim->quarter = (day >= 0 && day % 3 == 2) ? QUARTER_WEEKEND
-                                              : (int)(day % 3);
+    /* Import at the top of the day (5AM slice). Weekday/weekend derives
+     * from the imported day number itself now (game_is_weekend) — the
+     * old day%3->slice mapping made WE saves import at 11PM, which is
+     * also why bomb offers used to detonate instantly on import. */
+    sim->quarter = QUARTER_1;
     game_update_reachability(sim, tower);
     people_rebuild_transport(&sim->people, tower);
 

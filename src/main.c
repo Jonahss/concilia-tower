@@ -2854,11 +2854,15 @@ static void render_info_window(void)
     TTF_Font *finfo = game.font_info ? game.font_info : game.font_small;
     if (finfo) {
         SDL_Color black = {0, 0, 0, 255};
-        static const char *wd_names[] = { "1st WD", "2nd WD", "3rd WD", "WE" };
-        const char *wd = (game.sim.quarter >= 0 && game.sim.quarter < 4)
-                         ? wd_names[game.sim.quarter] : "?";
-        int q = (game.tower.day - 1) % 4 + 1;
-        int year = (game.tower.day - 1) / 4 + 1;
+        /* The EXE calendar: day name = day%3, quarter = 3-day cycle
+         * (4 per year), year = 12 days. The old display read the 6h
+         * bookkeeping slice as the day name and compressed a year to
+         * 4 days — reconciled 2026-07-12; BARKLE now shows the same
+         * date the original would. */
+        static const char *wd_names[] = { "1st WD", "2nd WD", "WE" };
+        const char *wd = wd_names[((game.tower.day % 3) + 3) % 3];
+        int q = (game.tower.day / 3) % 4 + 1;
+        int year = game.tower.day / 12 + 1;
         int ylast = year % 10, yten = year % 100;
         const char *ysuf = (yten >= 11 && yten <= 13) ? "th"
                          : ylast == 1 ? "st" : ylast == 2 ? "nd"

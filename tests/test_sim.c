@@ -1376,7 +1376,7 @@ static void test_retail_economy(void)
     CHECK(tw.money == money0, "bomb-offer days suppress venue income");
 
     /* weekend quota cap + max(wd,we) score read */
-    tw.day = 2; sim.quarter = QUARTER_WEEKEND;
+    tw.day = 2;   /* day%3==2 = the weekend day (game_is_weekend) */
     f->retail_score[0] = 60; f->retail_score[1] = 20;
     sim.hour = 10; game_retail_hourly(&sim, &tw);
     CHECK(f->retail_quota == 50,
@@ -1394,7 +1394,7 @@ static void test_star_requirements(void)
     /* 3->4 and 4->5 only evaluate on weekday evenings (time_period >= 4,
      * not weekend) — open the window so the requirement checks can pass. */
     sim.hour = 17;
-    sim.quarter = QUARTER_WEEKDAY3;
+    tw.day = 3;   /* a weekday — the window needs !game_is_weekend */
     sim.promo.has_suite = 1;
     sim.promo.recycling_adequate = 1;
     sim.promo.medical_adequate = 1;
@@ -1428,13 +1428,13 @@ static void test_star_requirements(void)
     CHECK(game_check_promotion(&sim, &tw, 4),
           "the window runs through the night (time_period >= 4 wraps to 7AM)");
     sim.hour = 17;
-    sim.quarter = QUARTER_WEEKEND;
+    tw.day = 5;   /* day%3==2: the weekend day */
     CHECK(!game_check_promotion(&sim, &tw, 4) && !game_check_promotion(&sim, &tw, 5),
           "no big promotions on the weekend");
     sim.promo.has_security = 1;
     CHECK(game_check_promotion(&sim, &tw, 3),
           "2->3 has no clock gate (binary checks only security)");
-    sim.quarter = QUARTER_WEEKDAY3;
+    tw.day = 3;
 }
 
 /* Construction-time occupancy tiers (TenantMake MakeTenant) — these are

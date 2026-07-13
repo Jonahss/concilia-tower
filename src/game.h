@@ -25,12 +25,21 @@ typedef enum {
     TOD_COUNT
 } TimeOfDay;
 
-/* Quarter names */
+/* --- The two clocks, reconciled (2026-07-12) ---
+ * The EXE calendar (TimeT): a DAY is one 2600-frame cycle; days run
+ * 1st WD, 2nd WD, WE ([0xB3A0] weekend flag = day % 3 == 2); the
+ * financial quarter IS that 3-day cycle (settlement at its dawn); a
+ * displayed year is 4 cycles = 12 days. Everything with weekday/
+ * weekend semantics must read tower->day via game_is_weekend().
+ * The enum below is the port's OWN intra-day bookkeeping: four 6h
+ * slices of the 24h sim day (tick counters, analytics samples, the
+ * finance sub-logs). It carries NO weekday/weekend meaning — the
+ * June-era names that conflated the two calendars are gone. */
 typedef enum {
-    QUARTER_WEEKDAY1 = 0,
-    QUARTER_WEEKDAY2,
-    QUARTER_WEEKDAY3,
-    QUARTER_WEEKEND,
+    QUARTER_1 = 0,      /* 5am-11am */
+    QUARTER_2,          /* 11am-5pm */
+    QUARTER_3,          /* 5pm-11pm */
+    QUARTER_4,          /* 11pm-5am */
     QUARTER_COUNT
 } Quarter;
 
@@ -273,6 +282,9 @@ static const int TENANT_INCOME[] = {
  * CADENCE is the port's quarter — the EXE-side consumers (MoneyT
  * 1178:0854/08ec) have an undecoded call schedule, queued as a decomp
  * loose end. */
+/* The EXE weekend flag [0xB3A0]: every 3rd day is the weekend. */
+static inline int game_is_weekend(const Tower *t) { return t->day % 3 == 2; }
+
 static inline int tenant_rent(const ItemType type, int rent_class)
 {
     if (type >= (int)(sizeof TENANT_RENT_BY_CLASS / sizeof TENANT_RENT_BY_CLASS[0]))
