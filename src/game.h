@@ -601,6 +601,10 @@ typedef struct {
     long          last_day_income;   /* the previous full day's totals */
     long          last_day_expenses;
     int           last_day_num;      /* which day last_day_* summarizes (0 = none yet) */
+    int           cash_pending;      /* queued cha-chings from the rent settlement,
+                                        drained over frames so a rich morning rings
+                                        a run of them (the EXE's income-refresh chime) */
+    int           cash_snd_timer;    /* ticks until the next queued cha-ching */
     
     /* Stats */
     int           max_population;   /* Peak population reached */

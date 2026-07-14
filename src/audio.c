@@ -8,7 +8,9 @@
 #include <string.h>
 
 #define MAX_CLIPS   128   /* the EXE has 58 sounds; headroom */
-#define MAX_VOICES  16    /* simultaneous effects */
+#define MAX_VOICES  16    /* voice-table size */
+#define TOTAL_MAX   5     /* max sounds audible at once — keep the mix from
+                             turning into mush (the EXE's few WaveMix channels) */
 
 typedef struct {
     uint16_t ne_id;
@@ -249,17 +251,20 @@ void audio_play(uint16_t ne_id, float gain)
     const Clip *c = find_clip(ne_id);
     if (!c) return;
     if (A.dev) SDL_LockAudioDevice(A.dev);
-    int slot = -1, low_active = 0, amb_active = 0;
+    int slot = -1, low_active = 0, amb_active = 0, total_active = 0;
     for (int v = 0; v < MAX_VOICES; v++) {
         uint16_t vid = A.voices[v].active && A.voices[v].clip ? A.voices[v].clip->ne_id : 0;
         if (!A.voices[v].active) { if (slot < 0) slot = v; continue; }
+        total_active++;
         if (is_low_class(vid)) low_active++;
         if (is_ambient(vid))   amb_active++;
     }
     /* Drop a sound whose class budget is full (dings pile into a wall;
-     * ambient murmurs into mud) rather than steal a voice. */
+     * ambient murmurs into mud), or when the tower is already at its audible
+     * ceiling — better to skip one than layer into mush. */
     if (is_low_class(ne_id) && low_active >= LOW_CLASS_MAX) slot = -1;
     if (is_ambient(ne_id)   && amb_active >= AMBIENT_MAX)   slot = -1;
+    if (total_active >= TOTAL_MAX)                          slot = -1;
     if (slot >= 0) {
         A.voices[slot].clip = c;
         A.voices[slot].pos = 0;

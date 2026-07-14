@@ -481,7 +481,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (t->type == ITEM_CONDO) {
                 int sale = tenant_rent(ITEM_CONDO, t->rent_class);
                 income += sale;
-                play_snd(SND_CASH);   /* condo sale lump (referee row 1) */
+                if (sim->cash_pending < 30) sim->cash_pending++;   /* queued cha-ching */
                 printf("\xf0\x9f\x8f\xa0 Condo on F%d sold for $%d\n",
                        t->floor, sale);
             }
@@ -544,10 +544,11 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                      * same 0x3E9 rows, one lump per guest stay) */
                     income += tenant_rent(t->type, t->rent_class);
                     /* Cash "ka-ching" is the EXE's checkout sound, throttled
-                     * to ~every 2nd checkout (MoneyT counter 0x31b8;
-                     * referee row 1). Avoids a wall of dings at nightfall. */
+                     * to ~every 2nd checkout (MoneyT counter 0x31b8). Queued so
+                     * a nightful of checkouts rings a spaced run, not a blob. */
                     static int checkout_ctr = 0;
-                    if ((++checkout_ctr & 1) == 0) play_snd(SND_CASH);
+                    if ((++checkout_ctr & 1) == 0 && sim->cash_pending < 30)
+                        sim->cash_pending++;
                 }
             }
             break;
@@ -1084,7 +1085,19 @@ void game_update(GameSim *sim, Tower *tower)
     sim->ticks_per_quarter = TICKS_PER_QUARTER[sim->speed];
     sim->frame++;
     sim->tick++;
-    
+
+    /* Drain the settlement cha-ching queue: one ka-ching every ~26 ticks so a
+     * rich morning rings a clear run of them (each cash WAV is ~0.5s). */
+    if (sim->cash_pending > 0) {
+        if (sim->cash_snd_timer <= 0) {
+            play_snd(SND_CASH);
+            sim->cash_pending--;
+            sim->cash_snd_timer = 26;
+        } else {
+            sim->cash_snd_timer--;
+        }
+    }
+
     /* Calculate time of day */
     int day_ticks = TICKS_PER_DAY(sim->speed);
     int tick_in_day = 0;
@@ -1232,6 +1245,7 @@ void game_update(GameSim *sim, Tower *tower)
                  * stay at checkout (MoneyT 0eac); condos are the one-time
                  * sale at move-in. */
                 long rent = 0;
+                int payers = 0;
                 for (int i = 0; i < tower->tenant_count; i++) {
                     Tenant *t = &tower->tenants[i];
                     if (t->type != ITEM_OFFICE && t->type != ITEM_SHOP)
@@ -1239,6 +1253,7 @@ void game_update(GameSim *sim, Tower *tower)
                     if (t->state != TENANT_OCCUPIED &&
                         t->state != TENANT_VACANT) continue;
                     rent += tenant_rent(t->type, t->rent_class);
+                    if (t->state == TENANT_OCCUPIED) payers++;
                     /* the shop new-let immunity window closes after its
                      * first full quarter (tenure = EXE +0x17) */
                     if (t->type == ITEM_SHOP && t->tenure < 0xFF)
@@ -1248,6 +1263,12 @@ void game_update(GameSim *sim, Tower *tower)
                     tower->money += rent;
                     sim->income_this_quarter += rent;
                     printf("\xf0\x9f\x92\xb0 Quarterly rent collected: $%ld\n", rent);
+                    /* Queue a run of cha-chings that drains over the next
+                     * several seconds — the morning "ka-ching...ka-ching" the
+                     * EXE plays as its income counter animates up. Capped so a
+                     * mega-tower doesn't ring for minutes. */
+                    sim->cash_pending += payers;
+                    if (sim->cash_pending > 30) sim->cash_pending = 30;
                 }
             }
 
