@@ -638,6 +638,7 @@ static void ambient_tick(void)
         int evening = game.sim.hour >= 17 || game.sim.hour < 5;
         if (year_q == 2 && !evening) play_snd(AMB_SEASON_DAY);
         else if (year_q == 3 && evening) play_snd(AMB_SEASON_EVE);
+        else if (game.sim.santa.active) play_snd(AMB_SEASON_SANTA);  /* EXE [0xDD6C] */
         return;
     }
 
@@ -5499,6 +5500,7 @@ static void sound_shim(int wav_id)
                wav_id == AMB_PARKING_A || wav_id == AMB_PARKING_B ||
                wav_id == AMB_PARTY ||
                wav_id == AMB_SEASON_DAY || wav_id == AMB_SEASON_EVE ||
+               wav_id == AMB_SEASON_SANTA ||
                (wav_id >= 0xA329 && wav_id <= 0xA337));   /* cinema soundtracks */
     audio_play((uint16_t)wav_id, amb ? 0.35f : 0.55f);
 }

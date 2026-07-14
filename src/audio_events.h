@@ -56,5 +56,6 @@
  * is undecoded and left out. */
 #define AMB_SEASON_DAY   0xA71C  /* #10012 year-Q3, daytime    */
 #define AMB_SEASON_EVE   0xA71B  /* #10011 year-Q4, evening    */
+#define AMB_SEASON_SANTA 0xA712  /* #10002 while Santa flies (EXE [0xDD6C]) */
 
 #endif /* AUDIO_EVENTS_H */

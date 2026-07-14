@@ -238,7 +238,7 @@ static int is_ambient(uint16_t ne_id)
     case AMB_RESTAURANT_A: case AMB_RESTAURANT_B: case AMB_OFFICE:
     case AMB_HOTEL: case AMB_CONDO_RARE: case AMB_SHOP_FF_B:
     case AMB_PARKING_A: case AMB_PARKING_B: case AMB_PARTY:
-    case AMB_SEASON_DAY: case AMB_SEASON_EVE:
+    case AMB_SEASON_DAY: case AMB_SEASON_EVE: case AMB_SEASON_SANTA:
         return 1;
     default: return 0;
     }
