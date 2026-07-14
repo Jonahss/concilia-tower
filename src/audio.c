@@ -59,7 +59,12 @@ void audio_mix_s16(int16_t *out, int frames)
     /* Accumulate all voices in 32-bit, then limit once — mixing into the int16
      * output per-voice would clamp intermediate sums and distort overlaps. */
     int32_t acc[MIX_MAX_FRAMES];
-    if (frames > MIX_MAX_FRAMES) frames = MIX_MAX_FRAMES;
+    if (frames > MIX_MAX_FRAMES) {
+        /* Callers never exceed this (device + advance both chunk <=1024), but
+         * zero any tail we won't mix so a caller can't read stale samples. */
+        memset(out + MIX_MAX_FRAMES, 0, (size_t)(frames - MIX_MAX_FRAMES) * sizeof(int16_t));
+        frames = MIX_MAX_FRAMES;
+    }
     memset(acc, 0, (size_t)frames * sizeof(int32_t));
 
     for (int v = 0; v < MAX_VOICES; v++) {
@@ -226,10 +231,12 @@ static int is_low_class(uint16_t ne_id)
 #define AMBIENT_MAX 1
 static int is_ambient(uint16_t ne_id)
 {
+    if (ne_id >= 0xA329 && ne_id <= 0xA337) return 1;   /* cinema soundtracks */
     switch (ne_id) {
     case AMB_RESTAURANT_A: case AMB_RESTAURANT_B: case AMB_OFFICE:
     case AMB_HOTEL: case AMB_CONDO_RARE: case AMB_SHOP_FF_B:
     case AMB_PARKING_A: case AMB_PARKING_B: case AMB_PARTY:
+    case AMB_SEASON_DAY: case AMB_SEASON_EVE:
         return 1;
     default: return 0;
     }

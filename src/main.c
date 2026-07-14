@@ -611,7 +611,7 @@ static void grid_to_screen(int floor, int cell, int *sx, int *sy)
  * each tick, 1-in-16, sample one of 6 on-screen probe points and play the
  * ambient tied to the tenant type there — so the bed reflects what's on
  * screen and changes as you scroll. Window 10AM-1AM, muted during a disaster.
- * Cinema's 9xxx soundtrack pool is deferred (needs show-state sub-index). */
+ * A running cinema plays one of the 9xxx soundtrack WAVs, keyed to its film. */
 static void ambient_tick(void)
 {
     int hr = game.sim.hour;
@@ -629,7 +629,17 @@ static void ambient_tick(void)
     int fidx = floor_to_index(floor);
     if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT || cell < 0 || cell >= TOWER_WIDTH)
         return;
-    if (!game.tower.grid[fidx][cell].tenant_id) return;   /* empty sky -> silent */
+    if (!game.tower.grid[fidx][cell].tenant_id) {
+        /* Empty probe = the EXE's seasonal branch (param_1 == -1): a rare
+         * season accent. Conditions/ids proven; the [0xDD6C] fallback (#10002)
+         * is undecoded, omitted. Low frequency so it stays an accent. */
+        if ((rand() & 3) != 0) return;
+        int year_q  = (game.tower.day / 3) % 4;
+        int evening = game.sim.hour >= 17 || game.sim.hour < 5;
+        if (year_q == 2 && !evening) play_snd(AMB_SEASON_DAY);
+        else if (year_q == 3 && evening) play_snd(AMB_SEASON_EVE);
+        return;
+    }
 
     int id = 0;
     switch (game.tower.grid[fidx][cell].type) {
@@ -643,7 +653,20 @@ static void ambient_tick(void)
     case ITEM_FAST_FOOD:    id = (rand() & 1) ? AMB_RESTAURANT_B : AMB_SHOP_FF_B; break;
     case ITEM_PARKING:      id = (rand() & 1) ? AMB_PARKING_A : AMB_PARKING_B; break;
     case ITEM_PARTY_HALL:   id = AMB_PARTY; break;
-    default: return;   /* cinema deferred; other/infrastructure types silent */
+    case ITEM_CINEMA: {
+        /* A running show (venue_state 3) emits one of the 9xxx soundtrack WAVs.
+         * The exact EXE sub-index is undecoded (referee MED), so we key it to
+         * the film for a stable "each film has its theme". Two ids in the block
+         * (0xA32C/0xA32F) are non-RIFF and omitted. */
+        static const uint16_t soundtrack[] = {
+            0xA329, 0xA32A, 0xA32B, 0xA32D, 0xA32E, 0xA330, 0xA331,
+            0xA332, 0xA333, 0xA334, 0xA335, 0xA336, 0xA337 };
+        Tenant *ct = tower_tenant(&game.tower, game.tower.grid[fidx][cell].tenant_id);
+        if (!ct || ct->venue_state != 3) return;   /* silent unless showing */
+        id = soundtrack[ct->movie_id % (int)(sizeof soundtrack / sizeof soundtrack[0])];
+        break;
+    }
+    default: return;   /* other/infrastructure types silent */
     }
     play_snd(id);
 }
@@ -5474,7 +5497,9 @@ static void sound_shim(int wav_id)
                wav_id == AMB_OFFICE || wav_id == AMB_HOTEL ||
                wav_id == AMB_CONDO_RARE || wav_id == AMB_SHOP_FF_B ||
                wav_id == AMB_PARKING_A || wav_id == AMB_PARKING_B ||
-               wav_id == AMB_PARTY);
+               wav_id == AMB_PARTY ||
+               wav_id == AMB_SEASON_DAY || wav_id == AMB_SEASON_EVE ||
+               (wav_id >= 0xA329 && wav_id <= 0xA337));   /* cinema soundtracks */
     audio_play((uint16_t)wav_id, amb ? 0.35f : 0.55f);
 }
 

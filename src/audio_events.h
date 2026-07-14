@@ -51,5 +51,10 @@
 #define AMB_PARKING_A    0x86A8  /* #1704 parking              */
 #define AMB_PARKING_B    0x86A9  /* #1705 parking alt          */
 #define AMB_PARTY        0x8B28  /* #2856 party hall           */
+/* Seasonal accents (referee_ambient_timing): the EXE's empty-probe branch.
+ * Ids + season/time conditions HIGH-confidence; the [0xDD6C] fallback (#10002)
+ * is undecoded and left out. */
+#define AMB_SEASON_DAY   0xA71C  /* #10012 year-Q3, daytime    */
+#define AMB_SEASON_EVE   0xA71B  /* #10011 year-Q4, evening    */
 
 #endif /* AUDIO_EVENTS_H */
