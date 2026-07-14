@@ -137,7 +137,9 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             /* group+2 from the EXE: 42 standard, 21 express/service
              * (refreshed from TUNING every tick; clamped to slots) */
             s->capacity = (ty == ITEM_ELEVATOR_EXPRESS) ? 42 : 21;
-            s->num_cars = 1;          /* TODO: car count upgrades */
+            s->num_cars = 1;          /* fresh shaft; the dialog's car count is
+                                       * restored below when a rebuild matches an
+                                       * existing shaft (add-a-car is implemented) */
             /* schedule defaults from MakeElevator (11f8:12ff loop) */
             memset(s->sched_mode, 0, sizeof(s->sched_mode));
             memset(s->sched_threshold, 5, sizeof(s->sched_threshold));

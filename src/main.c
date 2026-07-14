@@ -2786,7 +2786,7 @@ static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 
 /* Event message buffer for the feed */
 #define EVENT_MSG_COUNT 8
-#define EVENT_MSG_LEN   48
+#define EVENT_MSG_LEN   64
 static char event_messages[EVENT_MSG_COUNT][EVENT_MSG_LEN];
 static int  event_msg_head = 0;
 static int  event_msg_total = 0;
@@ -2800,8 +2800,7 @@ static const char *save_path(void)
 
 static void add_event_message(const char *msg)
 {
-    strncpy(event_messages[event_msg_head], msg, EVENT_MSG_LEN - 1);
-    event_messages[event_msg_head][EVENT_MSG_LEN - 1] = '\0';
+    snprintf(event_messages[event_msg_head], EVENT_MSG_LEN, "%s", msg);
     event_msg_head = (event_msg_head + 1) % EVENT_MSG_COUNT;
     if (event_msg_total < EVENT_MSG_COUNT) event_msg_total++;
 }

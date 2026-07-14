@@ -41,7 +41,8 @@
 
 /* Ambient background pool (referee event #24 + referee_ambient_timing).
  * Selected by the tenant type at a random on-screen cell; resource = id|0x8000.
- * Cinema's 9xxx soundtrack pool is deferred (needs show-state sub-index). */
+ * The cinema 9xxx soundtrack pool (0xA329-0xA337) is keyed to movie_id inline
+ * in ambient_tick(); the exact EXE sub-index stays undecoded. */
 #define AMB_RESTAURANT_A 0x8568  /* #1384 restaurant murmur   */
 #define AMB_RESTAURANT_B 0x8569  /* #1385 (also shop/fastfood) */
 #define AMB_OFFICE       0x85A8  /* #1448 office ambience      */
