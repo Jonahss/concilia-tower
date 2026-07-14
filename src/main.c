@@ -305,6 +305,7 @@ typedef struct {
     int             elv_stype;    /* shaft ItemType (column+type = identity) */
     int             elv_day;      /* schedule editor: 0 weekday / 1 weekend */
     int             elv_period;   /* schedule editor: selected period 0..6 */
+    int             elv_scroll;   /* faithful grid: bottom visible floor offset */
     int             elv_x, elv_y; /* dialog window position (draggable) */
     
     /* Build mode */
@@ -2027,14 +2028,37 @@ static void render_tuning_window(void)
 }
 
 /* ---------- Elevator dialog (ElvDlogT, seg_1098) ----------
- * Double-click a shaft: grid of floors x 8 cars at the EXE's 13px cell
- * size, with per-floor stop toggles, live car positions, call markers,
- * and the car count. The original capped stop records at 30 per group;
- * we clamp the visible rows the same way. */
-#define ELV_CELL      13
-#define ELV_LABEL_W   34
-#define ELV_W         (8 + ELV_LABEL_W + ELV_CELL + 6 + 8 * ELV_CELL + 6 + ELV_CELL + 8)
-#define ELV_MAX_ROWS  30
+ * Double-click a shaft: the original's schedule + tuning + simulate panel,
+ * rebuilt on its own artwork (EXE bitmap 0x8190) with the live data overlaid.
+ * Interaction model verified against the decomp (2026-07-14 referee):
+ *  - WD/WE day tabs; 6 editable time periods (night is hidden) each holding a
+ *    3-value mode picked from ELVPOPUP (+0x20 matrix)
+ *  - two per-(day,period) spinners: Waiting Car Response (threshold +0x12,
+ *    1..100) and Standard Floor Departure (patience +0x2E, 0..3)
+ *  - a live 9-col x 15-row shaft grid: col -1 = shared floor service (+0x42),
+ *    cols 0..7 = each car's home floor (+0xBA); row 0 is the bottom floor
+ *  - SHOW toggles car visibility (+0x3C); Simulate = the full-screen edit mode
+ *    (seg_10f0, deferred); OK commits and closes. Cars are added by the build
+ *    tool, not here. */
+#define SPR_ELV_DIALOG 0x8190
+#define ELV_DLG_W      200
+#define ELV_DLG_H      428
+#define ELV_W          ELV_DLG_W    /* window width for drag/hit bounds */
+#define ELV_PERIODS    6         /* periods 0..5; night (6) is hidden by the EXE */
+/* measured hit-rects, dialog-local px (x,y,w,h) */
+#define ELV_WD_TAB     29,  4, 70, 14
+#define ELV_WE_TAB    102,  4, 67, 14
+#define ELV_PCELL_X0   29        /* first schedule cell x */
+#define ELV_PCELL_Y    43
+#define ELV_PCELL_W    22
+#define ELV_PCELL_H    20
+#define ELV_PCELL_PITCH 24
+#define ELV_RESP_FLD   76, 93, 19, 22   /* Waiting Car Response value field */
+#define ELV_WAIT_FLD   76,148, 19, 22   /* Standard Floor Departure value field */
+#define ELV_GRID       18,195,132,195   /* live shaft/car grid */
+#define ELV_SHOW       161,206, 11, 20  /* SHOW On/Off */
+#define ELV_SIM_BTN     10,398, 80, 22  /* Simulate / Resume */
+#define ELV_OK_BTN     115,398, 80, 22  /* OK */
 /* Cost of an extra car, per type (decomp-verified, globals.md #54):
  * the EXE charges the tuning-resource values at +0x90 — standard $80k,
  * express $150k, service $50k. OpenSkyscraper's flat $80k was right for
@@ -2067,292 +2091,290 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx)
     return wf <= 0 || (wf % 15) == 0;
 }
 
-static void elv_dialog_metrics(const ElevatorShaft *s, int *rows, int *body_h)
+/* UI-only state for the faithful dialog (not sim state). */
+static int elv_show_preview = 1;
+
+/* Draw a small filled/outlined rect helper (dialog-local -> screen). */
+static void elv_box(int ox, int oy, int x, int y, int w, int h,
+                    int r, int g, int b, int fill)
 {
-    int r = s->hi - s->lo + 1;
-    if (r > ELV_MAX_ROWS) r = ELV_MAX_ROWS;
-    *rows = r;
-    *body_h = 22 + 16 + r * ELV_CELL + 30 + 44 + 28;
+    SDL_Rect rc = { ox + x, oy + y, w, h };
+    SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+    if (fill) SDL_RenderFillRect(game.renderer, &rc);
+    else      SDL_RenderDrawRect(game.renderer, &rc);
 }
 
-static void render_elv_dialog(void)
+/* One of the three schedule modes (0/1/2) the EXE's ELVPOPUP picks. The
+ * original blits a 24px icon per mode from an app-global strip we haven't
+ * isolated yet; until then we draw a distinct pictograph per mode that reads
+ * at a glance (scan / shuttle / hold) — NOT a bare digit. */
+static void elv_mode_glyph(int cx, int cy, int mode)
+{
+    SDL_SetRenderDrawColor(game.renderer, 20, 20, 20, 255);
+    if (mode == 1) {                     /* shuttle: bar with heads at both ends */
+        SDL_RenderDrawLine(game.renderer, cx, cy - 6, cx, cy + 6);
+        for (int i = 0; i < 3; i++) {
+            SDL_RenderDrawLine(game.renderer, cx - i, cy - 6 + i, cx + i, cy - 6 + i);
+            SDL_RenderDrawLine(game.renderer, cx - i, cy + 6 - i, cx + i, cy + 6 - i);
+        }
+    } else if (mode == 2) {              /* hold: small filled square */
+        SDL_Rect r = { cx - 4, cy - 4, 8, 8 };
+        SDL_RenderFillRect(game.renderer, &r);
+    } else {                             /* scan: up + down triangles stacked */
+        for (int i = 0; i < 4; i++) {
+            SDL_RenderDrawLine(game.renderer, cx - i, cy - 2 - i, cx + i, cy - 2 - i);
+            SDL_RenderDrawLine(game.renderer, cx - i, cy + 2 + i, cx + i, cy + 2 + i);
+        }
+    }
+}
+
+/* Faithful elevator dialog: the original 0x8190 artwork with live data
+ * overlaid. Interaction model grounded in the decomp (seg_1098 ElvDlogT). */
+static void render_elv_dialog_faithful(void)
 {
     int si = elv_dialog_shaft();
     if (si < 0) { game.elv_open = 0; return; }
     PeopleSim *ps = &game.sim.people;
     ElevatorShaft *s = &ps->shafts[si];
-
-    int rows, body_h;
-    elv_dialog_metrics(s, &rows, &body_h);
     int wx = game.elv_x, wy = game.elv_y;
+    int bx = wx, by = wy + WIN_TITLEBAR_H;   /* bitmap origin (client area) */
 
     const char *title =
         s->type == ITEM_ELEVATOR_EXPRESS ? "Express Elevator"
       : s->type == ITEM_ELEVATOR_SERVICE ? "Service Elevator"
-                                         : "Standard Elevator";
-    draw_win31_titlebar(wx, wy, ELV_W, title);
-    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, ELV_W, body_h };
-    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
-    SDL_RenderFillRect(game.renderer, &body);
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
-    SDL_RenderDrawRect(game.renderer, &body);
+                                         : "Elevator";
+    draw_win31_titlebar(wx, wy, ELV_DLG_W, title);
 
-    char hdr[64];
-    snprintf(hdr, sizeof(hdr), "Floors %d to %d   stop / cars 1-8",
-             index_to_floor(s->lo), index_to_floor(s->hi));
-    stats_label(wx + 8, wy + WIN_TITLEBAR_H + 4, hdr,
-                (SDL_Color){ 70, 70, 70, 255 });
+    Sprite *bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
+    if (bg) {
+        SDL_Rect dst = { bx, by, ELV_DLG_W, ELV_DLG_H };
+        SDL_RenderCopy(game.renderer, bg->texture, NULL, &dst);
+    } else {
+        elv_box(bx, by, 0, 0, ELV_DLG_W, ELV_DLG_H, 192, 192, 192, 1);
+    }
 
-    int gx = wx + 8 + ELV_LABEL_W;             /* serviced column */
-    int cx = gx + ELV_CELL + 6;                /* first car column */
-    int top = wy + WIN_TITLEBAR_H + 22 + 14;
+    SDL_Color ink = { 0, 0, 0, 255 };
 
-    for (int r = 0; r < rows; r++) {
-        int f = s->hi - r;
-        int ry = top + r * ELV_CELL;
-        char fl[8];
-        int wf = index_to_floor(f);
-        snprintf(fl, sizeof(fl), wf < 0 ? "B%d" : "%d", wf < 0 ? -wf : wf);
-        stats_label(wx + 8, ry, fl, (SDL_Color){ 0, 0, 0, 255 });
+    /* WD/WE active-tab highlight (day type = game.elv_day). The art already
+     * draws WD in black / WE in blue; we ring the active one. */
+    {
+        int tw, th, tx, ty;
+        if (game.elv_day == 0) { tx = 29; ty = 4; tw = 70; th = 14; }
+        else                   { tx = 102; ty = 4; tw = 67; th = 14; }
+        SDL_Rect r = { bx + tx - 1, by + ty - 1, tw + 2, th + 2 };
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(game.renderer, &r);
+    }
 
-        /* serviced toggle cell */
-        SDL_Rect sc = { gx, ry, ELV_CELL - 1, ELV_CELL - 1 };
-        if (!elv_structural_stop(s, f)) {
-            SDL_SetRenderDrawColor(game.renderer, 150, 150, 150, 255);
-            SDL_RenderFillRect(game.renderer, &sc);
-        } else if (s->serviced[f]) {
-            SDL_SetRenderDrawColor(game.renderer, 0, 150, 0, 255);
-            SDL_RenderFillRect(game.renderer, &sc);
-        } else {
-            SDL_SetRenderDrawColor(game.renderer, 120, 40, 40, 255);
-            SDL_RenderFillRect(game.renderer, &sc);
+    /* Schedule: 6 period cells (period 6/night is hidden — the EXE clamps it,
+     * seg_1098:078c). Each shows its mode glyph; the selected period is ringed. */
+    for (int p = 0; p < ELV_PERIODS; p++) {
+        int px = bx + ELV_PCELL_X0 + p * ELV_PCELL_PITCH;
+        int py = by + ELV_PCELL_Y;
+        elv_mode_glyph(px + ELV_PCELL_W / 2, py + ELV_PCELL_H / 2,
+                       s->sched_mode[game.elv_day][p]);
+        if (p == game.elv_period) {
+            SDL_Rect r = { px - 1, py - 1, ELV_PCELL_W + 1, ELV_PCELL_H + 1 };
+            SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 255);
+            SDL_RenderDrawRect(game.renderer, &r);
         }
-        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-        SDL_RenderDrawRect(game.renderer, &sc);
+    }
 
-        /* car grid cells */
-        for (int ci = 0; ci < CARS_PER_SHAFT; ci++) {
-            SDL_Rect cc = { cx + ci * ELV_CELL, ry, ELV_CELL - 1, ELV_CELL - 1 };
-            int active = ci < s->num_cars;
-            SDL_SetRenderDrawColor(game.renderer,
-                active ? 255 : 172, active ? 255 : 172, active ? 255 : 172, 255);
-            SDL_RenderFillRect(game.renderer, &cc);
-            SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
-            SDL_RenderDrawRect(game.renderer, &cc);
-            /* home floor = the original's red diamond marker */
-            if (active && s->home[ci] == f) {
-                SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
-                int mx0 = cc.x + cc.w / 2, my0 = cc.y + cc.h / 2;
-                for (int dlt = -4; dlt <= 4; dlt++) {
-                    int half = 4 - (dlt < 0 ? -dlt : dlt);
-                    SDL_RenderDrawLine(game.renderer, mx0 - half, my0 + dlt,
-                                       mx0 + half, my0 + dlt);
+    /* The two tuning spinner values for the selected (day, period). */
+    {
+        int d = game.elv_day, p = game.elv_period;
+        char num[8];
+        snprintf(num, sizeof(num), "%d", s->sched_threshold[d][p]);
+        stats_label(bx + 76 + 3, by + 93 + 4, num, ink);
+        snprintf(num, sizeof(num), "%d", s->sched_patience[d][p]);
+        stats_label(bx + 76 + 3, by + 148 + 4, num, ink);
+    }
+
+    /* Live shaft grid (widget 6). Decomp geometry (seg_1098:1644): 9 columns —
+     * col -1 = shared floor-service toggle at local x=0, cols 0..7 = the 8 car
+     * slots at x=13..104 — and 15 rows of 13px with ROW 0 AT THE BOTTOM
+     * (y = (14-row)*13). We show floors from a scroll base; a car draws in its
+     * column at its live floor (+0x298a), and a car's home floor (+0xBA) marks
+     * its column. SHOW gates the live-car overlay. */
+    {
+        int gx0 = bx + 18, gy0 = by + 195;
+        int total = s->hi - s->lo + 1;
+        int base = s->lo + game.elv_scroll;      /* bottom-most visible floor idx */
+        if (base > s->hi - 14) base = s->hi - 14;
+        if (base < s->lo) base = s->lo;
+        for (int r = 0; r < 15; r++) {
+            int f = base + r;
+            if (f > s->hi) break;
+            int cy = gy0 + (14 - r) * 13;
+
+            /* service column (col -1, local x=0) */
+            SDL_Rect sc = { gx0, cy, 12, 12 };
+            if (!elv_structural_stop(s, f))
+                SDL_SetRenderDrawColor(game.renderer, 150, 150, 150, 255);
+            else if (s->serviced[f])
+                SDL_SetRenderDrawColor(game.renderer, 40, 150, 40, 255);
+            else
+                SDL_SetRenderDrawColor(game.renderer, 120, 50, 50, 255);
+            SDL_RenderFillRect(game.renderer, &sc);
+            SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+            SDL_RenderDrawRect(game.renderer, &sc);
+
+            /* car columns 0..7 */
+            for (int c = 0; c < CARS_PER_SHAFT; c++) {
+                int cx = gx0 + (c + 1) * 13;
+                SDL_Rect cc = { cx, cy, 12, 12 };
+                if (c >= s->num_cars) {           /* inactive slot */
+                    SDL_SetRenderDrawColor(game.renderer, 205, 205, 205, 255);
+                    SDL_RenderFillRect(game.renderer, &cc);
+                    continue;
+                }
+                SDL_SetRenderDrawColor(game.renderer, 235, 235, 235, 255);
+                SDL_RenderFillRect(game.renderer, &cc);
+                SDL_SetRenderDrawColor(game.renderer, 150, 150, 150, 255);
+                SDL_RenderDrawRect(game.renderer, &cc);
+                /* home-floor marker (red diamond) */
+                if (s->home[c] == f) {
+                    SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
+                    int mx0 = cc.x + 6, my0 = cc.y + 6;
+                    for (int d = -3; d <= 3; d++) {
+                        int half = 3 - (d < 0 ? -d : d);
+                        SDL_RenderDrawLine(game.renderer, mx0 - half, my0 + d,
+                                           mx0 + half, my0 + d);
+                    }
+                }
+                /* live car at this floor */
+                if (elv_show_preview && s->car[c].active && s->car[c].floor == f) {
+                    ElevatorCar *car = &s->car[c];
+                    if (car->passengers >= s->capacity)
+                        SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
+                    else if (car->passengers > 0)
+                        SDL_SetRenderDrawColor(game.renderer, 40, 80, 220, 255);
+                    else
+                        SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+                    SDL_Rect cr = { cc.x + 2, cc.y + 2, 8, 8 };
+                    SDL_RenderFillRect(game.renderer, &cr);
                 }
             }
-            if (active && s->car[ci].active && s->car[ci].floor == f) {
-                ElevatorCar *c = &s->car[ci];
-                if (c->passengers >= s->capacity)
-                    SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
-                else if (c->passengers > 0)
-                    SDL_SetRenderDrawColor(game.renderer, 40, 80, 220, 255);
-                else
-                    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
-                SDL_Rect car = { cc.x + 2, cc.y + 2, cc.w - 4, cc.h - 4 };
-                SDL_RenderFillRect(game.renderer, &car);
-            }
         }
-
-        /* call markers: ▲ owned up call, ▼ owned down call */
-        int mx2 = cx + CARS_PER_SHAFT * ELV_CELL + 6;
-        if (s->up_call_car[f]) {
-            SDL_SetRenderDrawColor(game.renderer, 0, 100, 0, 255);
-            for (int i = 0; i < 5; i++)
-                SDL_RenderDrawLine(game.renderer, mx2 + 5 - i, ry + 1 + i,
-                                   mx2 + 5 + i, ry + 1 + i);
-        }
-        if (s->down_call_car[f]) {
-            SDL_SetRenderDrawColor(game.renderer, 150, 60, 0, 255);
-            for (int i = 0; i < 5; i++)
-                SDL_RenderDrawLine(game.renderer, mx2 + 5 - i, ry + 11 - i,
-                                   mx2 + 5 + i, ry + 11 - i);
-        }
+        (void)total;
     }
 
-    /* car count strip */
-    int by = top + rows * ELV_CELL + 4;
-    char cars[48];
-    snprintf(cars, sizeof(cars), "Cars: %d   (add $%dK)",
-             s->num_cars, elv_car_cost(s->type) / 1000);
-    stats_label(wx + 8, by + 3, cars, (SDL_Color){ 0, 0, 0, 255 });
-    SDL_Rect minus = { wx + ELV_W - 52, by, 18, 18 };
-    SDL_Rect plus  = { wx + ELV_W - 28, by, 18, 18 };
-    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-    SDL_RenderFillRect(game.renderer, &minus);
-    SDL_RenderFillRect(game.renderer, &plus);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &minus);
-    SDL_RenderDrawRect(game.renderer, &plus);
-    SDL_RenderDrawLine(game.renderer, minus.x + 5, minus.y + 9,
-                       minus.x + 13, minus.y + 9);
-    SDL_RenderDrawLine(game.renderer, plus.x + 5, plus.y + 9,
-                       plus.x + 13, plus.y + 9);
-    SDL_RenderDrawLine(game.renderer, plus.x + 9, plus.y + 5,
-                       plus.x + 9, plus.y + 13);
-
-    /* schedule strip (EXE group +0x12/+0x20/+0x2e — globals.md #53) */
-    int sy = by + 22;
-    stats_label(wx + 8, sy + 2, "Sched", (SDL_Color){ 0, 0, 0, 255 });
-    SDL_Rect dayb = { wx + 52, sy, 26, 16 };
-    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-    SDL_RenderFillRect(game.renderer, &dayb);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &dayb);
-    stats_label(dayb.x + 4, dayb.y + 1, game.elv_day ? "WE" : "WD",
-                (SDL_Color){ 0, 0, 0, 255 });
-    int px0 = wx + 86;
-    for (int pd = 0; pd < 7; pd++) {
-        SDL_Rect pc = { px0 + pd * 17, sy, 16, 16 };
-        int live = (game.elv_day == ps->sched_day && pd == ps->sched_period);
-        SDL_SetRenderDrawColor(game.renderer,
-            live ? 255 : 224, live ? 250 : 224, live ? 180 : 224, 255);
-        SDL_RenderFillRect(game.renderer, &pc);
-        SDL_SetRenderDrawColor(game.renderer,
-            pd == game.elv_period ? 200 : 110,
-            pd == game.elv_period ? 30 : 110, 30, 255);
-        SDL_RenderDrawRect(game.renderer, &pc);
-        char md[2] = { (char)('0' + s->sched_mode[game.elv_day][pd]), 0 };
-        stats_label(pc.x + 5, pc.y + 1, md, (SDL_Color){ 0, 0, 0, 255 });
-    }
-    /* threshold + patience spinners for the selected period:
-     * Resp [-]N[+]   Wait [-]N[+]  (button x: 40/84 and 140/168) */
-    int ry2 = sy + 20;
-    char sched[8];
-    stats_label(wx + 8, ry2 + 2, "Resp", (SDL_Color){ 0, 0, 0, 255 });
-    snprintf(sched, sizeof(sched), "%d",
-             s->sched_threshold[game.elv_day][game.elv_period]);
-    stats_label(wx + 60, ry2 + 2, sched, (SDL_Color){ 0, 0, 0, 255 });
-    stats_label(wx + 106, ry2 + 2, "Wait", (SDL_Color){ 0, 0, 0, 255 });
-    snprintf(sched, sizeof(sched), "%d",
-             s->sched_patience[game.elv_day][game.elv_period]);
-    stats_label(wx + 159, ry2 + 2, sched, (SDL_Color){ 0, 0, 0, 255 });
-    static const int spin_x[4] = { 40, 84, 140, 168 };
-    for (int b = 0; b < 4; b++) {
-        SDL_Rect sb = { wx + spin_x[b], ry2, 16, 16 };
-        SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-        SDL_RenderFillRect(game.renderer, &sb);
-        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-        SDL_RenderDrawRect(game.renderer, &sb);
-        SDL_RenderDrawLine(game.renderer, sb.x + 4, sb.y + 8, sb.x + 12, sb.y + 8);
-        if (b == 1 || b == 3)
-            SDL_RenderDrawLine(game.renderer, sb.x + 8, sb.y + 4, sb.x + 8, sb.y + 12);
+    /* SHOW On/Off marker (top half = On). */
+    {
+        int sx = bx + 161, sy = by + 206;
+        SDL_SetRenderDrawColor(game.renderer, 20, 20, 20, 255);
+        SDL_Rect m = { sx + 2, sy + (elv_show_preview ? 1 : 11), 7, 7 };
+        SDL_RenderFillRect(game.renderer, &m);
     }
 
-    /* close strip */
-    int cy = sy + 44;
-    SDL_Rect close = { wx + 8, cy, 64, 20 };
-    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-    SDL_RenderFillRect(game.renderer, &close);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &close);
-    stats_label(close.x + 14, close.y + 2, "Close", (SDL_Color){ 0, 0, 0, 255 });
+    /* Calibration overlay: outline every measured hit-rect so I can verify
+     * alignment against the original art before wiring behavior. */
+    if (getenv("ELV_CAL")) {
+        elv_box(bx, by, ELV_WD_TAB, 255, 0, 0, 0);
+        elv_box(bx, by, ELV_WE_TAB, 255, 0, 0, 0);
+        for (int p = 0; p < ELV_PERIODS; p++)
+            elv_box(bx, by, ELV_PCELL_X0 + p * ELV_PCELL_PITCH, ELV_PCELL_Y,
+                    ELV_PCELL_W, ELV_PCELL_H, 255, 0, 0, 0);
+        elv_box(bx, by, ELV_RESP_FLD, 0, 200, 0, 0);
+        elv_box(bx, by, ELV_WAIT_FLD, 0, 200, 0, 0);
+        elv_box(bx, by, ELV_GRID, 0, 120, 255, 0);
+        elv_box(bx, by, ELV_SHOW, 255, 160, 0, 0);
+        elv_box(bx, by, ELV_SIM_BTN, 255, 0, 255, 0);
+        elv_box(bx, by, ELV_OK_BTN, 255, 0, 255, 0);
+    }
+    (void)ps;
 }
 
-/* Returns 1 if the click was consumed by the dialog */
-static int elv_dialog_click(int mx, int my)
+static void render_elv_dialog(void)
+{
+    render_elv_dialog_faithful();
+}
+
+static int pt_in(int mx, int my, int ox, int oy, int x, int y, int w, int h)
+{
+    return mx >= ox + x && mx < ox + x + w && my >= oy + y && my < oy + y + h;
+}
+
+/* Faithful dialog click handling. Coordinates are dialog-local (bx,by). Only
+ * the CONFIRMED controls are wired here; grid/simulate follow the referee. */
+static int elv_dialog_click_faithful(int mx, int my)
 {
     int si = elv_dialog_shaft();
     if (si < 0) return 0;
     PeopleSim *ps = &game.sim.people;
     ElevatorShaft *s = &ps->shafts[si];
+    int bx = game.elv_x, by = game.elv_y + WIN_TITLEBAR_H;
 
-    int rows, body_h;
-    elv_dialog_metrics(s, &rows, &body_h);
-    int wx = game.elv_x, wy = game.elv_y;
-    if (mx < wx || mx >= wx + ELV_W ||
-        my < wy || my >= wy + WIN_TITLEBAR_H + body_h) return 0;
+    if (mx < game.elv_x || mx >= game.elv_x + ELV_DLG_W ||
+        my < game.elv_y || my >= by + ELV_DLG_H) return 0;
 
-    int gx = wx + 8 + ELV_LABEL_W;
-    int top = wy + WIN_TITLEBAR_H + 22 + 14;
+    /* WD / WE day-type tabs */
+    if (pt_in(mx, my, bx, by, ELV_WD_TAB)) { game.elv_day = 0; return 1; }
+    if (pt_in(mx, my, bx, by, ELV_WE_TAB)) { game.elv_day = 1; return 1; }
 
-    /* serviced toggles */
-    if (mx >= gx && mx < gx + ELV_CELL && my >= top &&
-        my < top + rows * ELV_CELL) {
-        int r = (my - top) / ELV_CELL;
-        int f = s->hi - r;
-        if (elv_structural_stop(s, f))
-            people_set_serviced(ps, si, f, !s->serviced[f]);
-        return 1;
-    }
-
-    /* car columns: click a cell to set that car's home floor (red diamond) */
-    int ccx = gx + ELV_CELL + 6;
-    if (mx >= ccx && mx < ccx + CARS_PER_SHAFT * ELV_CELL &&
-        my >= top && my < top + rows * ELV_CELL) {
-        int ci = (mx - ccx) / ELV_CELL;
-        int f = s->hi - (my - top) / ELV_CELL;
-        people_set_home(ps, si, ci, f);
-        return 1;
-    }
-
-    /* car count */
-    int by = top + rows * ELV_CELL + 4;
-    if (my >= by && my < by + 18) {
-        if (mx >= wx + ELV_W - 52 && mx < wx + ELV_W - 34) {
-            people_set_num_cars(ps, si, s->num_cars - 1);
-        } else if (mx >= wx + ELV_W - 28 && mx < wx + ELV_W - 10 &&
-                   s->num_cars < CARS_PER_SHAFT) {
-            int cost = elv_car_cost(s->type);
-            if (game.tower.money >= cost) {
-                game.tower.money -= cost;
-                game.tower.built_value += cost;
-                people_set_num_cars(ps, si, s->num_cars + 1);
-            }
-        }
-        return 1;
-    }
-
-    /* schedule strip */
-    int sy = by + 22;
-    if (my >= sy && my < sy + 16) {
-        if (mx >= wx + 52 && mx < wx + 78) {            /* day toggle */
-            game.elv_day = !game.elv_day;
-            return 1;
-        }
-        int px0 = wx + 86;
-        if (mx >= px0 && mx < px0 + 7 * 17) {           /* period cells */
-            int pd = (mx - px0) / 17;
-            if (pd == game.elv_period) {                /* re-click cycles */
-                uint8_t *m = &s->sched_mode[game.elv_day][pd];
+    /* schedule period cells (0..5) */
+    for (int p = 0; p < ELV_PERIODS; p++) {
+        if (pt_in(mx, my, bx, by, ELV_PCELL_X0 + p * ELV_PCELL_PITCH,
+                  ELV_PCELL_Y, ELV_PCELL_W, ELV_PCELL_H)) {
+            if (p == game.elv_period) {            /* re-click cycles mode */
+                uint8_t *m = &s->sched_mode[game.elv_day][p];
                 *m = (uint8_t)((*m + 1) % 3);
             }
-            game.elv_period = pd;
+            game.elv_period = p;
             return 1;
         }
+    }
+
+    /* Waiting Car Response spinner (threshold, EXE clamp 1..100) */
+    uint8_t *th = &s->sched_threshold[game.elv_day][game.elv_period];
+    if (pt_in(mx, my, bx, by, 64, 93, 12, 10)) { if (*th < 100) (*th)++; return 1; }
+    if (pt_in(mx, my, bx, by, 64, 103, 12, 11)) { if (*th > 1) (*th)--; return 1; }
+
+    /* Standard Floor Departure spinner (patience, EXE clamp 0..3) */
+    uint8_t *pa = &s->sched_patience[game.elv_day][game.elv_period];
+    if (pt_in(mx, my, bx, by, 64, 148, 12, 10)) { if (*pa < 3) (*pa)++; return 1; }
+    if (pt_in(mx, my, bx, by, 64, 158, 12, 11)) { if (*pa > 0) (*pa)--; return 1; }
+
+    /* SHOW On/Off (top half = On, bottom half = Off) */
+    if (pt_in(mx, my, bx, by, ELV_SHOW)) {
+        elv_show_preview = (my - (by + 206)) < 10;
         return 1;
     }
-    int ry2 = sy + 20;
-    if (my >= ry2 && my < ry2 + 16) {
-        uint8_t *th = &s->sched_threshold[game.elv_day][game.elv_period];
-        uint8_t *pa = &s->sched_patience[game.elv_day][game.elv_period];
-        if (mx >= wx + 40 && mx < wx + 56) {            /* threshold - */
-            if (*th > 1) (*th)--;                       /* EXE clamp 1..100 */
-        } else if (mx >= wx + 84 && mx < wx + 100) {    /* threshold + */
-            if (*th < 100) (*th)++;
-        } else if (mx >= wx + 140 && mx < wx + 156) {   /* patience - */
-            if (*pa > 0) (*pa)--;                       /* EXE clamp 0..3 */
-        } else if (mx >= wx + 168 && mx < wx + 184) {   /* patience + */
-            if (*pa < 3) (*pa)++;
+
+    /* OK closes */
+    if (pt_in(mx, my, bx, by, ELV_OK_BTN)) { game.elv_open = 0; return 1; }
+
+    /* Shaft grid (HandleGridClick, seg_1098:1ff5): col -1 = toggle floor
+     * service (+0x42, group-shared); cols 0..7 = set that car's home floor
+     * (+0xBA). Geometry mirrors the renderer: 9 cols x 15 rows, row 0 bottom. */
+    if (pt_in(mx, my, bx, by, ELV_GRID)) {
+        int gx0 = bx + 18, gy0 = by + 195;
+        int col = (mx - gx0) / 13 - 1;          /* -1 = service col, 0..7 = cars */
+        int r = 14 - (my - gy0) / 13;           /* row 0 = bottom */
+        int base = s->lo + game.elv_scroll;
+        if (base > s->hi - 14) base = s->hi - 14;
+        if (base < s->lo) base = s->lo;
+        int f = base + r;
+        if (r >= 0 && r < 15 && f >= s->lo && f <= s->hi) {
+            if (col == -1) {
+                if (elv_structural_stop(s, f))
+                    people_set_serviced(ps, si, f, !s->serviced[f]);
+            } else if (col >= 0 && col < s->num_cars) {
+                people_set_home(ps, si, col, f);
+            }
         }
         return 1;
     }
 
-    /* close button */
-    int cy = sy + 44;
-    if (my >= cy && my < cy + 20 && mx >= wx + 8 && mx < wx + 72) {
-        game.elv_open = 0;
-        return 1;
-    }
+    /* Simulate (widget 2) = the full-screen shaft-edit mode (seg_10f0): a
+     * separate feature, deferred. No-op for now rather than fake it. */
     return 1;   /* clicks inside the window never fall through */
+}
+
+/* Returns 1 if the click was consumed by the dialog */
+static int elv_dialog_click(int mx, int my)
+{
+    return elv_dialog_click_faithful(mx, my);
 }
 
 /* Open the elevator dialog for the shaft under the current mouse cell, if any.
@@ -2375,6 +2397,9 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
     game.elv_y = btn_y - 60;
     if (game.elv_x + ELV_W > game.screen_w)
         game.elv_x = game.screen_w - ELV_W - 8;
+    int dlg_h = WIN_TITLEBAR_H + ELV_DLG_H;
+    if (game.elv_y + dlg_h > game.screen_h)
+        game.elv_y = game.screen_h - dlg_h - 8;
     if (game.elv_y < 0) game.elv_y = 8;
     game.dragging = 0;
     return 1;
@@ -4776,17 +4801,10 @@ static int point_in_any_window(int mx, int my)
         return 1;
     }
     /* Elevator dialog */
-    if (game.elv_open) {
-        int si = elv_dialog_shaft();
-        if (si >= 0) {
-            int rows, body_h;
-            elv_dialog_metrics(&game.sim.people.shafts[si], &rows, &body_h);
-            if (mx >= game.elv_x && mx < game.elv_x + ELV_W &&
-                my >= game.elv_y &&
-                my < game.elv_y + WIN_TITLEBAR_H + body_h) {
-                return 1;
-            }
-        }
+    if (game.elv_open &&
+        mx >= game.elv_x && mx < game.elv_x + ELV_W &&
+        my >= game.elv_y && my < game.elv_y + WIN_TITLEBAR_H + ELV_DLG_H) {
+        return 1;
     }
     /* Analytics window */
     if (game.show_stats) {
