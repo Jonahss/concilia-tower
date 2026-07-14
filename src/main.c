@@ -6162,9 +6162,10 @@ int main(int argc, char *argv[])
     if (getenv("TUNING")) game.show_tuning = 1;
     if (getenv("ELV_DLOG")) {       /* open the dialog on the demo shaft */
         game.elv_open = 1;
-        game.elv_sx = 172;
-        game.elv_stype = ITEM_ELEVATOR_SHAFT;
-        game.elv_x = 600; game.elv_y = 160;
+        game.elv_sx = getenv("ELV_SX") ? atoi(getenv("ELV_SX")) : 172;
+        game.elv_stype = getenv("ELV_STYPE") ? atoi(getenv("ELV_STYPE"))
+                                             : ITEM_ELEVATOR_SHAFT;
+        game.elv_x = 340; game.elv_y = 120;
     }
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
 
@@ -6507,6 +6508,15 @@ int main(int argc, char *argv[])
          * pacing) into the WAV buffer, then stop after CT_SOUND_FRAMES. */
         if (g_sound_capture) {
             audio_advance(AUDIO_DEV_FREQ / 60);
+            /* Capture-only marker: report the frame (=> WAV timestamp) when the
+             * settlement cha-ching run kicks off, so a clip can be trimmed to it. */
+            if (getenv("CT_SOUND_DEBUG")) {
+                static int prev_cash = 0;
+                if (game.sim.cash_pending > prev_cash)
+                    printf("[cap] cash run @ frame %d (t=%.1fs) pending=%d\n",
+                           frame, frame / 60.0, game.sim.cash_pending);
+                prev_cash = game.sim.cash_pending;
+            }
             int cap_frames = getenv("CT_SOUND_FRAMES")
                              ? atoi(getenv("CT_SOUND_FRAMES")) : 600;
             if (frame >= cap_frames) {
