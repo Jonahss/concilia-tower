@@ -307,6 +307,8 @@ typedef struct {
     int             elv_period;   /* schedule editor: selected period 0..6 */
     int             elv_scroll;   /* faithful grid: bottom visible floor offset */
     int             elv_x, elv_y; /* dialog window position (draggable) */
+    int             elv_edit_mode;   /* Simulate: full-screen shaft-edit surface (seg_10f0) */
+    GameSpeed       elv_saved_speed; /* speed to restore when edit mode exits */
     
     /* Build mode */
     ItemType        build_type;
@@ -2094,6 +2096,55 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx)
 /* UI-only state for the faithful dialog (not sim state). */
 static int elv_show_preview = 1;
 
+/* ---- Elevator "Simulate" full-screen edit mode (seg_10f0 "ElvEditT") ----
+ * The EXE's Simulate button opens a separate surface: the whole tower dims to
+ * a flat silhouette and only the one selected shaft (cars + queues) stays lit,
+ * so its stops can be edited against the real tower at full scale. The EXE
+ * suppresses the normal draw path (flag 0xB3AE) and rewinds the sim clock so
+ * real time doesn't pass while you edit — we mirror that by pausing the sim on
+ * enter and restoring the prior speed on exit; schedule/stop edits survive.
+ * (The EXE's pre-simulation that settles the cars to a representative steady
+ * state is a HYPOTHESIS-confidence cosmetic in the decomp — we simply show the
+ * cars frozen where they are, which is honest and needs no invented motion.) */
+static void elv_edit_enter(void)
+{
+    if (game.elv_edit_mode || elv_dialog_shaft() < 0) return;
+    game.elv_edit_mode = 1;
+    game.elv_saved_speed =
+        (game.sim.speed == SPEED_PAUSED) ? SPEED_NORMAL : game.sim.speed;
+    game.sim.speed = SPEED_PAUSED;
+}
+
+static void elv_edit_exit(void)
+{
+    if (!game.elv_edit_mode) return;
+    game.elv_edit_mode = 0;
+    game.sim.speed = game.elv_saved_speed;
+}
+
+/* Toggle the selected shaft's stop at the tower cell under a screen point,
+ * while in edit mode. This is the edit surface's whole interaction: clicking
+ * a floor of the isolated shaft adds/removes its stop there. Returns 1 if a
+ * stop was toggled. */
+static int elv_edit_toggle_at(int mx, int my)
+{
+    if (!game.elv_edit_mode) return 0;
+    int si = elv_dialog_shaft();
+    if (si < 0) return 0;
+    ElevatorShaft *s = &game.sim.people.shafts[si];
+    int fl, cell;
+    screen_to_grid(mx, my, &fl, &cell);
+    int fidx = floor_to_index(fl);
+    int w = ITEM_WIDTH[s->type];
+    if (fidx >= s->lo && fidx <= s->hi &&
+        cell >= s->x && cell < s->x + w &&
+        elv_structural_stop(s, fidx)) {
+        people_set_serviced(&game.sim.people, si, fidx, !s->serviced[fidx]);
+        return 1;
+    }
+    return 0;
+}
+
 /* Draw a small filled/outlined rect helper (dialog-local -> screen). */
 static void elv_box(int ox, int oy, int x, int y, int w, int h,
                     int r, int g, int b, int fill)
@@ -2267,6 +2318,19 @@ static void render_elv_dialog_faithful(void)
         SDL_RenderFillRect(game.renderer, &m);
     }
 
+    /* Simulate button reflects edit-mode state: the art reads "Simulate"; while
+     * editing we overpaint it "Resume" and ring it so the toggle is legible. */
+    if (game.elv_edit_mode) {
+        int sxb = bx + 10, syb = by + 398;
+        SDL_SetRenderDrawColor(game.renderer, 30, 60, 120, 255);
+        SDL_Rect r = { sxb, syb, 80, 22 };
+        SDL_RenderFillRect(game.renderer, &r);
+        SDL_SetRenderDrawColor(game.renderer, 230, 230, 255, 255);
+        SDL_RenderDrawRect(game.renderer, &r);
+        SDL_Color w = { 235, 235, 255, 255 };
+        stats_label(sxb + 20, syb + 5, "Resume", w);
+    }
+
     /* Calibration overlay: outline every measured hit-rect so I can verify
      * alignment against the original art before wiring behavior. */
     if (getenv("ELV_CAL")) {
@@ -2341,8 +2405,12 @@ static int elv_dialog_click_faithful(int mx, int my)
         return 1;
     }
 
-    /* OK closes */
-    if (pt_in(mx, my, bx, by, ELV_OK_BTN)) { game.elv_open = 0; return 1; }
+    /* OK closes (and leaves edit mode if it was open) */
+    if (pt_in(mx, my, bx, by, ELV_OK_BTN)) {
+        elv_edit_exit();
+        game.elv_open = 0;
+        return 1;
+    }
 
     /* Shaft grid (HandleGridClick, seg_1098:1ff5): col -1 = toggle floor
      * service (+0x42, group-shared); cols 0..7 = set that car's home floor
@@ -2366,8 +2434,12 @@ static int elv_dialog_click_faithful(int mx, int my)
         return 1;
     }
 
-    /* Simulate (widget 2) = the full-screen shaft-edit mode (seg_10f0): a
-     * separate feature, deferred. No-op for now rather than fake it. */
+    /* Simulate (widget 2) = toggle the full-screen shaft-edit mode (seg_10f0
+     * ElvEditT): dims the tower to a silhouette and isolates this shaft. */
+    if (pt_in(mx, my, bx, by, ELV_SIM_BTN)) {
+        if (game.elv_edit_mode) elv_edit_exit(); else elv_edit_enter();
+        return 1;
+    }
     return 1;   /* clicks inside the window never fall through */
 }
 
@@ -2446,14 +2518,12 @@ static void render_occupants(void)
     }
 }
 
-static void render_people(void)
+static void render_shaft(ElevatorShaft *s)
 {
-    PeopleSim *ps = &game.sim.people;
     Sprite *queue_spr = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
 
-    for (int i = 0; i < ps->shaft_count; i++) {
-        ElevatorShaft *s = &ps->shafts[i];
-        if (!s->active) continue;
+    if (!s->active) return;
+    {
         int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
 
         /* Machinery caps: the sheet tail is TWO one-shaft-wide tiles —
@@ -2572,6 +2642,104 @@ static void render_people(void)
                 SDL_RenderFillRect(game.renderer, &dst);
             }
         }
+    }
+}
+
+static void render_people(void)
+{
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++)
+        render_shaft(&ps->shafts[i]);
+}
+
+/* Render the elevator "Simulate" edit surface: the tower dimmed to a flat
+ * silhouette with only the selected shaft lit (seg_10f0 ElvEditT). Replaces the
+ * normal world layers while game.elv_edit_mode is set. */
+static void render_elv_edit_mode(void)
+{
+    if (!game.elv_open) { elv_edit_exit(); return; }
+    int si = elv_dialog_shaft();
+    if (si < 0) { elv_edit_exit(); return; }
+    PeopleSim *ps = &game.sim.people;
+    ElevatorShaft *sel = &ps->shafts[si];
+
+    int top_floor, bot_floor, dummy;
+    screen_to_grid(0, 0, &top_floor, &dummy);
+    screen_to_grid(0, game.screen_h, &bot_floor, &dummy);
+    top_floor += 2; bot_floor -= 2;
+    if (top_floor > TOWER_TOP_FLOOR) top_floor = TOWER_TOP_FLOOR;
+    if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
+
+    /* Flat dimmed silhouette: every tenant becomes a uniform run of cells,
+     * ignoring its type sprite (DrawTowerSilhouette, seg_10f0:01f9). The shaft
+     * being edited is left out of the wash so it reads bright below. */
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    for (int ti = 0; ti < game.tower.tenant_count; ti++) {
+        Tenant *t = &game.tower.tenants[ti];
+        if (t->type == ITEM_NONE) continue;
+        if (t->floor > top_floor || t->floor + t->height - 1 < bot_floor)
+            continue;
+        int is_elv = item_is_elevator(t->type);
+        if (is_elv && t->x == sel->x && t->type == (ItemType)sel->type)
+            continue;                     /* the shaft we're editing */
+        int sx, sy;
+        grid_to_screen(t->floor + t->height - 1, t->x, &sx, &sy);
+        SDL_Rect r = { sx, sy, t->width * CELL_W, t->height * CELL_H };
+        if (is_elv) SDL_SetRenderDrawColor(game.renderer, 38, 46, 60, 255);
+        else        SDL_SetRenderDrawColor(game.renderer, 58, 66, 86, 255);
+        SDL_RenderFillRect(game.renderer, &r);
+    }
+
+    /* The selected shaft's tube, lit (mirrors render_tower PASS 2.5), with a
+     * per-floor stop marker: green = serviced, dim = a stop you could add. */
+    Sprite *shaftspr = sprites_find(&game.sprites, SPR_ELEV_SHAFT);
+    Sprite *ext = sprites_find(&game.sprites, SPR_ELEV_EXT);
+    int tw = ITEM_WIDTH[sel->type] * CELL_W;
+    for (int f = sel->lo; f <= sel->hi; f++) {
+        int wf = index_to_floor(f);
+        if (wf > top_floor || wf < bot_floor) continue;
+        int tx, ty;
+        grid_to_screen(wf, sel->x, &tx, &ty);
+        if (shaftspr) {
+            SDL_Rect src = { 0, 0, 32, shaftspr->h };
+            if (tw == 48) {
+                SDL_Rect mid = { tx + 8, ty, 32, CELL_H };
+                SDL_RenderCopy(game.renderer, shaftspr->texture, &src, &mid);
+                if (ext) {
+                    SDL_Rect sl = { 0, 0, 8, ext->h }, dl = { tx, ty, 8, CELL_H };
+                    SDL_Rect sr = { 8, 0, 8, ext->h }, dr = { tx + 40, ty, 8, CELL_H };
+                    SDL_RenderCopy(game.renderer, ext->texture, &sl, &dl);
+                    SDL_RenderCopy(game.renderer, ext->texture, &sr, &dr);
+                }
+            } else {
+                SDL_Rect dst = { tx, ty, tw, CELL_H };
+                SDL_RenderCopy(game.renderer, shaftspr->texture, &src, &dst);
+            }
+        }
+        if (elv_structural_stop(sel, f)) {
+            SDL_Rect tab = { tx + tw - 4, ty + 4, 4, CELL_H - 8 };
+            if (sel->serviced[f])
+                SDL_SetRenderDrawColor(game.renderer, 60, 200, 60, 255);
+            else
+                SDL_SetRenderDrawColor(game.renderer, 90, 110, 90, 255);
+            SDL_RenderFillRect(game.renderer, &tab);
+        }
+    }
+
+    /* Cars, queues and motor caps for the selected shaft only. */
+    render_shaft(sel);
+
+    /* Banner along the bottom (clear of the map/toolbox/info windows): what this
+     * mode is and how to leave it. */
+    {
+        int by = game.screen_h - 22;
+        SDL_SetRenderDrawColor(game.renderer, 18, 22, 34, 235);
+        SDL_Rect band = { 84, by, game.screen_w - 84, 22 };
+        SDL_RenderFillRect(game.renderer, &band);
+        SDL_Color w = { 220, 225, 240, 255 };
+        stats_label(94, by + 5,
+                    "ELEVATOR EDIT \xe2\x80\x94 click a floor of this shaft to "
+                    "toggle its stop \xc2\xb7 Resume (or OK) to exit", w);
     }
 }
 
@@ -4481,13 +4649,17 @@ static void render(void)
     SDL_RenderClear(game.renderer);
 
     render_sky();
-    render_tower();
-    render_occupants();    /* interior people, under the hall/queue crowds */
-    render_people();
-    render_events();       /* fire/bomb effects ON TOP of the burning floors */
-    render_fire_glow();    /* warm tint washed over the world while it burns */
-    render_crane();
-    render_build_ghost();
+    if (game.elv_edit_mode) {
+        render_elv_edit_mode();   /* silhouette tower + isolated shaft */
+    } else {
+        render_tower();
+        render_occupants();    /* interior people, under the hall/queue crowds */
+        render_people();
+        render_events();       /* fire/bomb effects ON TOP of the burning floors */
+        render_fire_glow();    /* warm tint washed over the world while it burns */
+        render_crane();
+        render_build_ghost();
+    }
     render_ui();
     render_stats_window();
     render_tuning_window();
@@ -4984,6 +5156,9 @@ static void handle_event(SDL_Event *ev)
     case SDL_KEYDOWN:
         switch (ev->key.keysym.sym) {
         case SDLK_ESCAPE:
+            if (game.elv_edit_mode) { elv_edit_exit(); break; }
+            game.running = 0;
+            break;
         case SDLK_q:
             game.running = 0;
             break;
@@ -5048,6 +5223,7 @@ static void handle_event(SDL_Event *ev)
         }
         case SDLK_F9:
             if (game_load(&game.sim, &game.tower, save_path()) == 0) {
+                elv_edit_exit();
                 game.elv_open = 0;          /* dialog target may be gone */
                 add_event_message("Game loaded.");
             } else {
@@ -5322,7 +5498,14 @@ static void handle_event(SDL_Event *ev)
 
             /* Block clicks that land on any window body from reaching the game */
             if (point_in_any_window(ev->button.x, ev->button.y)) break;
-            
+
+            /* Simulate/edit mode: a click on the tower toggles the selected
+             * shaft's stop at that floor. The world is frozen; no building. */
+            if (game.elv_edit_mode) {
+                elv_edit_toggle_at(ev->button.x, ev->button.y);
+                break;
+            }
+
             /* Bulldozer: remove the facility under the cursor. */
             if (game.demolish_mode) {
                 int fidx = floor_to_index(game.mouse_floor);
@@ -6567,6 +6750,23 @@ int main(int argc, char *argv[])
                         elv_dialog_click(cx, cy);
                         printf("[test] click %d,%d -> day=%d period=%d\n",
                                cx, cy, game.elv_day, game.elv_period);
+                    }
+                }
+                render();
+            }
+            /* Headless test for the edit-mode stop toggle: ELV_WORLD_CLICKS
+             * routes each point through the real world-click toggle path. */
+            const char *wclicks = getenv("ELV_WORLD_CLICKS");
+            if (wclicks && game.elv_edit_mode) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s", wclicks);
+                for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+                    int cx, cy;
+                    if (sscanf(tok, "%d,%d", &cx, &cy) == 2) {
+                        int fl, cell; screen_to_grid(cx, cy, &fl, &cell);
+                        int hit = elv_edit_toggle_at(cx, cy);
+                        printf("[test] world click %d,%d -> floor=%d cell=%d "
+                               "toggled=%d\n", cx, cy, fl, cell, hit);
                     }
                 }
                 render();
