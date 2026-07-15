@@ -6554,6 +6554,23 @@ int main(int argc, char *argv[])
         if (!shot_frame)
             shot_frame = getenv("SHOT_FRAME") ? atoi(getenv("SHOT_FRAME")) : 200;
         if (auto_screenshot && frame == shot_frame) {
+            /* Deterministic click-injection for headless UI tests:
+             * ELV_TEST_CLICKS="x,y;x,y;..." routes each through the dialog
+             * click handler before the capture, so state changes are visible. */
+            const char *clicks = getenv("ELV_TEST_CLICKS");
+            if (clicks) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s", clicks);
+                for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+                    int cx, cy;
+                    if (sscanf(tok, "%d,%d", &cx, &cy) == 2) {
+                        elv_dialog_click(cx, cy);
+                        printf("[test] click %d,%d -> day=%d period=%d\n",
+                               cx, cy, game.elv_day, game.elv_period);
+                    }
+                }
+                render();
+            }
             SDL_Surface *sshot = SDL_CreateRGBSurface(0, game.screen_w, game.screen_h, 32,
                 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
             SDL_RenderReadPixels(game.renderer, NULL, SDL_PIXELFORMAT_ARGB8888,
