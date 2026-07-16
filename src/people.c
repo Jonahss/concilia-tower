@@ -376,6 +376,42 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
     return r;   /* ROUTE_NONE */
 }
 
+/* Info-dialog transport-distance (seg_1108:014b): the nearest vertical
+ * transport serving this unit's floor — the one its occupants walk to for
+ * their first leg toward the lobby — and the horizontal cell-distance to it.
+ * Returns 0 = none serves the floor (stranded) / 1 = walk (stairs/escalator)
+ * / 2 = elevator. On a hit *out_dist = |transport_x - x| and *is_stairs marks
+ * stairs (1) vs escalator (0). A local nearest scan, not a full route — the
+ * port's one-transfer router under-reports connectivity in sky-lobby towers,
+ * and the EXE's complaint is about the walk to the FIRST transport anyway. */
+int people_nearest_transport(PeopleSim *ps, Tower *tower, int from_fidx,
+                             int x, int *out_dist, int *is_stairs)
+{
+    int best = 1 << 30, kind = 0, stairs = 0;
+    /* public (non-service) elevators that stop on this floor */
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active || s->type == ITEM_ELEVATOR_SERVICE) continue;
+        if (!shaft_serves(s, from_fidx)) continue;
+        int d = s->x - x; if (d < 0) d = -d;
+        if (d < best) { best = d; kind = 2; stairs = 0; }
+    }
+    /* stairs / escalators touching this floor (a unit at floor F is served by
+     * one anchored at F, going up, or at F-1, arriving from below) */
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *n = &tower->tenants[i];
+        if (n->type != ITEM_STAIRS && n->type != ITEM_ESCALATOR) continue;
+        int nf = floor_to_index(n->floor);
+        if (nf != from_fidx && nf != from_fidx - 1) continue;
+        int d = n->x - x; if (d < 0) d = -d;
+        if (d < best) { best = d; kind = 1; stairs = (n->type == ITEM_STAIRS); }
+    }
+    if (kind == 0) return 0;
+    if (out_dist)  *out_dist = best;
+    if (is_stairs) *is_stairs = stairs;
+    return kind;
+}
+
 /* ---------- calls + car selection (ElevatorsT 0a4c/0dfc) ---------- */
 
 /* Live schedule entries for this shaft (clock = EXE 0xB3A0/0xB3A1) */

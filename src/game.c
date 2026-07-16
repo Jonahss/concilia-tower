@@ -1700,7 +1700,25 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (is_hotel && t->condition == ROOM_INFESTED && n < max)
         PUSH("Room is too dirty");
 
-    /* [3. Transport-distance #1/#12-17 — DEFERRED: needs per-unit route dist.] */
+    /* 3. Transport distance (#1 / #12-17) — how far the unit is from a route
+     * to the ground lobby (seg_1108:014b): reuse the sim's own router, then a
+     * plain |Δx| to the chosen transport vs the 80 / 125 thresholds. */
+    if ((is_office || is_condo || is_shop || is_food || is_hotel ||
+         t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL) &&
+        t->state != TENANT_CONSTRUCTION && t->state != TENANT_EMPTY && n < max) {
+        int dist = 0, is_stairs = 0;
+        int kind = people_nearest_transport(&sim->people, tower,
+                       floor_to_index(t->floor), t->x, &dist, &is_stairs);
+        if (kind == 0) PUSH("No transportation connected");
+        else if (dist >= 80) {
+            if (kind == 2)      PUSH(dist >= 125 ? "Elevator is very far away"
+                                                 : "Elevator is far away");
+            else if (is_stairs) PUSH(dist >= 125 ? "Stairs are very far away"
+                                                 : "Stairs are far away");
+            else                PUSH(dist >= 125 ? "Escalator is very far away"
+                                                 : "Escalator is far away");
+        }
+    }
 
     /* 4. Movie sales (#4-#7) — cinema, keyed to film age + patron quota. */
     if (t->type == ITEM_CINEMA && n < max) {

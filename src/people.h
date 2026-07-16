@@ -275,6 +275,11 @@ void people_set_num_cars(PeopleSim *ps, int shaft, int n);
 void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on);
 void people_set_home(PeopleSim *ps, int shaft, int car, int fidx);
 
+/* Info-dialog transport-distance: nearest transport serving a floor + its
+ * cell-distance. Returns 0 none / 1 walk (stairs/escalator) / 2 elevator. */
+int people_nearest_transport(PeopleSim *ps, Tower *tower, int from_fidx,
+                             int x, int *out_dist, int *is_stairs);
+
 /* Average banked wait (0 if no samples yet) */
 static inline int people_avg_wait(const PeopleSim *ps)
 {
