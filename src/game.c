@@ -1674,10 +1674,10 @@ static ItemType noisy_neighbor_type(const Tower *tower, const Tenant *room)
 /* ---- Info-dialog diagnostic comment lines (seg_1108 DrawTenantComments) ----
  * Up to 3 lines, drawn from the 14 producers in the EXE's fixed priority
  * order — the first `max` that fire win. Strings below are the real res
- * 0x2C7 text. Producers that need per-unit data the port doesn't model yet
- * (route distance #1/#12-17, live rain #23, sub-lobby zone #21, per-center
- * garbage fill #29, parked-car ownership #34) are deliberately omitted and
- * flagged here, not faked. Returns the line count. */
+ * 0x2C7 text. Two producers stay omitted, flagged not faked: sub-lobby zone
+ * #21 (the port's floor_to_zone never returns the EXE's <0), and parked-car
+ * #34 (needs a per-space owner the port's anonymous parking valve lacks).
+ * Returns the line count. */
 int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                          char lines[][48], int max)
 {
@@ -1740,11 +1740,13 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
             else if (c >= 35) PUSH("Business is good");
             else if (c >= 25) PUSH("Business is average");
             else              PUSH("Very few customers");
-            /* 5t. Weekend/Rain tail (#22/#23) — weekend is live; rain is a
-             * retail-scoring special-day the port doesn't surface as a flag,
-             * so #23 is deferred. */
+            /* 5t. Weekend/Rain tail (#22/#23): good business on a weekend
+             * draws more; poor business on a rainy day (the port's every-8th
+             * special day, game_retail_period == 2) blames the rain. */
             if (c >= 35 && game_is_weekend(tower) && n < max)
                 PUSH("Weekends attract more customers");
+            else if (c < 35 && game_retail_period(sim, tower) == 2 && n < max)
+                PUSH("Rain might cause fewer customers");
         }
     }
 
@@ -1769,8 +1771,14 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (t->type == ITEM_PARTY_HALL && t->venue_state >= 2 && n < max)
         PUSH("A Party is happening!");
 
-    /* [11-12,14. Garbage #29 / Metro #30-32 / Parked car #34 — metro trains
-     * are wired to the event feed already; the rest need per-unit data.] */
+    /* 11. Full of Garbage (#29) — a recycling center while the trucks can't
+     * keep up. The EXE writes a tower-wide fill onto every center; it sticks
+     * at "full" (5) exactly when pop/center >= 2500, i.e. !recycling_adequate
+     * (TrashT seg_1088; same divisor/threshold as game.c's promo scan). */
+    if (t->type == ITEM_RECYCLING && !sim->promo.recycling_adequate && n < max)
+        PUSH("Full of Garbage");
+
+    /* [12. Metro trains #30-32 — already surfaced via the event feed.] */
 
     /* 13. Noisy neighbor (#35+#36) — names the offending neighbor's type. */
     if ((is_office || is_condo || is_hotel) && n < max) {
