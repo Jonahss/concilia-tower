@@ -4809,23 +4809,48 @@ static void draw_patron_bar(SDL_Rect box, int val, int max)
     SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
     SDL_RenderDrawRect(game.renderer, &box);
 }
-/* The tenant schematic (item id 2): the unit's own sprite in a framed panel.
- * The original also draws the neighbors — deferred; flagged. */
+/* The tenant schematic (item id 2): the unit shown IN CONTEXT — its floor,
+ * centered on the unit, with the same-floor neighbors that fit, the focused
+ * unit ringed. Mirrors the EXE's item-2 panel (seg_1100:4869 walks the
+ * stable-id neighbor map and blits the floor strip). */
 static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
 {
-    SDL_SetRenderDrawColor(game.renderer, 176, 196, 222, 255);
+    SDL_SetRenderDrawColor(game.renderer, 176, 196, 222, 255);   /* sky backing */
     SDL_RenderFillRect(game.renderer, &box);
-    int fw = 0, floors = 1;
-    uint16_t sid = item_sprite_id(t->type, &fw, &floors);
-    Sprite *spr = sid ? sprites_find(&game.sprites, sid) : NULL;
-    if (spr && spr->texture && fw > 0 && spr->h > 0) {
+    SDL_Rect clip = { box.x + 1, box.y + 1, box.w - 2, box.h - 2 };
+    SDL_RenderSetClipRect(game.renderer, &clip);
+
+    int inner = box.w - 8;
+    int ppc = (t->width > 0) ? inner * 62 / 100 / t->width : 6;  /* unit ~62% wide */
+    if (ppc < 2) ppc = 2;
+    int center_cell = t->x + t->width / 2;
+    int win_cells = ppc ? inner / ppc : t->width;
+    int win_left = center_cell - win_cells / 2;
+
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *n = &game.tower.tenants[i];
+        if (n->type == ITEM_NONE || n->floor != t->floor) continue;
+        if (n->x + n->width <= win_left || n->x >= win_left + win_cells) continue;
+        int fw = 0, floors = 1;
+        uint16_t sid = item_sprite_id(n->type, &fw, &floors);
+        Sprite *spr = sid ? sprites_find(&game.sprites, sid) : NULL;
+        if (!spr || !spr->texture || fw <= 0 || spr->h <= 0) continue;
         SDL_Rect src = { 0, 0, fw, spr->h };
-        int bw = box.w - 8, bh = box.h - 8;
-        int dw = bw, dh = spr->h * bw / fw;
-        if (dh > bh) { dh = bh; dw = fw * bh / spr->h; }
-        SDL_Rect dst = { box.x + (box.w - dw) / 2, box.y + (box.h - dh) / 2, dw, dh };
+        int dw = n->width * ppc;
+        int dh = spr->h * dw / fw;
+        if (dh > box.h - 8) dh = box.h - 8;
+        int dx = box.x + 4 + (n->x - win_left) * ppc;
+        int dy = box.y + box.h - 4 - dh;              /* bottom-aligned floor line */
+        SDL_Rect dst = { dx, dy, dw, dh };
         SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+        if (n->id == t->id) {                          /* ring the focused unit */
+            SDL_SetRenderDrawColor(game.renderer, 255, 226, 40, 255);
+            SDL_RenderDrawRect(game.renderer, &dst);
+            SDL_Rect d2 = { dst.x - 1, dst.y - 1, dst.w + 2, dst.h + 2 };
+            SDL_RenderDrawRect(game.renderer, &d2);
+        }
     }
+    SDL_RenderSetClipRect(game.renderer, NULL);
     SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
     SDL_RenderDrawRect(game.renderer, &box);
 }
