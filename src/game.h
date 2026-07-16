@@ -786,6 +786,15 @@ void game_relet_arrivals(GameSim *sim, Tower *tower);
  * re-armed a dark vacancy. */
 int game_set_rent_class(GameSim *sim, Tower *tower, Tenant *t, int cls);
 
+/* The live 0-300 "Eval" metric the info dialog draws as a gauge bar
+ * (seg_1100:1fad) — the unit's banked felt-wait; higher = worse. */
+int game_tenant_eval_metric(GameSim *sim, Tower *tower, const Tenant *t);
+
+/* Up to `max` diagnostic comment lines for the info dialog, in the EXE's
+ * fixed producer priority order (seg_1108). Returns the count written. */
+int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
+                         char lines[][48], int max);
+
 /* Parking usability (ParkingT CheckAllParking): mark each space usable
  * iff its floor's ramp chains from B1 (vertical same-x stack) and no
  * >=4-cell bare gap cuts the floor. Runs daily at 7AM + on build/
@@ -837,6 +846,7 @@ void game_venue_arrivals(GameSim *sim, Tower *tower);
  * next hit ($300k) or ordinary ($150k) film, deterministically. */
 void game_change_movie(GameSim *sim, Tower *tower, Tenant *t, int hit);
 int  game_movie_quota(const Tenant *t);
+int  game_venue_today_income(const Tenant *t);
 
 /* Retail patron economy (Restaurant.c seg_11a8, byte-verified 2026-07-11):
  * open/close rows + the nightly tiered income settle; the door check and

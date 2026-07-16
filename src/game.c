@@ -1327,6 +1327,14 @@ void game_update(GameSim *sim, Tower *tower)
                     if (t->type == ITEM_SHOP && t->tenure < 0xFF)
                         t->tenure++;
                 }
+                /* Info-dialog "Length": bump tenancy quarters for occupied
+                 * offices/condos (EXE tenant +0x17). */
+                for (int i = 0; i < tower->tenant_count; i++) {
+                    Tenant *t = &tower->tenants[i];
+                    if ((t->type == ITEM_OFFICE || t->type == ITEM_CONDO) &&
+                        t->state == TENANT_OCCUPIED && t->let_quarters < 0xFF)
+                        t->let_quarters++;
+                }
                 if (rent > 0) {
                     tower->money += rent;
                     sim->income_this_quarter += rent;
@@ -1605,18 +1613,159 @@ static void judge_one_unit(GameSim *sim, Tower *tower, Tenant *t)
      * while vacant — with the same adjustments the hotel verdict uses
      * (JudgeT 0630: class 0 +30 / class 2 -30 / class 3 forces 0;
      * noise +60; bars 80 and the star-scaled 150/200). */
-    metric = t->pool_stress_trips
-                ? t->pool_stress_total / t->pool_stress_trips : 0;
-    if (t->rent_class == 0)      metric += 30;
-    else if (t->rent_class == 2) metric -= 30;
-    else if (t->rent_class == 3) metric = 0;
-    if (has_noisy_neighbor(tower, t)) metric += 60;
-    if (metric < 0) metric = 0;
+    metric = game_tenant_eval_metric(sim, tower, t);
     int bar = (tower->star_rating >= 4) ? TUNING.judge_stressed
                                         : TUNING.judge_moderate;
     t->demand_category = metric >= bar ? 0
                        : metric >= DEMAND_HAPPY_BAR ? 1 : 2;
     (void)sim;
+}
+
+/* The live 0-300 "Eval" metric — the number the info dialog draws as its
+ * horizontal gauge bar (seg_1100:1fad, scale 0x12C=300, reference ticks at
+ * 80 and the star-scaled 150/200), and the same value the daily judge feeds
+ * into its verdict. The unit's mean banked felt-wait (FROZEN while vacant)
+ * with the JudgeT 0630 adjustments; HIGHER = more frustrated. Office/condo
+ * exactly; hotels approximate on the same banked accumulator. Shops are
+ * judged on demand instead and show no eval bar. */
+int game_tenant_eval_metric(GameSim *sim, Tower *tower, const Tenant *t)
+{
+    (void)sim;
+    int metric = t->pool_stress_trips
+                    ? t->pool_stress_total / t->pool_stress_trips : 0;
+    if (t->rent_class == 0)      metric += 30;
+    else if (t->rent_class == 2) metric -= 30;
+    else if (t->rent_class == 3) metric = 0;
+    if (has_noisy_neighbor(tower, t)) metric += 60;
+    if (metric < 0) metric = 0;
+    if (metric > 300) metric = 300;
+    return metric;
+}
+
+/* Which same-floor neighbor (if any) is bothering this unit — the noisy-
+ * neighbor comment names the offender's TYPE (seg_1108:0949, "<type>
+ * neighbor is noisy"). Mirrors has_noisy_neighbor's scan but returns the
+ * neighbor so the caller can name it. Returns ITEM_NONE if none. */
+static ItemType noisy_neighbor_type(const Tower *tower, const Tenant *room)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *n = &tower->tenants[i];
+        if (n == room || n->floor != room->floor) continue;
+        if (n->state == TENANT_ABANDONED) continue;
+        switch (n->type) {
+        case ITEM_RESTAURANT: case ITEM_SHOP: case ITEM_FAST_FOOD:
+        case ITEM_OFFICE: case ITEM_CINEMA: case ITEM_PARTY_HALL:
+            break;
+        case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
+            if (room->type == ITEM_CONDO) break;
+            continue;
+        default:
+            continue;
+        }
+        int gap = (n->x >= room->x + room->width)
+                    ? n->x - (room->x + room->width)
+                    : (room->x >= n->x + n->width)
+                        ? room->x - (n->x + n->width) : 0;
+        if (gap <= 20) return n->type;
+    }
+    return ITEM_NONE;
+}
+
+/* ---- Info-dialog diagnostic comment lines (seg_1108 DrawTenantComments) ----
+ * Up to 3 lines, drawn from the 14 producers in the EXE's fixed priority
+ * order — the first `max` that fire win. Strings below are the real res
+ * 0x2C7 text. Producers that need per-unit data the port doesn't model yet
+ * (route distance #1/#12-17, live rain #23, sub-lobby zone #21, per-center
+ * garbage fill #29, parked-car ownership #34) are deliberately omitted and
+ * flagged here, not faked. Returns the line count. */
+int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
+                         char lines[][48], int max)
+{
+    (void)sim;
+    int n = 0;
+    #define PUSH(s) do { if (n < max) { snprintf(lines[n], 48, "%s", (s)); n++; } } while (0)
+
+    int is_office = (t->type == ITEM_OFFICE);
+    int is_condo  = (t->type == ITEM_CONDO);
+    int is_shop   = (t->type == ITEM_SHOP);
+    int is_food   = (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD);
+    int is_hotel  = item_is_hotel_room(t->type);
+
+    /* 1. Conditions are terrible (#27) — office/condo judged stressed. */
+    if ((is_office || is_condo) && t->demand_category == 0 &&
+        t->state == TENANT_OCCUPIED)
+        PUSH("Conditions are terrible");
+
+    /* 2. Room is too dirty (#26) — infested hotel room only (seg_1108:06ef). */
+    if (is_hotel && t->condition == ROOM_INFESTED && n < max)
+        PUSH("Room is too dirty");
+
+    /* [3. Transport-distance #1/#12-17 — DEFERRED: needs per-unit route dist.] */
+
+    /* 4. Movie sales (#4-#7) — cinema, keyed to film age + patron quota. */
+    if (t->type == ITEM_CINEMA && n < max) {
+        if (t->venue_age_days == 0)      PUSH("New movie showing!");
+        else {
+            int q = game_movie_quota(t);
+            if (q >= 60)      PUSH("It's a Sellout!");
+            else if (q >= 40) PUSH("Ticket sales are average");
+            else              PUSH("Terrible sales! Change the movie!");
+        }
+    }
+
+    /* 5. Business sales (#8-#11, #33) — shop/restaurant/fast food. */
+    if ((is_shop || is_food) && n < max) {
+        if (is_shop && t->state == TENANT_VACANT) PUSH("No renters");
+        else {
+            int c = t->customers_today;
+            if (c >= 50)      PUSH("Business is very good!");
+            else if (c >= 35) PUSH("Business is good");
+            else if (c >= 25) PUSH("Business is average");
+            else              PUSH("Very few customers");
+            /* 5t. Weekend/Rain tail (#22/#23) — weekend is live; rain is a
+             * retail-scoring special-day the port doesn't surface as a flag,
+             * so #23 is deferred. */
+            if (c >= 35 && game_is_weekend(tower) && n < max)
+                PUSH("Weekends attract more customers");
+        }
+    }
+
+    /* 6. Medical Center is too far away (#18) — office/condo at ★3+ with no
+     * adequate medical (port tracks this tower-wide, not per-15-floor zone;
+     * flagged approximation). */
+    if ((is_office || is_condo) && tower->star_rating >= 3 &&
+        !sim->medical_adequate && n < max)
+        PUSH("Medical Center is too far away");
+
+    /* 7. Not connected to Ramp (#20) — parking space off the ramp chain. */
+    if (t->type == ITEM_PARKING && !t->space_usable && n < max)
+        PUSH("Not connected to Ramp");
+
+    /* [8. Lobby-zone #21 — DEFERRED: port's floor_to_zone never returns <0.] */
+
+    /* 9. Opens tomorrow (#24) — restaurant/fast food still under construction. */
+    if (is_food && t->state == TENANT_CONSTRUCTION && n < max)
+        PUSH("Opens tomorrow");
+
+    /* 10. A Party is happening! (#28) — party hall mid-event. */
+    if (t->type == ITEM_PARTY_HALL && t->venue_state >= 2 && n < max)
+        PUSH("A Party is happening!");
+
+    /* [11-12,14. Garbage #29 / Metro #30-32 / Parked car #34 — metro trains
+     * are wired to the event feed already; the rest need per-unit data.] */
+
+    /* 13. Noisy neighbor (#35+#36) — names the offending neighbor's type. */
+    if ((is_office || is_condo || is_hotel) && n < max) {
+        ItemType nt = noisy_neighbor_type(tower, t);
+        if (nt != ITEM_NONE) {
+            char buf[48];
+            snprintf(buf, sizeof buf, "%s neighbor is noisy", tower_item_name(nt));
+            PUSH(buf);
+        }
+    }
+
+    #undef PUSH
+    return n;
 }
 
 /* ================================================================
@@ -1944,6 +2093,13 @@ static int venue_income(int patrons_today)
     return 15000;                             /* 0xDDF8 */
 }
 
+/* The venue's income-so-far today, for the info dialog's "Today's Income"
+ * field (VenueT seg49:0bcb): the same tiered figure the close banks. */
+int game_venue_today_income(const Tenant *t)
+{
+    return venue_income(t->patrons_today);
+}
+
 /* Attendance-per-showing for the info dialog (InfoComment 1108:0285
  * feeds the same quota into the "sales" lines). */
 int game_movie_quota(const Tenant *t)
@@ -2140,6 +2296,7 @@ static void retail_close_one(GameSim *sim, Tower *tower, Tenant *t)
      * the only uses of day%60 / day%84 outside the event scheduler). */
     if (tower->day % 60 == 59 || tower->day % 84 == 83) return;
     int amount = retail_income_tier(t->type, t->customers_today);
+    t->yesterday_profit = amount;   /* the info dialog's "Yesterday's Profit" */
     tower->money += amount;
     if (amount >= 0) sim->income_this_quarter += amount;
     else             sim->expenses_this_quarter += -amount;

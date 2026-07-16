@@ -321,6 +321,11 @@ typedef struct {
     int             inspect_open;    /* info popup showing */
     uint16_t        inspect_tid;     /* tenant the popup is bound to */
     int             inspect_x, inspect_y;  /* popup window position */
+    int             rent_dd_open;    /* rent/price dropdown (item 0xD) expanded */
+    int             name_edit_open;  /* name-editor sub-dialog (res 0x2DC) */
+    char            name_edit_buf[16]; /* editing buffer (max 15 chars, faithful) */
+    int             name_edit_len;
+    int             movie_dlg_open;  /* movie-chooser sub-dialog (res 0x2DB) */
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
     
@@ -1755,7 +1760,7 @@ static void render_tower(void)
 /* ---------- Analytics window (F3) ---------- */
 
 #define WIN_TITLEBAR_H 18     /* Win3.1 style title bar height for dragging */
-#define INSPECT_W      176    /* Inspector info popup width */
+#define INSPECT_W      248    /* Tenant info dialog width (~176 DLU faithful) */
 static void draw_win31_titlebar(int x, int y, int w, const char *title);
 
 static void stats_plot(int gx, int gy, int gw, int gh,
@@ -4569,65 +4574,285 @@ static void render_event_alert(void)
     }
 }
 
-/* Inspector info popup: a small Win3.1 window with the clicked unit's stats. */
-/* The change-movie actions live on the theater's info popup, like the
- * EXE's venue info dialog (InfoDlgT 1100:432f/4377). Only the hall strip
- * runs the show (imported .TDT theaters carry a second, narrow entrance
- * strip), so only the hall gets film lines and buttons. */
-static int inspect_cinema_hall(const Tenant *t)
+/* =====================================================================
+ * TENANT / VENUE INFO DIALOG — faithful rebuild (InfoDlgT seg_1100,
+ * templates res 748-760). The original is 13 procedural Win16 dialogs
+ * (NO background bitmap), so this reproduces the real layout + controls:
+ * a borderless grey panel with the tenant NAME painted as a header, up to
+ * 3 diagnostic comment lines (seg_1108, real res 0x2C7 strings), per-
+ * category labeled fields, an Eval gauge bar / patronage bar, the 4-tier
+ * price DROPDOWN (item 0xD) showing real dollar amounts, and the
+ * Rename (id 7) / OK (id 1) / New Movie (id 0xD, cinema) buttons, plus the
+ * name-editor (res 0x2DC) and movie-chooser (res 0x2DB) sub-dialogs.
+ * ===================================================================== */
+
+/* ---- Custom tenant names. The EXE keeps them in a side list keyed by
+ * (floor,idx), NOT in the tenant record (seg_1188); here keyed by the port's
+ * stable tenant id. Runtime-only for now — does not yet round-trip .TDT. ---- */
+#define MAX_NAMED_TENANTS 512
+static struct { uint16_t id; char name[16]; } g_tenant_names[MAX_NAMED_TENANTS];
+static int g_named_count = 0;
+
+static const char *tenant_custom_name(uint16_t id)
+{
+    for (int i = 0; i < g_named_count; i++)
+        if (g_tenant_names[i].id == id) return g_tenant_names[i].name;
+    return NULL;
+}
+static void tenant_set_name(uint16_t id, const char *s)
+{
+    for (int i = 0; i < g_named_count; i++)
+        if (g_tenant_names[i].id == id) { snprintf(g_tenant_names[i].name, 16, "%s", s); return; }
+    if (g_named_count < MAX_NAMED_TENANTS) {
+        g_tenant_names[g_named_count].id = id;
+        snprintf(g_tenant_names[g_named_count].name, 16, "%s", s);
+        g_named_count++;
+    }
+}
+static void tenant_clear_name(uint16_t id)   /* the rename dialog's Delete */
+{
+    for (int i = 0; i < g_named_count; i++)
+        if (g_tenant_names[i].id == id) { g_tenant_names[i] = g_tenant_names[--g_named_count]; return; }
+}
+
+/* The 14 real movie titles (res 0x1A4), indexed by movie_id 0..13. */
+static const char *MOVIE_TITLES[14] = {
+    "Revenge of the Big Spider", "Northwest Romance", "Samurai Cop",
+    "Big Wave", "Farewell to Morocco", "Fear of Shark Teeth",
+    "Western Sheriff", "Dino Wars", "The Making of a Star",
+    "Love in N.Y.", "Waikiki Moon", "My Man of War",
+    "Christmas for Both of Us", "Casual Friends",
+};
+#define MOVIE_COST_HIT      300000   /* EXE 0xDE10=3000 x$100 */
+#define MOVIE_COST_ORDINARY 150000   /* EXE 0xDE12=1500 x$100 */
+
+/* The cinema hall (wide strip) is the only piece that shows film controls. */
+static int inspect_is_cinema(const Tenant *t)
 {
     return t && t->type == ITEM_CINEMA && t->width >= 20;
 }
 
-/* Types with a price row in res 0x3E9 get the rent control (the EXE's
- * dialog-type gate @1100:0bae admits exactly the priced classes). */
-static int inspect_priced(const Tenant *t)
+/* Header line: custom name if set, else the type name, with a floor suffix. */
+static void inspect_title(const Tenant *t, char *buf, int n)
 {
-    return t && (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
-                 t->type == ITEM_SHOP   || item_is_hotel_room(t->type));
+    const char *custom = tenant_custom_name(t->id);
+    const char *base = custom ? custom : tower_item_name(t->type);
+    if (t->floor == 0)     snprintf(buf, n, "%s  -  Lobby", base);
+    else if (t->floor < 0) snprintf(buf, n, "%s  -  B%d", base, -t->floor);
+    else                   snprintf(buf, n, "%s  -  %dF", base, t->floor);
 }
 
-static const char *RENT_CLASS_NAME[4] = { "High", "Avg", "Low", "V.Low" };
-
-static SDL_Rect inspect_rent_btn_rect(int which, int lines)
+/* "Length" (EXE tenant +0x17 as quarters -> "N Year M Q" / "Over 30 years"). */
+static void inspect_length_str(const Tenant *t, char *buf, int n)
 {
-    return (SDL_Rect){ game.inspect_x + 8 + which * 40,
-                       game.inspect_y + WIN_TITLEBAR_H + 8 + lines*14 + 2,
-                       37, 16 };
+    int q = t->let_quarters;
+    if (q >= 120) snprintf(buf, n, "Over 30 years");
+    else          snprintf(buf, n, "%d Year %d Q", q / 4, (q % 4) + 1);
+}
+/* "Length of Showing" (venue age -> "N Q" / "Over 1 year"). */
+static void inspect_showing_str(const Tenant *t, char *buf, int n)
+{
+    int a = t->venue_age_days;
+    if (a >= 12) snprintf(buf, n, "Over 1 year");
+    else         snprintf(buf, n, "%d Q", a / 3 + 1);
 }
 
-static SDL_Rect inspect_movie_btn_rect(int which, int lines)
+/* ---- Layout: computed once, shared by render and click so rects never
+ * drift. All rects are dialog-LOCAL (add the window origin at use). ---- */
+typedef enum { TIF_TEXT, TIF_EVAL, TIF_PRICE, TIF_PATRON } TiFieldKind;
+typedef struct { TiFieldKind kind; char label[24]; char value[40]; int ival, imax; } TiField;
+typedef struct {
+    int w, h;
+    int name_y, comment_y, comment_n, field_y0;
+    char comments[3][48];
+    SDL_Rect picture;
+    TiField fields[6];
+    int nf, price_field;              /* index of the FLD_PRICE row, or -1 */
+    SDL_Rect price_box, price_items[4];
+    int has_newmovie;
+    SDL_Rect newmovie_btn, rename_btn, ok_btn;
+} TiLayout;
+
+static void ti_build(const Tenant *t, TiLayout *L)
 {
-    return (SDL_Rect){ game.inspect_x + 8,
-                       game.inspect_y + WIN_TITLEBAR_H + 8 + lines*14 + 2 + which*20,
-                       INSPECT_W - 16, 16 };
+    memset(L, 0, sizeof *L);
+    L->w = INSPECT_W;
+    L->price_field = -1;
+
+    L->comment_n = game_tenant_comments(&game.sim, &game.tower, t, L->comments, 3);
+
+    TiField *f = L->fields;
+    int nf = 0;
+    int evbar = (game.tower.star_rating >= 4) ? 200 : 150;
+    ItemType ty = t->type;
+    if (ty == ITEM_OFFICE || ty == ITEM_CONDO) {
+        f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
+        f[nf].ival = game_tenant_eval_metric(&game.sim, &game.tower, t);
+        f[nf].imax = evbar; nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Length");
+        inspect_length_str(t, f[nf].value, 40); nf++;
+        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, ty == ITEM_CONDO ? "Price" : "Rent");
+        L->price_field = nf; nf++;
+        if (ty == ITEM_CONDO) {
+            f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
+            snprintf(f[nf].value, 40, "%s", t->state == TENANT_OCCUPIED ? "Occupied" : "For Sale"); nf++;
+        }
+    } else if (item_is_hotel_room(ty)) {
+        f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
+        f[nf].ival = game_tenant_eval_metric(&game.sim, &game.tower, t);
+        f[nf].imax = evbar; nf++;
+        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, "Rate");
+        L->price_field = nf; nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
+        snprintf(f[nf].value, 40, "%s",
+                 t->condition != ROOM_CLEAN ? "Dirty"
+               : t->state == TENANT_OCCUPIED ? "Occupied" : "Clean"); nf++;
+    } else if (ty == ITEM_SHOP) {
+        f[nf].kind = TIF_PATRON; snprintf(f[nf].label, 24, "Patronage");
+        f[nf].ival = t->customers_today; f[nf].imax = 30; nf++;
+        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, "Rent");
+        L->price_field = nf; nf++;
+    } else if (inspect_is_cinema(t)) {
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Playing");
+        snprintf(f[nf].value, 40, "%s", t->movie_id < 14 ? MOVIE_TITLES[t->movie_id] : "-"); nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Showing");
+        inspect_showing_str(t, f[nf].value, 40); nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Today");
+        { char m[24]; format_money(game_venue_today_income(t), m, sizeof m);
+          snprintf(f[nf].value, 40, "%s", m); } nf++;
+        L->has_newmovie = 1;
+    } else if (ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD) {
+        f[nf].kind = TIF_PATRON; snprintf(f[nf].label, 24, "Patronage");
+        f[nf].ival = t->customers_today; f[nf].imax = 50; nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Yest. Profit");
+        { char m[24]; format_money(t->yesterday_profit, m, sizeof m);
+          snprintf(f[nf].value, 40, "%s", m); } nf++;
+    }
+    L->nf = nf;
+
+    int pad = 10;
+    L->name_y = 8;
+    L->picture = (SDL_Rect){ pad, 32, INSPECT_W - 2 * pad, 46 };
+    L->comment_y = L->picture.y + L->picture.h + 6;
+    L->field_y0 = L->comment_y + L->comment_n * 14 + (L->comment_n ? 4 : 0);
+    int y = L->field_y0;
+    for (int i = 0; i < nf; i++) {
+        if (i == L->price_field) {
+            L->price_box = (SDL_Rect){ pad + 96, y - 1, 116, 18 };
+            for (int k = 0; k < 4; k++)
+                L->price_items[k] = (SDL_Rect){ L->price_box.x, L->price_box.y + 18 * (k + 1),
+                                                L->price_box.w, 18 };
+        }
+        y += 20;
+    }
+    int btn_y = y + 6;
+    L->rename_btn = (SDL_Rect){ pad, btn_y, 64, 20 };
+    if (L->has_newmovie) L->newmovie_btn = (SDL_Rect){ pad + 72, btn_y, 74, 20 };
+    L->ok_btn = (SDL_Rect){ INSPECT_W - pad - 56, btn_y, 56, 20 };
+    L->h = btn_y + 20 + pad;
 }
 
-static void inspect_popup_metrics(int *lines, int *body_h)
+/* Total dialog height, for on-open clamping. */
+static int inspect_body_h(const Tenant *t) { TiLayout L; ti_build(t, &L); return L.h; }
+
+/* ---- small drawing helpers ---- */
+static void draw_centered(SDL_Rect r, const char *s, SDL_Color c)
 {
-    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
-    if (!t) { *lines = 0; *body_h = 0; return; }
-    int n = 2;   /* Floor + Status always shown */
-    int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
-               t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
-    int comm = (t->type==ITEM_RESTAURANT||t->type==ITEM_SHOP||t->type==ITEM_FAST_FOOD||
-                t->type==ITEM_CINEMA||t->type==ITEM_PARTY_HALL);
-    if (res || t->population > 0) n++;                       /* People */
-    int type_idx = (int)t->type;
-    if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0) n++;  /* Income */
-    if (res || comm) n++;                                   /* Satisfaction */
-    if (t->type==ITEM_OFFICE) n++;                          /* Tier */
-    if (item_is_hotel_room(t->type) && t->condition != ROOM_CLEAN) n++;
-    if (inspect_cinema_hall(t)) n += 3;                     /* Film/Draw/Today */
-    if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
-        t->type == ITEM_SHOP) n += 2;                       /* Doors/Customers */
-    if (inspect_priced(t)) n++;                             /* Rent/Price line */
-    *lines = n;
-    /* 8px pad + 14px lines + 24px Close row, plus two 20px change-movie
-     * button rows on a theater hall, or one rent-class button row on a
-     * priced unit (the two never co-occur — cinemas have no price row). */
-    *body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0)
-                              + (inspect_priced(t) ? 22 : 0);
+    int w = 0, h = 0; SDL_Texture *tex = render_text(s, c, &w, &h);
+    if (!tex) return;
+    SDL_Rect d = { r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h };
+    SDL_RenderCopy(game.renderer, tex, NULL, &d);
+    SDL_DestroyTexture(tex);
+}
+static void draw_bevel(SDL_Rect r, int raised)
+{
+    SDL_SetRenderDrawColor(game.renderer, raised ? 255 : 90, raised ? 255 : 90, raised ? 255 : 90, 255);
+    SDL_RenderDrawLine(game.renderer, r.x, r.y, r.x + r.w - 1, r.y);
+    SDL_RenderDrawLine(game.renderer, r.x, r.y, r.x, r.y + r.h - 1);
+    SDL_SetRenderDrawColor(game.renderer, raised ? 90 : 255, raised ? 90 : 255, raised ? 90 : 255, 255);
+    SDL_RenderDrawLine(game.renderer, r.x, r.y + r.h - 1, r.x + r.w - 1, r.y + r.h - 1);
+    SDL_RenderDrawLine(game.renderer, r.x + r.w - 1, r.y, r.x + r.w - 1, r.y + r.h - 1);
+}
+static void draw_dlg_button(SDL_Rect r, const char *label, int enabled)
+{
+    SDL_SetRenderDrawColor(game.renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(game.renderer, &r);
+    draw_bevel(r, 1);
+    SDL_Color c = enabled ? (SDL_Color){ 0, 0, 0, 255 } : (SDL_Color){ 132, 132, 132, 255 };
+    draw_centered(r, label, c);
+}
+static void draw_eval_gauge(SDL_Rect box, int val, int tick1, int tick2)
+{
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &box);
+    int v = val < 0 ? 0 : val > 300 ? 300 : val;
+    SDL_Color c = val >= tick2 ? (SDL_Color){ 200, 40, 40, 255 }
+                : val >= tick1 ? (SDL_Color){ 212, 162, 0, 255 }
+                :                (SDL_Color){ 40, 160, 60, 255 };
+    SDL_SetRenderDrawColor(game.renderer, c.r, c.g, c.b, 255);
+    SDL_Rect fill = { box.x, box.y, box.w * v / 300, box.h };
+    SDL_RenderFillRect(game.renderer, &fill);
+    SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+    int t1 = box.x + box.w * tick1 / 300, t2 = box.x + box.w * tick2 / 300;
+    SDL_RenderDrawLine(game.renderer, t1, box.y - 1, t1, box.y + box.h);
+    SDL_RenderDrawLine(game.renderer, t2, box.y - 1, t2, box.y + box.h);
+    SDL_RenderDrawRect(game.renderer, &box);
+}
+static void draw_patron_bar(SDL_Rect box, int val, int max)
+{
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &box);
+    int v = val < 0 ? 0 : val > max ? max : val;
+    SDL_SetRenderDrawColor(game.renderer, 60, 110, 200, 255);
+    SDL_Rect fill = { box.x, box.y, max ? box.w * v / max : 0, box.h };
+    SDL_RenderFillRect(game.renderer, &fill);
+    SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+    SDL_RenderDrawRect(game.renderer, &box);
+}
+/* The tenant schematic (item id 2): the unit's own sprite in a framed panel.
+ * The original also draws the neighbors — deferred; flagged. */
+static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
+{
+    SDL_SetRenderDrawColor(game.renderer, 176, 196, 222, 255);
+    SDL_RenderFillRect(game.renderer, &box);
+    int fw = 0, floors = 1;
+    uint16_t sid = item_sprite_id(t->type, &fw, &floors);
+    Sprite *spr = sid ? sprites_find(&game.sprites, sid) : NULL;
+    if (spr && spr->texture && fw > 0 && spr->h > 0) {
+        SDL_Rect src = { 0, 0, fw, spr->h };
+        int bw = box.w - 8, bh = box.h - 8;
+        int dw = bw, dh = spr->h * bw / fw;
+        if (dh > bh) { dh = bh; dw = fw * bh / spr->h; }
+        SDL_Rect dst = { box.x + (box.w - dw) / 2, box.y + (box.h - dh) / 2, dw, dh };
+        SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
+    }
+    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+    SDL_RenderDrawRect(game.renderer, &box);
+}
+static void draw_price_dropdown(const Tenant *t, SDL_Rect box, const SDL_Rect *items)
+{
+    SDL_Color ink = { 0, 0, 0, 255 };
+    char m[24]; format_money(tenant_rent(t->type, t->rent_class), m, sizeof m);
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &box);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &box);
+    stats_label(box.x + 6, box.y + 2, m, ink);
+    int ax = box.x + box.w - 15, ay = box.y + 7;
+    SDL_Point tri[4] = { { ax, ay }, { ax + 8, ay }, { ax + 4, ay + 5 }, { ax, ay } };
+    SDL_RenderDrawLines(game.renderer, tri, 4);
+    if (game.rent_dd_open) {
+        for (int k = 0; k < 4; k++) {
+            SDL_Rect r = items[k];
+            int sel = (k == t->rent_class);
+            SDL_SetRenderDrawColor(game.renderer, sel ? 208 : 246, sel ? 224 : 246, sel ? 255 : 246, 255);
+            SDL_RenderFillRect(game.renderer, &r);
+            SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+            SDL_RenderDrawRect(game.renderer, &r);
+            char mk[24]; format_money(tenant_rent(t->type, k), mk, sizeof mk);
+            stats_label(r.x + 6, r.y + 2, mk, ink);
+        }
+    }
 }
 
 static void render_inspect_popup(void)
@@ -4635,187 +4860,250 @@ static void render_inspect_popup(void)
     if (!game.inspect_open) return;
     Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
     if (!t) { game.inspect_open = 0; return; }
-
-    static const char *STATE_NAME[] = { "Empty", "Building", "Moving in",
-        "Occupied", "Closing", "Vacant", "Stressed", "Abandoned" };
-    SDL_Color black = { 0, 0, 0, 255 };
-
-    char ln[12][40];
-    int n = 0, type_idx = (int)t->type;
-    int res = (t->type==ITEM_OFFICE||t->type==ITEM_CONDO||t->type==ITEM_HOTEL_SINGLE||
-               t->type==ITEM_HOTEL_TWIN||t->type==ITEM_HOTEL_SUITE);
-    int comm = (t->type==ITEM_RESTAURANT||t->type==ITEM_SHOP||t->type==ITEM_FAST_FOOD||
-                t->type==ITEM_CINEMA||t->type==ITEM_PARTY_HALL);
-    snprintf(ln[n++], 40, "Floor: %d", t->floor);
-    snprintf(ln[n++], 40, "Status: %s",
-             (t->state < 8) ? STATE_NAME[t->state] : "?");
-    if (res || t->population > 0)
-        snprintf(ln[n++], 40, "People: %d", t->population);
-    if (type_idx < ITEM_TYPE_COUNT && TENANT_INCOME[type_idx] > 0)
-        snprintf(ln[n++], 40, "Income: $%d/qtr", TENANT_INCOME[type_idx]);
-    if (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
-        t->type == ITEM_SHOP)
-        /* the daily judge's verdict — what move-outs and re-lets read */
-        snprintf(ln[n++], 40, "Satisfaction: %s",
-                 t->demand_category == 0    ? "Stressed"
-               : t->demand_category == 1    ? "OK"
-               : t->demand_category == 2    ? "Good" : "New");
-    else if ((t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD) &&
-             t->demand_category != 0xFF)
-        /* the rest/FF arm's ladder verdict (yesterday's customers) */
-        snprintf(ln[n++], 40, "Business: %s",
-                 t->demand_category == 0    ? "Losing money"
-               : t->demand_category == 1    ? "Fair"
-               : t->demand_category == 2    ? "Good" : "Packed");
-    else if (res || comm)
-        snprintf(ln[n++], 40, "Satisfaction: %s",
-                 t->stress >= 67 ? "Unhappy" : t->stress >= 34 ? "OK" : "Good");
-    if (t->type == ITEM_OFFICE)
-        snprintf(ln[n++], 40, "Tier: %s", occupancy_tier_name(t->cap_peak));
-    /* The original's info line #26 "Room is too dirty" only fires for
-     * INFESTED rooms (InfoComment 1108:06ef gates >= 0x38); merely-dirty
-     * rooms get no comment. The port is a little kinder and names both. */
-    if (item_is_hotel_room(t->type) && t->condition == ROOM_INFESTED)
-        snprintf(ln[n++], 40, "Room is too dirty (roaches!)");
-    else if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
-        snprintf(ln[n++], 40, "Needs housekeeping");
-    /* Retail: doors + the day's customer count against the walk-in quota
-     * (the EXE's "sales" info lines mirror the income tier). */
-    if (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
-        t->type == ITEM_SHOP) {
-        snprintf(ln[n++], 40, "%s, %d inside",
-                 t->retail_open ? "Open" : "Closed", t->patrons_now);
-        snprintf(ln[n++], 40, "Today: %d cust. (quota %d)",
-                 t->customers_today, t->retail_quota);
-    }
-    /* Theater hall: the film + its drawing power (the EXE's info window
-     * shows the same quota lines, InfoComment 1108:0285 — age 0 renders
-     * as "New movie showing!"). */
-    if (inspect_cinema_hall(t)) {
-        if (t->venue_age_days == 0)
-            snprintf(ln[n++], 40, "New %s showing!",
-                     t->movie_id >= 7 ? "hit" : "movie");
-        else
-            snprintf(ln[n++], 40, "Film: %s, day %d",
-                     t->movie_id >= 7 ? "hit" : "ordinary", t->venue_age_days);
-        snprintf(ln[n++], 40, "Draw: %d per showing", game_movie_quota(t));
-        snprintf(ln[n++], 40, "Today: %d patrons", t->patrons_today);
-    }
-    /* The price line + class buttons (the EXE's dialog item 0xD custom
-     * control). Condos show the one-time sale price, hotel rooms the
-     * per-stay rate, offices/shops the quarterly rent. */
-    if (inspect_priced(t)) {
-        char amt[24];
-        format_money(tenant_rent(t->type, t->rent_class), amt, sizeof amt);
-        if (t->type == ITEM_CONDO)
-            snprintf(ln[n++], 40, "Price: %s", amt);
-        else if (item_is_hotel_room(t->type))
-            snprintf(ln[n++], 40, "Rate: %s/stay", amt);
-        else
-            snprintf(ln[n++], 40, "Rent: %s/qtr", amt);
-    }
-
+    TiLayout L; ti_build(t, &L);
     int wx = game.inspect_x, wy = game.inspect_y;
-    int body_h = 8 + n * 14 + 24 + (inspect_cinema_hall(t) ? 44 : 0)
-                               + (inspect_priced(t) ? 22 : 0);
-    draw_win31_titlebar(wx, wy, INSPECT_W, tower_item_name(t->type));
-    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, INSPECT_W, body_h };
-    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
-    SDL_RenderFillRect(game.renderer, &body);
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
-    SDL_RenderDrawRect(game.renderer, &body);
+    SDL_Color ink = { 0, 0, 0, 255 }, warn = { 150, 20, 20, 255 };
 
-    int ly = wy + WIN_TITLEBAR_H + 6;
-    for (int i = 0; i < n; i++) { stats_label(wx + 8, ly, ln[i], black); ly += 14; }
+    SDL_Rect panel = { wx, wy, L.w, L.h };
+    SDL_SetRenderDrawColor(game.renderer, 198, 198, 198, 255);
+    SDL_RenderFillRect(game.renderer, &panel);
+    draw_bevel(panel, 1);
+    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+    SDL_RenderDrawRect(game.renderer, &panel);
 
-    if (inspect_cinema_hall(t)) {
-        static const char *MOVIE_BTN[2] =
-            { "Hit movie   $300,000", "New movie  $150,000" };
-        for (int b = 0; b < 2; b++) {
-            SDL_Rect r = inspect_movie_btn_rect(b, n);
-            SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-            SDL_RenderFillRect(game.renderer, &r);
-            SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-            SDL_RenderDrawRect(game.renderer, &r);
-            stats_label(r.x + 8, r.y + 1, MOVIE_BTN[b], black);
+    char title[72]; inspect_title(t, title, sizeof title);
+    stats_label(wx + 10, wy + L.name_y, title, ink);
+    SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
+    SDL_RenderDrawLine(game.renderer, wx + 8, wy + 28, wx + L.w - 8, wy + 28);
+
+    SDL_Rect pic = { wx + L.picture.x, wy + L.picture.y, L.picture.w, L.picture.h };
+    draw_tenant_picture(t, pic);
+
+    for (int i = 0; i < L.comment_n; i++)
+        stats_label(wx + 10, wy + L.comment_y + i * 14, L.comments[i], warn);
+
+    int y = L.field_y0;
+    for (int i = 0; i < L.nf; i++) {
+        TiField *f = &L.fields[i];
+        stats_label(wx + 10, wy + y, f->label, ink);
+        if (f->kind == TIF_EVAL) {
+            SDL_Rect g = { wx + 10 + 96, wy + y + 1, 116, 12 };
+            draw_eval_gauge(g, f->ival, 80, f->imax);
+        } else if (f->kind == TIF_PATRON) {
+            SDL_Rect g = { wx + 10 + 96, wy + y + 1, 84, 12 };
+            draw_patron_bar(g, f->ival, f->imax);
+            char num[16]; snprintf(num, 16, "%d", f->ival);
+            stats_label(g.x + g.w + 6, wy + y, num, ink);
+        } else if (f->kind == TIF_PRICE) {
+            /* the dropdown is drawn last, so its open list overlays fields */
+        } else {
+            stats_label(wx + 10 + 96, wy + y, f->value, ink);
         }
+        y += 20;
     }
 
-    if (inspect_priced(t)) {
-        for (int b = 0; b < 4; b++) {
-            SDL_Rect r = inspect_rent_btn_rect(b, n);
-            int cur = (t->rent_class == b);
-            SDL_SetRenderDrawColor(game.renderer,
-                                   cur ? 255 : 168, cur ? 255 : 168,
-                                   cur ? 255 : 168, 255);
-            SDL_RenderFillRect(game.renderer, &r);
-            SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-            SDL_RenderDrawRect(game.renderer, &r);
-            if (cur) {   /* double border = the selected tier */
-                SDL_Rect in = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
-                SDL_RenderDrawRect(game.renderer, &in);
-            }
-            int tw, th;
-            SDL_Texture *tex = render_text(RENT_CLASS_NAME[b], black, &tw, &th);
-            if (tex) {
-                SDL_Rect dst = { r.x + (r.w - tw) / 2, r.y + 1, tw, th };
-                SDL_RenderCopy(game.renderer, tex, NULL, &dst);
-                SDL_DestroyTexture(tex);
-            }
-        }
+    if (L.price_field >= 0) {
+        SDL_Rect box = { wx + L.price_box.x, wy + L.price_box.y, L.price_box.w, L.price_box.h };
+        SDL_Rect items[4];
+        for (int k = 0; k < 4; k++)
+            items[k] = (SDL_Rect){ wx + L.price_items[k].x, wy + L.price_items[k].y,
+                                   L.price_items[k].w, L.price_items[k].h };
+        draw_price_dropdown(t, box, items);
     }
 
-    SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
-    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
-    SDL_RenderFillRect(game.renderer, &cb);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &cb);
-    stats_label(cb.x + 8, cb.y + 1, "Close", black);
+    draw_dlg_button((SDL_Rect){ wx + L.rename_btn.x, wy + L.rename_btn.y, L.rename_btn.w, L.rename_btn.h },
+                    "Rename", 1);
+    if (L.has_newmovie)
+        draw_dlg_button((SDL_Rect){ wx + L.newmovie_btn.x, wy + L.newmovie_btn.y,
+                                    L.newmovie_btn.w, L.newmovie_btn.h }, "New Movie", 1);
+    draw_dlg_button((SDL_Rect){ wx + L.ok_btn.x, wy + L.ok_btn.y, L.ok_btn.w, L.ok_btn.h }, "OK", 1);
 }
 
-/* Returns 1 if the click landed in the popup (consumed); closes on Close. */
+/* ---- Name-editor sub-dialog (res 0x2DC: EDIT + Rename/Delete/Cancel) ---- */
+static void close_name_editor(void) { game.name_edit_open = 0; SDL_StopTextInput(); }
+static void open_name_editor(const Tenant *t)
+{
+    const char *cur = tenant_custom_name(t->id);
+    snprintf(game.name_edit_buf, sizeof game.name_edit_buf, "%s", cur ? cur : "");
+    game.name_edit_len = (int)strlen(game.name_edit_buf);
+    game.name_edit_open = 1;
+    SDL_StartTextInput();
+}
+static void commit_name(void)
+{
+    if (game.name_edit_len > 0) tenant_set_name(game.inspect_tid, game.name_edit_buf);
+    close_name_editor();
+}
+#define NAME_DLG_W 244
+#define NAME_DLG_H 98
+static SDL_Rect name_dlg_rect(void)
+{ return (SDL_Rect){ (game.screen_w - NAME_DLG_W) / 2, (game.screen_h - NAME_DLG_H) / 2, NAME_DLG_W, NAME_DLG_H }; }
+static SDL_Rect name_dlg_edit(SDL_Rect d)   { return (SDL_Rect){ d.x + 12, d.y + 34, d.w - 24, 22 }; }
+static SDL_Rect name_dlg_ok(SDL_Rect d)     { return (SDL_Rect){ d.x + 12, d.y + 66, 64, 22 }; }
+static SDL_Rect name_dlg_del(SDL_Rect d)    { return (SDL_Rect){ d.x + 84, d.y + 66, 64, 22 }; }
+static SDL_Rect name_dlg_cancel(SDL_Rect d) { return (SDL_Rect){ d.x + d.w - 76, d.y + 66, 64, 22 }; }
+
+static void render_name_editor(void)
+{
+    if (!game.name_edit_open) return;
+    SDL_Color ink = { 0, 0, 0, 255 };
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 96);
+    SDL_Rect full = { 0, 0, game.screen_w, game.screen_h };
+    SDL_RenderFillRect(game.renderer, &full);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+
+    SDL_Rect d = name_dlg_rect();
+    SDL_SetRenderDrawColor(game.renderer, 198, 198, 198, 255);
+    SDL_RenderFillRect(game.renderer, &d);
+    draw_bevel(d, 1);
+    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+    SDL_RenderDrawRect(game.renderer, &d);
+    stats_label(d.x + 12, d.y + 10, "Tenant's name:", ink);
+
+    SDL_Rect e = name_dlg_edit(d);
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &e);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &e);
+    int tw = 0, th = 0;
+    if (game.name_edit_len > 0) {
+        SDL_Texture *tex = render_text(game.name_edit_buf, ink, &tw, &th);
+        if (tex) { SDL_Rect td = { e.x + 5, e.y + 4, tw, th };
+                   SDL_RenderCopy(game.renderer, tex, NULL, &td); SDL_DestroyTexture(tex); }
+    }
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    int cx = e.x + 5 + tw + 1;
+    SDL_RenderDrawLine(game.renderer, cx, e.y + 4, cx, e.y + e.h - 4);
+
+    draw_dlg_button(name_dlg_ok(d), "Rename", 1);
+    draw_dlg_button(name_dlg_del(d), "Delete", tenant_custom_name(game.inspect_tid) != NULL);
+    draw_dlg_button(name_dlg_cancel(d), "Cancel", 1);
+}
+static int name_editor_click(int mx, int my)
+{
+    if (!game.name_edit_open) return 0;
+    SDL_Rect d = name_dlg_rect();
+    if (point_in_rect(mx, my, name_dlg_ok(d)))          commit_name();
+    else if (point_in_rect(mx, my, name_dlg_del(d)))    { tenant_clear_name(game.inspect_tid); close_name_editor(); }
+    else if (point_in_rect(mx, my, name_dlg_cancel(d))) close_name_editor();
+    return 1;   /* modal: swallow every click */
+}
+static void name_editor_textinput(const char *txt)
+{
+    for (const char *p = txt; *p; p++)
+        if (game.name_edit_len < 15 && (unsigned char)*p >= 32) {
+            game.name_edit_buf[game.name_edit_len++] = *p;
+            game.name_edit_buf[game.name_edit_len] = 0;
+        }
+}
+static void name_editor_key(SDL_Keycode k)
+{
+    if (k == SDLK_BACKSPACE && game.name_edit_len > 0) game.name_edit_buf[--game.name_edit_len] = 0;
+    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER)  commit_name();
+    else if (k == SDLK_ESCAPE)                        close_name_editor();
+}
+
+/* ---- Movie-chooser sub-dialog (res 0x2DB: two buy-buttons + Cancel) ---- */
+#define MOVIE_DLG_W 260
+#define MOVIE_DLG_H 128
+static SDL_Rect movie_dlg_rect(void)
+{ return (SDL_Rect){ (game.screen_w - MOVIE_DLG_W) / 2, (game.screen_h - MOVIE_DLG_H) / 2, MOVIE_DLG_W, MOVIE_DLG_H }; }
+static SDL_Rect movie_btn_hit(SDL_Rect d)    { return (SDL_Rect){ d.x + 12, d.y + 60, d.w - 24, 22 }; }
+static SDL_Rect movie_btn_ord(SDL_Rect d)    { return (SDL_Rect){ d.x + 12, d.y + 86, d.w - 24, 22 }; }
+static SDL_Rect movie_btn_cancel(SDL_Rect d) { return (SDL_Rect){ d.x + d.w - 76, d.y + d.h - 26, 64, 20 }; }
+
+static void render_movie_chooser(void)
+{
+    if (!game.movie_dlg_open) return;
+    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
+    if (!t || !inspect_is_cinema(t)) { game.movie_dlg_open = 0; return; }
+    SDL_Color ink = { 0, 0, 0, 255 };
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 96);
+    SDL_Rect full = { 0, 0, game.screen_w, game.screen_h };
+    SDL_RenderFillRect(game.renderer, &full);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+
+    SDL_Rect d = movie_dlg_rect();
+    SDL_SetRenderDrawColor(game.renderer, 198, 198, 198, 255);
+    SDL_RenderFillRect(game.renderer, &d);
+    draw_bevel(d, 1);
+    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+    SDL_RenderDrawRect(game.renderer, &d);
+    stats_label(d.x + 12, d.y + 10, "Book a new movie:", ink);
+    char now[64]; snprintf(now, sizeof now, "Now: %s",
+                           t->movie_id < 14 ? MOVIE_TITLES[t->movie_id] : "-");
+    stats_label(d.x + 12, d.y + 32, now, ink);
+
+    long money = game.tower.money;
+    draw_dlg_button(movie_btn_hit(d), "Hit movie          $300,000", money >= MOVIE_COST_HIT);
+    draw_dlg_button(movie_btn_ord(d), "Ordinary movie   $150,000", money >= MOVIE_COST_ORDINARY);
+    draw_dlg_button(movie_btn_cancel(d), "Cancel", 1);
+}
+static int movie_chooser_click(int mx, int my)
+{
+    if (!game.movie_dlg_open) return 0;
+    Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
+    if (!t) { game.movie_dlg_open = 0; return 1; }
+    SDL_Rect d = movie_dlg_rect();
+    long money = game.tower.money;
+    if (point_in_rect(mx, my, movie_btn_hit(d)) && money >= MOVIE_COST_HIT) {
+        game_change_movie(&game.sim, &game.tower, t, 1);
+        add_event_message("New movie showing! - $300,000");
+        game.movie_dlg_open = 0;
+    } else if (point_in_rect(mx, my, movie_btn_ord(d)) && money >= MOVIE_COST_ORDINARY) {
+        game_change_movie(&game.sim, &game.tower, t, 0);
+        add_event_message("New movie showing! - $150,000");
+        game.movie_dlg_open = 0;
+    } else if (point_in_rect(mx, my, movie_btn_cancel(d))) {
+        game.movie_dlg_open = 0;
+    }
+    return 1;   /* modal: swallow every click */
+}
+
+/* Returns 1 if the click landed in the popup (consumed). */
 static int inspect_popup_click(int mx, int my)
 {
     if (!game.inspect_open) return 0;
-    int lines = 0, body_h = 0;
-    inspect_popup_metrics(&lines, &body_h);
-    int wx = game.inspect_x, wy = game.inspect_y;
-    if (mx < wx || mx >= wx + INSPECT_W ||
-        my < wy || my >= wy + WIN_TITLEBAR_H + body_h)
-        return 0;
     Tenant *t = tower_tenant(&game.tower, game.inspect_tid);
-    if (inspect_cinema_hall(t)) {
-        for (int b = 0; b < 2; b++) {
-            SDL_Rect r = inspect_movie_btn_rect(b, lines);
-            if (point_in_rect(mx, my, r)) {
-                int hit = (b == 0);
-                game_change_movie(&game.sim, &game.tower, t, hit);
-                char msg[EVENT_MSG_LEN];
-                snprintf(msg, sizeof msg, "New movie showing! - $%s",
-                         hit ? "300,000" : "150,000");
-                add_event_message(msg);
-                return 1;
-            }
-        }
-    }
-    if (inspect_priced(t)) {
-        for (int b = 0; b < 4; b++) {
-            SDL_Rect r = inspect_rent_btn_rect(b, lines);
-            if (point_in_rect(mx, my, r)) {
-                if (game_set_rent_class(&game.sim, &game.tower, t, b)) {
+    if (!t) { game.inspect_open = 0; return 0; }
+    TiLayout L; ti_build(t, &L);
+    int wx = game.inspect_x, wy = game.inspect_y;
+    #define TIABS(r) (SDL_Rect){ wx + (r).x, wy + (r).y, (r).w, (r).h }
+
+    /* An open dropdown: an item click selects; anything else just closes it. */
+    if (game.rent_dd_open && L.price_field >= 0) {
+        for (int k = 0; k < 4; k++)
+            if (point_in_rect(mx, my, TIABS(L.price_items[k]))) {
+                if (game_set_rent_class(&game.sim, &game.tower, t, k)) {
                     char msg[EVENT_MSG_LEN];
                     snprintf(msg, sizeof msg, "%s on F%d back on the market",
                              tower_item_name(t->type), t->floor);
                     add_event_message(msg);
                 }
+                game.rent_dd_open = 0;
                 return 1;
             }
-        }
+        game.rent_dd_open = 0;
     }
-    SDL_Rect cb = { wx + INSPECT_W - 54, wy + WIN_TITLEBAR_H + body_h - 20, 46, 16 };
-    if (mx >= cb.x && mx < cb.x + cb.w && my >= cb.y && my < cb.y + cb.h)
-        game.inspect_open = 0;
-    return 1;   /* clicks inside the popup never fall through */
+    if (L.price_field >= 0 && point_in_rect(mx, my, TIABS(L.price_box))) {
+        game.rent_dd_open = !game.rent_dd_open;
+        return 1;
+    }
+    if (point_in_rect(mx, my, TIABS(L.rename_btn))) { open_name_editor(t); return 1; }
+    if (L.has_newmovie && point_in_rect(mx, my, TIABS(L.newmovie_btn))) {
+        game.movie_dlg_open = 1;
+        return 1;
+    }
+    if (point_in_rect(mx, my, TIABS(L.ok_btn))) {
+        game.inspect_open = 0; game.rent_dd_open = 0;
+        return 1;
+    }
+    SDL_Rect panel = { wx, wy, L.w, L.h };
+    if (point_in_rect(mx, my, panel)) return 1;   /* swallow body clicks */
+    return 0;
+    #undef TIABS
 }
 
 static void render(void)
@@ -4845,6 +5133,8 @@ static void render(void)
     render_elv_dialog();
     render_fin_dialog();
     render_inspect_popup();
+    render_movie_chooser();   /* sub-dialogs draw on top of the info popup */
+    render_name_editor();
     render_event_alert();
     render_menu_bar();         /* Win3.1 top bar + its open dropdown */
     render_dropdown();
@@ -5342,6 +5632,20 @@ static void handle_event(SDL_Event *ev)
         return;
     }
 
+    /* Modal info sub-dialogs capture all input while open. The name editor
+     * takes typed text; the movie chooser takes clicks + Esc. */
+    if (game.name_edit_open) {
+        if (ev->type == SDL_TEXTINPUT)            name_editor_textinput(ev->text.text);
+        else if (ev->type == SDL_KEYDOWN)         name_editor_key(ev->key.keysym.sym);
+        else if (ev->type == SDL_MOUSEBUTTONDOWN) name_editor_click(ev->button.x, ev->button.y);
+        return;
+    }
+    if (game.movie_dlg_open) {
+        if (ev->type == SDL_KEYDOWN && ev->key.keysym.sym == SDLK_ESCAPE) game.movie_dlg_open = 0;
+        else if (ev->type == SDL_MOUSEBUTTONDOWN) movie_chooser_click(ev->button.x, ev->button.y);
+        return;
+    }
+
     switch (ev->type) {
     case SDL_QUIT:
         game.running = 0;
@@ -5746,6 +6050,7 @@ static void handle_event(SDL_Event *ev)
                     if (tid) {
                         game.inspect_open = 1;
                         game.inspect_tid = tid;
+                        game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
                         game.inspect_x = ev->button.x + 16;
                         game.inspect_y = ev->button.y - 40;
                         if (game.inspect_x + INSPECT_W > game.screen_w)
@@ -5753,12 +6058,10 @@ static void handle_event(SDL_Event *ev)
                         /* keep the whole body (incl. button rows) on
                          * screen — basement clicks used to hang off the
                          * bottom edge */
-                        int pl, pbh;
-                        inspect_popup_metrics(&pl, &pbh);
-                        if (game.inspect_y + WIN_TITLEBAR_H + pbh >
-                            game.screen_h)
-                            game.inspect_y = game.screen_h -
-                                             WIN_TITLEBAR_H - pbh - 8;
+                        int pbh = inspect_body_h(
+                            tower_tenant(&game.tower, tid));
+                        if (game.inspect_y + pbh > game.screen_h)
+                            game.inspect_y = game.screen_h - pbh - 8;
                         if (game.inspect_y < 0) game.inspect_y = 8;
                     } else {
                         game.inspect_open = 0;   /* clicked empty space */
@@ -6629,6 +6932,31 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (getenv("CT_INSPECT")) {     /* open the tenant info dialog on a unit */
+        int want = atoi(getenv("CT_INSPECT")); /* ItemType; 0 = first priced/venue */
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->type == ITEM_NONE) continue;
+            int match = want ? ((int)t->type == want)
+                : (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
+                   t->type == ITEM_SHOP || t->type == ITEM_CINEMA ||
+                   t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
+                   item_is_hotel_room(t->type));
+            /* cinema: prefer the hall (the entrance strip has no film UI) */
+            if (match && t->type == ITEM_CINEMA && t->width < 20) match = 0;
+            if (match) {
+                game.inspect_open = 1;
+                game.inspect_tid = t->id;
+                game.rent_dd_open = getenv("CT_INSPECT_DD") ? 1 : 0;
+                game.inspect_x = 40;
+                game.inspect_y = 70;
+                if (getenv("CT_NAME_EDIT")) open_name_editor(t);
+                if (getenv("CT_MOVIE_DLG")) game.movie_dlg_open = 1;
+                break;
+            }
+        }
+    }
+
     /* Screenshot affordance: a small commuting scene — an office stack over
      * the lobby with a standard elevator beside it (COMMUTE_DEMO=1) */
     if (getenv("COMMUTE_DEMO")) {
@@ -6971,8 +7299,16 @@ int main(int argc, char *argv[])
                     if (sscanf(tok, "%d,%d", &cx, &cy) == 2) {
                         elv_dialog_click(cx, cy);
                         fin_dialog_click(cx, cy);
-                        printf("[test] click %d,%d -> day=%d period=%d fin_open=%d\n",
-                               cx, cy, game.elv_day, game.elv_period, game.fin_open);
+                        /* tenant info dialog + its modal sub-dialogs */
+                        if (game.name_edit_open)       name_editor_click(cx, cy);
+                        else if (game.movie_dlg_open)  movie_chooser_click(cx, cy);
+                        else                           inspect_popup_click(cx, cy);
+                        Tenant *it = tower_tenant(&game.tower, game.inspect_tid);
+                        const char *nm = tenant_custom_name(game.inspect_tid);
+                        printf("[test] click %d,%d -> dd_open=%d rent_class=%d "
+                               "movie_id=%d name=%s\n", cx, cy, game.rent_dd_open,
+                               it ? it->rent_class : -1, it ? it->movie_id : -1,
+                               nm ? nm : "(none)");
                     }
                 }
                 render();

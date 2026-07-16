@@ -368,6 +368,14 @@ typedef struct {
                               the map's Rent overlay (file tenant +0x0F;
                               JudgeT adjusts it in the EXE) */
 
+    /* --- Info-dialog display state (not persisted to .TDT; resets on load) --- */
+    uint8_t  let_quarters;    /* office/condo tenancy length in quarters — the
+                                 dialog's "Length" field (EXE tenant +0x17);
+                                 bumped each settlement while occupied. */
+    int32_t  yesterday_profit;/* restaurant/fast-food: last night's settled
+                                 profit (can be negative) — the dialog's
+                                 "Yesterday's Profit" field (EXE commercial +0xA). */
+
     /* --- Parking space (ITEM_PARKING only) --- */
     uint8_t  space_usable; /* on the B1-anchored ramp chain, not cut off by
                               a >=4-cell bare gap (ParkingT CheckAllParking;
