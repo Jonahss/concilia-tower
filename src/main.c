@@ -6948,6 +6948,7 @@ int main(int argc, char *argv[])
 
     if (getenv("CT_INSPECT")) {     /* open the tenant info dialog on a unit */
         int want = atoi(getenv("CT_INSPECT")); /* ItemType; 0 = first priced/venue */
+        int skip = getenv("CT_INSPECT_SKIP") ? atoi(getenv("CT_INSPECT_SKIP")) : 0;
         for (int i = 0; i < game.tower.tenant_count; i++) {
             Tenant *t = &game.tower.tenants[i];
             if (t->type == ITEM_NONE) continue;
@@ -6958,6 +6959,7 @@ int main(int argc, char *argv[])
                    item_is_hotel_room(t->type));
             /* cinema: prefer the hall (the entrance strip has no film UI) */
             if (match && t->type == ITEM_CINEMA && t->width < 20) match = 0;
+            if (match && skip-- > 0) continue;
             if (match) {
                 game.inspect_open = 1;
                 game.inspect_tid = t->id;
