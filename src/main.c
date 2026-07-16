@@ -296,6 +296,8 @@ typedef struct {
     int             show_debug;   /* Toggle diagnostic labels */
     int             show_stats;   /* Analytics window (F3) */
     int             show_tuning;  /* Tuning/modding window (F4) */
+    int             fin_open;     /* Financial report dialog (CountT, bitmap 0x81f4) */
+    int             fin_x, fin_y; /* financial report window position (draggable) */
     int             stats_x, stats_y; /* window positions (draggable; */
     int             tune_x, tune_y;   /*  -1,-1 = default placement) */
     int             map_mode;     /* 0 map / 1 eval / 2 rent / 3 hotel
@@ -452,6 +454,7 @@ typedef struct {
 #define ACT_SANTA        8
 #define ACT_MODE_CAMPAIGN 9
 #define ACT_MODE_SANDBOX  10
+#define ACT_FINANCE       11
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -508,12 +511,14 @@ static const MenuItem menu_speed[] = {
 
 /* View menu */
 static const MenuItem menu_view[] = {
+    { "Financial Statement\tF7", ITEM_NONE, ACT_FINANCE },
+    { NULL, ITEM_NONE, ACT_NONE },
     { "Debug Labels\t`",   ITEM_NONE,  ACT_DEBUG_TOGGLE },
     { "Screenshot\tF12",   ITEM_NONE,  ACT_SCREENSHOT },
     { NULL, ITEM_NONE, ACT_NONE },
     { "Santa!\tF2",        ITEM_NONE,  ACT_SANTA },
 };
-#define MENU_VIEW_COUNT 4
+#define MENU_VIEW_COUNT 6
 
 /* Game menu — mode (radio) + quit */
 static const MenuItem menu_file[] = {
@@ -2354,6 +2359,156 @@ static void render_elv_dialog(void)
     render_elv_dialog_faithful();
 }
 
+/* =====================================================================
+ * Financial report (CountT, seg_1060) — faithful rebuild on the EXE's own
+ * bitmap 0x81f4. All labels are baked into the art; we overlay live numbers
+ * at measured rects. Two category lists: a REVENUE list (population + income)
+ * and an INFRASTRUCTURE list (maintenance expense), plus the summary block.
+ * ===================================================================== */
+#define SPR_FIN_DIALOG    0x81f4
+#define SPR_FIN_DIALOG_OK 0x81f5   /* same art, OK button pressed */
+#define FIN_DLG_W 343
+#define FIN_DLG_H 364
+#define FIN_OK_BTN 128, 336, 88, 22   /* measured OK-button rect (dialog-local) */
+
+/* Right-aligned text, for the numeric ledger columns. */
+static void draw_text_right(const char *text, int right_x, int y, SDL_Color c)
+{
+    int w, h;
+    SDL_Texture *tex = render_text(text, c, &w, &h);
+    if (!tex) return;
+    SDL_Rect dst = { right_x - w, y, w, h };
+    SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+    SDL_DestroyTexture(tex);
+}
+
+/* y of grid row `row` (0..9), dialog-local. ~13.1px pitch measured off 0x81f4. */
+static int fin_row_y(int row) { return 86 + row * 131 / 10; }
+
+/* Compact money for the narrow per-category columns ($3.52M / $130k / $90).
+ * The original's columns were sized for its ÷100 internal values (a documented
+ * display quirk); we show real dollars, so large amounts need abbreviating to
+ * fit. The wide Total/summary boxes keep full comma-grouped dollars. */
+static void fin_compact_money(long v, char *buf, int n)
+{
+    long a = v < 0 ? -v : v;
+    const char *s = v < 0 ? "-" : "";
+    if (a >= 1000000)   snprintf(buf, n, "%s$%ld.%02ldM", s, a / 1000000, (a % 1000000) / 10000);
+    else if (a >= 1000) snprintf(buf, n, "%s$%ldk", s, a / 1000);
+    else                snprintf(buf, n, "%s$%ld", s, a);
+}
+
+static void render_fin_dialog(void)
+{
+    if (!game.fin_open) return;
+    GameSim *sim = &game.sim;
+    Tower *tw = &game.tower;
+    int wx = game.fin_x, wy = game.fin_y;
+    int bx = wx, by = wy + WIN_TITLEBAR_H;   /* client-area origin */
+
+    draw_win31_titlebar(wx, wy, FIN_DLG_W, "Financial Statement");
+
+    Sprite *bg = sprites_find(&game.sprites, SPR_FIN_DIALOG);
+    if (bg) {
+        SDL_Rect dst = { bx, by, FIN_DLG_W, FIN_DLG_H };
+        SDL_RenderCopy(game.renderer, bg->texture, NULL, &dst);
+    } else {
+        SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+        SDL_Rect r = { bx, by, FIN_DLG_W, FIN_DLG_H };
+        SDL_RenderFillRect(game.renderer, &r);
+    }
+
+    SDL_Color ink = { 0, 0, 0, 255 };
+
+    /* ---- Gather per-category data (population on demand; income/expense from
+     * the quarterly ledgers). ---- */
+    long pop[FIN_INCOME_CATS];
+    for (int i = 0; i < FIN_INCOME_CATS; i++) pop[i] = 0;
+    for (int i = 0; i < tw->tenant_count; i++) {
+        Tenant *t = &tw->tenants[i];
+        if (t->type == ITEM_NONE) continue;
+        int c = game_fin_income_cat(t->type);
+        if (c >= 0) pop[c] += t->population;
+    }
+
+    long total_income = 0, total_maint = 0;
+    for (int i = 0; i < FIN_INCOME_CATS; i++)  total_income += sim->fin_income_q[i];
+    for (int i = 0; i < FIN_EXPENSE_CATS; i++) total_maint  += sim->fin_expense_q[i];
+    long net          = total_income - total_maint;
+    long other        = sim->fin_other_income_q;
+    long construction = (tw->built_value - sim->fin_built_at_q_start)
+                        + sim->fin_construction_q;
+    long last_bal     = sim->fin_last_balance;
+    long total_bal    = tw->money;
+    int  year         = (int)(tw->day / 12) + 1;
+    int  quarter      = (int)((tw->day / 3) % 4) + 1;
+
+    char buf[32];
+
+    /* ---- Header: Year / Quarter / Total Income / Total Maintenance ---- */
+    snprintf(buf, sizeof buf, "%d", year);
+    draw_text_right(buf, bx + 183, by + 12, ink);
+    snprintf(buf, sizeof buf, "%d", quarter);
+    draw_text_right(buf, bx + 250, by + 12, ink);
+    format_money(total_income, buf, sizeof buf);
+    draw_text_right(buf, bx + 168, by + 46, ink);
+    format_money(total_maint, buf, sizeof buf);
+    draw_text_right(buf, bx + 322, by + 46, ink);
+
+    /* ---- Left list: population + income per revenue category. Rows with no
+     * income and no population are left blank ("Items with no income or
+     * expenses are not displayed"). ---- */
+    for (int r = 0; r < FIN_INCOME_CATS; r++) {
+        int y = by + fin_row_y(r);
+        if (pop[r] > 0) {
+            snprintf(buf, sizeof buf, "%ld", pop[r]);
+            draw_text_right(buf, bx + 130, y, ink);
+        }
+        if (sim->fin_income_q[r] != 0) {
+            fin_compact_money(sim->fin_income_q[r], buf, sizeof buf);
+            draw_text_right(buf, bx + 184, y, ink);
+        }
+    }
+
+    /* ---- Right list: maintenance expense per infrastructure category. ---- */
+    for (int r = 0; r < FIN_EXPENSE_CATS; r++) {
+        if (sim->fin_expense_q[r] == 0) continue;
+        int y = by + fin_row_y(r);
+        fin_compact_money(sim->fin_expense_q[r], buf, sizeof buf);
+        draw_text_right(buf, bx + 324, y, ink);
+    }
+
+    /* ---- Summary block (right-aligned values on each labelled line). ---- */
+    struct { long v; int y; } sums[] = {
+        { net,          by + 236 },
+        { other,        by + 253 },
+        { construction, by + 270 },
+        { last_bal,     by + 287 },
+        { total_bal,    by + 307 },
+    };
+    for (int i = 0; i < 5; i++) {
+        format_money(sums[i].v, buf, sizeof buf);
+        draw_text_right(buf, bx + 326, sums[i].y, ink);
+    }
+
+    /* Calibration overlay: outline the measured anchors to align vs the art. */
+    if (getenv("FIN_CAL")) {
+        SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, 255);
+        for (int r = 0; r < FIN_INCOME_CATS; r++) {
+            SDL_Rect a = { bx + 110, by + fin_row_y(r), 40, 11 };
+            SDL_Rect b = { bx + 170, by + fin_row_y(r), 40, 11 };
+            SDL_Rect c = { bx + 284, by + fin_row_y(r), 40, 11 };
+            SDL_RenderDrawRect(game.renderer, &a);
+            SDL_RenderDrawRect(game.renderer, &b);
+            SDL_RenderDrawRect(game.renderer, &c);
+        }
+        SDL_SetRenderDrawColor(game.renderer, 0, 120, 255, 255);
+        SDL_Rect ok = { bx + 128, by + 336, 88, 22 };
+        SDL_RenderDrawRect(game.renderer, &ok);
+    }
+    (void)ink;
+}
+
 static int pt_in(int mx, int my, int ox, int oy, int x, int y, int w, int h)
 {
     return mx >= ox + x && mx < ox + x + w && my >= oy + y && my < oy + y + h;
@@ -2447,6 +2602,30 @@ static int elv_dialog_click_faithful(int mx, int my)
 static int elv_dialog_click(int mx, int my)
 {
     return elv_dialog_click_faithful(mx, my);
+}
+
+/* Toggle the financial report, centering it on first open. */
+static void toggle_fin_dialog(void)
+{
+    game.fin_open = !game.fin_open;
+    if (game.fin_open) {
+        game.fin_x = (game.screen_w - FIN_DLG_W) / 2;
+        game.fin_y = (game.screen_h - WIN_TITLEBAR_H - FIN_DLG_H) / 2;
+        if (game.fin_y < MENU_BAR_H) game.fin_y = MENU_BAR_H;
+    }
+}
+
+/* Financial report click: OK closes; any click inside the body is swallowed so
+ * it doesn't fall through to the world. Returns 1 if consumed. */
+static int fin_dialog_click(int mx, int my)
+{
+    if (!game.fin_open) return 0;
+    int bx = game.fin_x, by = game.fin_y + WIN_TITLEBAR_H;
+    if (mx < game.fin_x || mx >= game.fin_x + FIN_DLG_W ||
+        my < game.fin_y || my >= by + FIN_DLG_H)
+        return 0;
+    if (pt_in(mx, my, bx, by, FIN_OK_BTN)) { game.fin_open = 0; return 1; }
+    return 1;   /* swallow all body clicks */
 }
 
 /* Open the elevator dialog for the shaft under the current mouse cell, if any.
@@ -4664,6 +4843,7 @@ static void render(void)
     render_stats_window();
     render_tuning_window();
     render_elv_dialog();
+    render_fin_dialog();
     render_inspect_popup();
     render_event_alert();
     render_menu_bar();         /* Win3.1 top bar + its open dropdown */
@@ -4932,6 +5112,13 @@ static int titlebar_hit_test(int mx, int my)
         return 4;
     }
 
+    /* Financial report title bar */
+    if (game.fin_open &&
+        mx >= game.fin_x && mx < game.fin_x + FIN_DLG_W &&
+        my >= game.fin_y && my < game.fin_y + WIN_TITLEBAR_H) {
+        return 7;
+    }
+
     /* Analytics (F3) title bar */
     if (game.show_stats) {
         int wx, wy;
@@ -4976,6 +5163,12 @@ static int point_in_any_window(int mx, int my)
     if (game.elv_open &&
         mx >= game.elv_x && mx < game.elv_x + ELV_W &&
         my >= game.elv_y && my < game.elv_y + WIN_TITLEBAR_H + ELV_DLG_H) {
+        return 1;
+    }
+    /* Financial report */
+    if (game.fin_open &&
+        mx >= game.fin_x && mx < game.fin_x + FIN_DLG_W &&
+        my >= game.fin_y && my < game.fin_y + WIN_TITLEBAR_H + FIN_DLG_H) {
         return 1;
     }
     /* Analytics window */
@@ -5098,6 +5291,7 @@ static void execute_menu_item(const MenuItem *item)
         break;
     }
     case ACT_QUIT: game.running = 0; break;
+    case ACT_FINANCE: toggle_fin_dialog(); break;
     case ACT_SANTA:
         if (!game.sim.santa.active) game_launch_santa(&game.sim, game.screen_w);
         break;
@@ -5221,6 +5415,10 @@ static void handle_event(SDL_Event *ev)
             }
             break;
         }
+        /* Financial report (CountT) */
+        case SDLK_F7:
+            toggle_fin_dialog();
+            break;
         case SDLK_F9:
             if (game_load(&game.sim, &game.tower, save_path()) == 0) {
                 elv_edit_exit();
@@ -5367,6 +5565,15 @@ static void handle_event(SDL_Event *ev)
                 game.elv_x = nx;
                 game.elv_y = ny;
                 break;
+            case 7: /* Financial report */
+                if (nx < 0) nx = 0;
+                if (nx + FIN_DLG_W > game.screen_w) nx = game.screen_w - FIN_DLG_W;
+                if (ny < 0) ny = 0;
+                if (ny + WIN_TITLEBAR_H > game.screen_h)
+                    ny = game.screen_h - WIN_TITLEBAR_H;
+                game.fin_x = nx;
+                game.fin_y = ny;
+                break;
             case 5: /* Analytics */
                 if (nx < 0) nx = 0;
                 if (nx + STATS_W > game.screen_w) nx = game.screen_w - STATS_W;
@@ -5480,13 +5687,19 @@ static void handle_event(SDL_Event *ev)
                         game.win_drag_oy = ev->button.y - wy;
                         break;
                     }
+                    case 7: /* Financial report */
+                        game.win_drag_ox = ev->button.x - game.fin_x;
+                        game.win_drag_oy = ev->button.y - game.fin_y;
+                        break;
                     }
                     break;
                 }
             }
-            
+
             /* Elevator dialog click (body, not title bar) */
             if (elv_dialog_click(ev->button.x, ev->button.y)) break;
+            /* Financial report click (body, not title bar) */
+            if (fin_dialog_click(ev->button.x, ev->button.y)) break;
             /* Inspector info popup click (close button / swallow body clicks) */
             if (inspect_popup_click(ev->button.x, ev->button.y)) break;
 
@@ -6368,6 +6581,10 @@ int main(int argc, char *argv[])
                                              : ITEM_ELEVATOR_SHAFT;
         game.elv_x = 340; game.elv_y = 120;
     }
+    if (getenv("FIN_DLG")) {        /* open the financial report for a screenshot */
+        game.fin_open = 1;
+        game.fin_x = 300; game.fin_y = 30;
+    }
     if (getenv("SIM_SPEED")) game.sim.speed = atoi(getenv("SIM_SPEED"));
 
     /* Game mode. Campaign (default): star-gated, starts on an empty lot.
@@ -6502,10 +6719,15 @@ int main(int argc, char *argv[])
     printf("  F3: analytics graphs, F4: tuning/modding panel\n");
     printf("  ` (backtick): toggle debug labels, F12: screenshot, Q/Esc: quit\n\n");
     
+    /* Seed the finance quarter baseline so the first report (before any 3-day
+     * settlement snapshots it) reads sensibly instead of a $0 opening balance. */
+    game.sim.fin_last_balance = game.tower.money;
+    game.sim.fin_built_at_q_start = game.tower.built_value;
+
     /* Main loop */
     game.running = 1;
     game.build_type = ITEM_OFFICE;
-    
+
     int frame = 0;
     while (game.running) {
         SDL_Event ev;
@@ -6748,8 +6970,9 @@ int main(int argc, char *argv[])
                     int cx, cy;
                     if (sscanf(tok, "%d,%d", &cx, &cy) == 2) {
                         elv_dialog_click(cx, cy);
-                        printf("[test] click %d,%d -> day=%d period=%d\n",
-                               cx, cy, game.elv_day, game.elv_period);
+                        fin_dialog_click(cx, cy);
+                        printf("[test] click %d,%d -> day=%d period=%d fin_open=%d\n",
+                               cx, cy, game.elv_day, game.elv_period, game.fin_open);
                     }
                 }
                 render();
@@ -6781,7 +7004,10 @@ int main(int argc, char *argv[])
             game.running = 0;
         }
         
-        SDL_Delay(16); /* ~60fps */
+        /* In headless --screenshot mode, fast-forward the warm-up frames with no
+         * frame delay so a deep sim state (e.g. a settlement several game-days
+         * out) is reachable quickly; pace normally otherwise. */
+        if (!auto_screenshot) SDL_Delay(16); /* ~60fps */
     }
     
     /* Cleanup */

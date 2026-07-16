@@ -43,6 +43,20 @@ typedef enum {
     QUARTER_COUNT
 } Quarter;
 
+/* Financial-report category lists, in the exact top-to-bottom order of the
+ * EXE's report art (bitmap 0x81f4). Left = revenue (population + income),
+ * right = infrastructure (maintenance expense). */
+enum {
+    FINCAT_OFFICE = 0, FINCAT_HOTEL_SINGLE, FINCAT_HOTEL_TWIN, FINCAT_HOTEL_SUITE,
+    FINCAT_SHOP, FINCAT_FAST_FOOD, FINCAT_RESTAURANT, FINCAT_PARTY_HALL,
+    FINCAT_CINEMA, FINCAT_CONDO, FIN_INCOME_CATS
+};
+enum {
+    FINEXP_LOBBY = 0, FINEXP_ELEVATOR, FINEXP_EXP_ELEVATOR, FINEXP_SER_ELEVATOR,
+    FINEXP_ESCALATOR, FINEXP_PARKING_RAMP, FINEXP_RECYCLING, FINEXP_METRO,
+    FINEXP_HOUSEKEEPING, FINEXP_SECURITY, FIN_EXPENSE_CATS
+};
+
 /* Game speed */
 typedef enum {
     SPEED_PAUSED = 0,
@@ -605,6 +619,22 @@ typedef struct {
                                         drained over frames so a rich morning rings
                                         a run of them (the EXE's income-refresh chime) */
     int           cash_snd_timer;    /* ticks until the next queued cha-ching */
+
+    /* --- Quarterly finance breakdown for the CountT report (bitmap 0x81f4) ---
+     * Two category lists, exactly as the report's baked art: a REVENUE list
+     * (population + income per category) and an INFRASTRUCTURE list (maintenance
+     * expense per category). These are write-only accumulators mirrored next to
+     * every sim income/expense bank, so their sums equal the real flows. They
+     * reset each 3-day settlement quarter (the EXE's financial cycle), NOT the
+     * intra-day income_this_quarter. Population is counted on demand from live
+     * tenants — the EXE never resets it either. */
+    long          fin_income_q[FIN_INCOME_CATS];    /* rent/venue income this quarter */
+    long          fin_expense_q[FIN_EXPENSE_CATS];  /* maintenance this quarter */
+    long          fin_other_income_q;   /* non-rent income (star bonuses, parking) */
+    long          fin_construction_q;   /* non-build capital costs this quarter, e.g. condo buyback */
+    long          fin_built_at_q_start; /* tower->built_value snapshot at quarter start;
+                                           build spend this quarter = built_value - this */
+    long          fin_last_balance;     /* money at the start of this quarter */
     
     /* Stats */
     int           max_population;   /* Peak population reached */
@@ -719,6 +749,11 @@ void game_format_time(GameSim *sim, char *buf, int bufsize);
 
 /* Get quarter name string */
 const char *game_quarter_name(Quarter q);
+
+/* Financial-report category mapping: tenant type -> a FINCAT_ / FINEXP_ index,
+ * or -1 for types that don't belong to that list. */
+int game_fin_income_cat(ItemType t);
+int game_fin_expense_cat(ItemType t);
 
 /* --- Zone system (JudgeT) --- */
 

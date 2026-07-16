@@ -406,6 +406,51 @@ static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
     /* Condos, services, etc. stay at their current capacity */
 }
 
+/* Financial-report category maps (order matches the report art, bitmap 0x81f4). */
+int game_fin_income_cat(ItemType t)
+{
+    switch (t) {
+    case ITEM_OFFICE:       return FINCAT_OFFICE;
+    case ITEM_HOTEL_SINGLE: return FINCAT_HOTEL_SINGLE;
+    case ITEM_HOTEL_TWIN:   return FINCAT_HOTEL_TWIN;
+    case ITEM_HOTEL_SUITE:  return FINCAT_HOTEL_SUITE;
+    case ITEM_SHOP:         return FINCAT_SHOP;
+    case ITEM_FAST_FOOD:    return FINCAT_FAST_FOOD;
+    case ITEM_RESTAURANT:   return FINCAT_RESTAURANT;
+    case ITEM_PARTY_HALL:   return FINCAT_PARTY_HALL;
+    case ITEM_CINEMA:       return FINCAT_CINEMA;
+    case ITEM_CONDO:        return FINCAT_CONDO;
+    default:                return -1;
+    }
+}
+
+int game_fin_expense_cat(ItemType t)
+{
+    switch (t) {
+    case ITEM_LOBBY:            return FINEXP_LOBBY;
+    case ITEM_ELEVATOR_SHAFT:   return FINEXP_ELEVATOR;
+    case ITEM_ELEVATOR_EXPRESS: return FINEXP_EXP_ELEVATOR;
+    case ITEM_ELEVATOR_SERVICE: return FINEXP_SER_ELEVATOR;
+    case ITEM_ESCALATOR:        return FINEXP_ESCALATOR;
+    case ITEM_RAMP:             return FINEXP_PARKING_RAMP;
+    case ITEM_RECYCLING:        return FINEXP_RECYCLING;
+    case ITEM_METRO:            return FINEXP_METRO;
+    case ITEM_HOUSEKEEPING:     return FINEXP_HOUSEKEEPING;
+    case ITEM_SECURITY:         return FINEXP_SECURITY;
+    default:                    return -1;
+    }
+}
+
+/* Bank income into the per-category quarterly ledger. Revenue types land in
+ * their category; anything else (parking, bonuses) goes to Other Income. This
+ * is called next to every real income bank, so the buckets sum to the flow. */
+static void fin_bank_income(GameSim *sim, ItemType t, long amt)
+{
+    int c = game_fin_income_cat(t);
+    if (c >= 0) sim->fin_income_q[c] += amt;
+    else        sim->fin_other_income_q += amt;
+}
+
 static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *out_expenses)
 {
     long income = 0;
@@ -481,6 +526,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (t->type == ITEM_CONDO) {
                 int sale = tenant_rent(ITEM_CONDO, t->rent_class);
                 income += sale;
+                fin_bank_income(sim, ITEM_CONDO, sale);
                 if (sim->cash_pending < 30) sim->cash_pending++;   /* queued cha-ching */
                 printf("\xf0\x9f\x8f\xa0 Condo on F%d sold for $%d\n",
                        t->floor, sale);
@@ -516,6 +562,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                     if (sim->tick % 60 == 0) {
                         int pay = base_income / (sim->ticks_per_quarter / 60);
                         income += pay;
+                        fin_bank_income(sim, t->type, pay);   /* parking -> Other */
                     }
                 }
                 
@@ -542,7 +589,11 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                     t->hosted = 0;
                     /* the stay is paid at checkout (MoneyT 0eac -> 0854,
                      * same 0x3E9 rows, one lump per guest stay) */
-                    income += tenant_rent(t->type, t->rent_class);
+                    {
+                        int stay = tenant_rent(t->type, t->rent_class);
+                        income += stay;
+                        fin_bank_income(sim, t->type, stay);
+                    }
                     /* Cash "ka-ching" is the EXE's checkout sound, throttled
                      * to ~every 2nd checkout (MoneyT counter 0x31b8). Queued so
                      * a nightful of checkouts rings a spaced run, not a blob. */
@@ -980,6 +1031,7 @@ static void evaluate_star_rating(GameSim *sim, Tower *tower)
             int bonus = TUNING.star_bonus[new_rating - 2];
             tower->money += bonus;
             sim->income_this_quarter += bonus;
+            sim->fin_other_income_q += bonus;   /* a bonus, not rent -> Other Income */
             printf("\xf0\x9f\x92\xb0 Promotion bonus: $%d\n", bonus);
         }
     }
@@ -1237,6 +1289,18 @@ void game_update(GameSim *sim, Tower *tower)
              * then the maintenance sweep below. */
             int settlement_day = tower->day % 3 == 0;
             if (settlement_day) {
+                /* Close the financial quarter: snapshot the opening balance and
+                 * zero the per-category ledgers, so this settlement's rent +
+                 * maintenance and the coming 3 days of venue/parking income
+                 * accumulate into a fresh quarter (mirrors ResetQuarterCounters,
+                 * seg_1060 FUN_003a, which fires at the 4:59AM day%3==0 tick). */
+                sim->fin_last_balance = tower->money;
+                memset(sim->fin_income_q, 0, sizeof(sim->fin_income_q));
+                memset(sim->fin_expense_q, 0, sizeof(sim->fin_expense_q));
+                sim->fin_other_income_q = 0;
+                sim->fin_construction_q = 0;
+                sim->fin_built_at_q_start = tower->built_value;
+
                 game_stressed_moveout(sim, tower);
 
                 /* Rent lumps: each occupied office and shop banks its
@@ -1252,7 +1316,11 @@ void game_update(GameSim *sim, Tower *tower)
                         continue;
                     if (t->state != TENANT_OCCUPIED &&
                         t->state != TENANT_VACANT) continue;
-                    rent += tenant_rent(t->type, t->rent_class);
+                    {
+                        int r = tenant_rent(t->type, t->rent_class);
+                        rent += r;
+                        fin_bank_income(sim, t->type, r);
+                    }
                     if (t->state == TENANT_OCCUPIED) payers++;
                     /* the shop new-let immunity window closes after its
                      * first full quarter (tenure = EXE +0x17) */
@@ -1319,31 +1387,49 @@ void game_update(GameSim *sim, Tower *tower)
              * settlement tick as the rent (TimeT gates both on day%3,
              * byte-verified 2026-07-11; the old daily billing was 3x the
              * EXE's rate). */
-            int upkeep = settlement_day ? calc_lobby_maintenance(tower) : 0;
+            int upkeep = 0;
             if (settlement_day) {
+                /* Each component is booked to its financial-report category
+                 * (fin_expense_q, right column of bitmap 0x81f4) as well as the
+                 * scalar upkeep total, so the report reconciles. */
+                long lobby_m = calc_lobby_maintenance(tower);
+                upkeep += lobby_m;
+                sim->fin_expense_q[FINEXP_LOBBY] += lobby_m;
+
                 PeopleSim *ups = &sim->people;
-            for (int i = 0; i < ups->shaft_count; i++) {
-                ElevatorShaft *sh = &ups->shafts[i];
-                if (!sh->active) continue;
-                int per = (sh->type == ITEM_ELEVATOR_EXPRESS) ? TUNING.maint_car_express
-                        : (sh->type == ITEM_ELEVATOR_SERVICE) ? TUNING.maint_car_service
-                        : TUNING.maint_car_std;
-                upkeep += sh->num_cars * per;
-            }
-            for (int i = 0; i < tower->tenant_count; i++)
-                if (tower->tenants[i].type == ITEM_ESCALATOR)
-                    upkeep += TUNING.maint_escalator;
-            /* Metro + parking upkeep (res 0x3EA, byte-verified 2026-07-11
-             * referee): $100,000 per station, $10,000 per RAMP — spaces
-             * and cars cost nothing (the old "per-car upkeep" note was a
-             * misread of elevator cars). */
-            for (int i = 0; i < tower->tenant_count; i++) {
-                Tenant *mt = &tower->tenants[i];
-                if (mt->state == TENANT_EMPTY ||
-                    mt->state == TENANT_CONSTRUCTION) continue;
-                if (mt->type == ITEM_METRO) upkeep += 100000;
-                if (mt->type == ITEM_RAMP)  upkeep += 10000;
-            }
+                for (int i = 0; i < ups->shaft_count; i++) {
+                    ElevatorShaft *sh = &ups->shafts[i];
+                    if (!sh->active) continue;
+                    int per = (sh->type == ITEM_ELEVATOR_EXPRESS) ? TUNING.maint_car_express
+                            : (sh->type == ITEM_ELEVATOR_SERVICE) ? TUNING.maint_car_service
+                            : TUNING.maint_car_std;
+                    int cost = sh->num_cars * per;
+                    upkeep += cost;
+                    int ec = game_fin_expense_cat(sh->type);
+                    if (ec >= 0) sim->fin_expense_q[ec] += cost;
+                }
+                for (int i = 0; i < tower->tenant_count; i++)
+                    if (tower->tenants[i].type == ITEM_ESCALATOR) {
+                        upkeep += TUNING.maint_escalator;
+                        sim->fin_expense_q[FINEXP_ESCALATOR] += TUNING.maint_escalator;
+                    }
+                /* Metro + parking upkeep (res 0x3EA, byte-verified 2026-07-11
+                 * referee): $100,000 per station, $10,000 per RAMP — spaces
+                 * and cars cost nothing (the old "per-car upkeep" note was a
+                 * misread of elevator cars). */
+                for (int i = 0; i < tower->tenant_count; i++) {
+                    Tenant *mt = &tower->tenants[i];
+                    if (mt->state == TENANT_EMPTY ||
+                        mt->state == TENANT_CONSTRUCTION) continue;
+                    if (mt->type == ITEM_METRO) {
+                        upkeep += 100000;
+                        sim->fin_expense_q[FINEXP_METRO] += 100000;
+                    }
+                    if (mt->type == ITEM_RAMP) {
+                        upkeep += 10000;
+                        sim->fin_expense_q[FINEXP_PARKING_RAMP] += 10000;
+                    }
+                }
             }
             if (upkeep > 0) {
                 tower->money -= upkeep;
@@ -1695,6 +1781,7 @@ void game_stressed_moveout(GameSim *sim, Tower *tower)
             int buyback = tenant_rent(ITEM_CONDO, t->rent_class);
             tower->money -= buyback;
             sim->expenses_this_quarter += buyback;
+            sim->fin_construction_q += buyback;   /* one-time capital cost, not maintenance */
             printf("\xf0\x9f\x8f\x9a Condo on F%d moved out - bought back for $%d\n",
                    t->floor, buyback);
         } else if (t->type == ITEM_SHOP) {
@@ -1930,6 +2017,7 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
                 if (pay > 0) {
                     tower->money += pay;
                     sim->income_this_quarter += pay;
+                    fin_bank_income(sim, t->type, pay);
                 }
                 t->venue_state = 0;
             }
@@ -1940,6 +2028,7 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
                 if (pay > 0) {
                     tower->money += pay;
                     sim->income_this_quarter += pay;
+                    fin_bank_income(sim, t->type, pay);
                 }
                 t->venue_state = 0;
             }
