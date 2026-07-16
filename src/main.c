@@ -4586,33 +4586,22 @@ static void render_event_alert(void)
  * name-editor (res 0x2DC) and movie-chooser (res 0x2DB) sub-dialogs.
  * ===================================================================== */
 
-/* ---- Custom tenant names. The EXE keeps them in a side list keyed by
- * (floor,idx), NOT in the tenant record (seg_1188); here keyed by the port's
- * stable tenant id. Runtime-only for now — does not yet round-trip .TDT. ---- */
-#define MAX_NAMED_TENANTS 512
-static struct { uint16_t id; char name[16]; } g_tenant_names[MAX_NAMED_TENANTS];
-static int g_named_count = 0;
-
+/* ---- Custom tenant names. Stored on the Tenant record (Tenant.name) and
+ * round-tripped through .TDT via the keyed name list (twr.c). ---- */
 static const char *tenant_custom_name(uint16_t id)
 {
-    for (int i = 0; i < g_named_count; i++)
-        if (g_tenant_names[i].id == id) return g_tenant_names[i].name;
-    return NULL;
+    Tenant *t = tower_tenant(&game.tower, id);
+    return (t && t->name[0]) ? t->name : NULL;
 }
 static void tenant_set_name(uint16_t id, const char *s)
 {
-    for (int i = 0; i < g_named_count; i++)
-        if (g_tenant_names[i].id == id) { snprintf(g_tenant_names[i].name, 16, "%s", s); return; }
-    if (g_named_count < MAX_NAMED_TENANTS) {
-        g_tenant_names[g_named_count].id = id;
-        snprintf(g_tenant_names[g_named_count].name, 16, "%s", s);
-        g_named_count++;
-    }
+    Tenant *t = tower_tenant(&game.tower, id);
+    if (t) snprintf(t->name, sizeof t->name, "%s", s);
 }
 static void tenant_clear_name(uint16_t id)   /* the rename dialog's Delete */
 {
-    for (int i = 0; i < g_named_count; i++)
-        if (g_tenant_names[i].id == id) { g_tenant_names[i] = g_tenant_names[--g_named_count]; return; }
+    Tenant *t = tower_tenant(&game.tower, id);
+    if (t) t->name[0] = 0;
 }
 
 /* The 14 real movie titles (res 0x1A4), indexed by movie_id 0..13. */

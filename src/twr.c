@@ -319,7 +319,12 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
     skip(&c, 0x10 * 6);              /* routing slots (0xdb9c) */
     skip(&c, 10 * 4);                /* 0xdbfc..0xdc24 */
     skip(&c, 0x10 * 0xc);
-    skip(&c, 0x50 + 0x28);           /* v>=0x2300 split block */
+    skip(&c, 0x50);                  /* people_keys[20] (port respawns people) */
+    uint16_t tenant_keys[20] = {0};  /* v>=0x2300 tenant-name key array */
+    if (!c.fail && c.pos + 0x28 <= c.len)
+        for (int i = 0; i < 20; i++)
+            tenant_keys[i] = c.p[c.pos + i * 2] | (c.p[c.pos + i * 2 + 1] << 8);
+    skip(&c, 0x28);
     skip(&c, 0x1102 + 0x842 + 0xca2);/* far-pointer blocks (judge/people) */
     skip(&c, 8);                     /* v>=0x1800 trailer */
     long leftover = c.fail ? -1 : c.len - c.pos;
@@ -341,7 +346,26 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
                 tower->twr_names[i][15] = 0;
                 tower->twr_name_count = i + 1;
             }
-            if (i < 8) printf("TWR import: named tenant \"%s\"\n", nm);
+        }
+        /* Bind the trailing TENANT-name strings (the last header-0x38 of them;
+         * earlier strings are person names the port drops) to their tenants:
+         * key = file_floor*94 + pid, pid = record +0x0C (== twr_unk[0]). */
+        int tname_count = tower->twr_header[0x38] | (tower->twr_header[0x39] << 8);
+        if (tname_count > 20)     tname_count = 20;
+        if (tname_count > names)  tname_count = names;
+        for (int j = 0; j < tname_count; j++) {
+            const char *s = (const char *)(c.p + c.pos + (names - tname_count + j) * 16);
+            if (!s[0]) continue;
+            int ff = tenant_keys[j] / 94, pid = tenant_keys[j] % 94;
+            for (int k = 0; k < tower->tenant_count; k++) {
+                Tenant *tt = &tower->tenants[k];
+                int tff = tt->floor + 10 + (ITEM_HEIGHT[tt->type] - 1);
+                if (tff == ff && tt->twr_unk[0] == pid) {
+                    snprintf(tt->name, sizeof tt->name, "%.15s", s);
+                    printf("TWR import: named tenant \"%s\" (F%d)\n", tt->name, tt->floor);
+                    break;
+                }
+            }
         }
         leftover = 0;
     }
@@ -609,6 +633,20 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
         if (e[0] < 0x80 && !allzero) retail_used++;
     }
 
+    /* === named tenants -> the keyed name list (seg_1188). key =
+     * file_floor*94 + pid; pid = record +0x0C (== twr_unk[0]). Person names
+     * are dropped (the port respawns its population), so people-count 0. === */
+    uint16_t name_keys[20]; char name_strs[20][16]; int name_n = 0;
+    for (int i = 0; i < tower->tenant_count && name_n < 20; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (!t->name[0]) continue;
+        int ff = t->floor + 10 + (ITEM_HEIGHT[t->type] - 1);
+        name_keys[name_n] = (uint16_t)(ff * 94 + t->twr_unk[0]);
+        memset(name_strs[name_n], 0, 16);
+        snprintf(name_strs[name_n], 16, "%.15s", t->name);
+        name_n++;
+    }
+
     /* === header === */
     uint8_t *h = emit(&out, 0x230);
     if (tower->twr_header_valid)
@@ -619,6 +657,8 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
         put16(h + 0x22, 0xffff);
         put16(h + 0x36, 2);          /* b400 = 2 in all real saves */
     }
+    put16(h + 0x36, 0);              /* people-name count: none persisted */
+    put16(h + 0x38, (unsigned)name_n);   /* tenant-name count */
     put16(h + 0x00, 0x2400);
     put16(h + 0x02, (unsigned)tower->star_rating);
     put32(h + 0x04, tower->money / 100);
@@ -800,13 +840,16 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
     emit(&out, 0x10 * 6);
     emit(&out, 10 * 4);
     emit(&out, 0x10 * 0xc);
-    emit(&out, 0x50 + 0x28);
+    emit(&out, 0x50);                    /* people_keys[20] — zeroed */
+    uint8_t *tk = emit(&out, 0x28);      /* tenant_keys[20] */
+    for (int i = 0; i < name_n; i++) put16(tk + i * 2, name_keys[i]);
     emit(&out, 0x1102 + 0x842 + 0xca2);
     emit(&out, 8);
 
-    /* === named tenants, appended after the serializer === */
-    for (int i = 0; i < tower->twr_name_count && i < 20; i++)
-        memcpy(emit(&out, 16), tower->twr_names[i], 16);
+    /* === named tenants, appended after the serializer (16-byte C strings,
+     * in tenant_keys order) === */
+    for (int i = 0; i < name_n; i++)
+        memcpy(emit(&out, 16), name_strs[i], 16);
     if (out.fail) EFAIL("out of memory growing export buffer");
 
     FILE *f = fopen(path, "wb");

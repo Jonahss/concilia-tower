@@ -368,6 +368,11 @@ typedef struct {
                               the map's Rent overlay (file tenant +0x0F;
                               JudgeT adjusts it in the EXE) */
 
+    /* Custom tenant name (info dialog "Rename"). The EXE keeps names in a
+     * side list keyed by (file_floor, pid); the port stores it here and
+     * rebuilds that keyed list on .TDT export. Empty = show the type name. */
+    char     name[16];        /* 15 chars + NUL, faithful to the rename cap */
+
     /* --- Info-dialog display state (not persisted to .TDT; resets on load) --- */
     uint8_t  let_quarters;    /* office/condo tenancy length in quarters — the
                                  dialog's "Length" field (EXE tenant +0x17);
