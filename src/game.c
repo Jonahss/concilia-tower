@@ -1678,10 +1678,43 @@ static ItemType noisy_neighbor_type(const Tower *tower, const Tenant *room)
  * #21 (the port's floor_to_zone never returns the EXE's <0), and parked-car
  * #34 (needs a per-space owner the port's anonymous parking valve lacks).
  * Returns the line count. */
+/* Owner of the car parked up front in the k-th usable space.
+ *
+ * The port models parking as an anonymous per-category pool (a car count
+ * plus double-parking), with no per-space ownership — deliberately, so
+ * capacity stays doubled. To still name a car's owner (comment #19) we
+ * don't assign *spaces*; we name the car *currently* sitting in one: the
+ * k-th parked car parks up front in the k-th usable space, mirroring the
+ * renderer's fill-by-ordinal (main.c). Any (usable_spaces + k)-th car is
+ * double-parked behind it and stays unnamed — you only see the front one.
+ * Cars are enumerated from the people who have one on the lot, in slot
+ * order, so a given car keeps its space while it's parked. */
+static uint16_t parking_front_owner(PeopleSim *ps, int ordinal)
+{
+    if (ordinal < 0) return 0;
+    int seen = 0;
+    for (int i = 0; i < ps->people_high; i++) {
+        const Person *p = &ps->people[i];
+        if (!p->home_tenant || !p->parked_cat) continue;
+        if (seen == ordinal) return p->home_tenant;
+        seen++;
+    }
+    return 0;
+}
+
+/* "Car for <owner>" label: the owner's custom name, else its type + floor. */
+static void parking_owner_label(const Tenant *ot, char *buf, int n)
+{
+    const char *base = ot->name[0] ? ot->name : tower_item_name(ot->type);
+    if (ot->name[0])         snprintf(buf, n, "%s", base);
+    else if (ot->floor == 0) snprintf(buf, n, "%s Lobby", base);
+    else if (ot->floor < 0)  snprintf(buf, n, "%s B%d", base, -ot->floor);
+    else                     snprintf(buf, n, "%s %dF", base, ot->floor);
+}
+
 int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                          char lines[][48], int max)
 {
-    (void)sim;
     int n = 0;
     #define PUSH(s) do { if (n < max) { snprintf(lines[n], 48, "%s", (s)); n++; } } while (0)
 
@@ -1760,6 +1793,24 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     /* 7. Not connected to Ramp (#20) — parking space off the ramp chain. */
     if (t->type == ITEM_PARKING && !t->space_usable && n < max)
         PUSH("Not connected to Ramp");
+
+    /* 7b. Car for <owner> (#19) — a usable space names the owner of the car
+     * currently parked in it. The renderer draws a car when the space's
+     * ordinal falls under the pooled parked-car count; match that, then name
+     * the front car (parking_front_owner). No car / unknown owner -> no line. */
+    if (t->type == ITEM_PARKING && t->space_usable && n < max) {
+        int parked = tower->cars_office + tower->cars_suite;
+        if (t->space_ordinal < parked) {
+            uint16_t owner_id = parking_front_owner(&sim->people, t->space_ordinal);
+            Tenant *ot = owner_id ? tower_tenant(tower, owner_id) : NULL;
+            if (ot) {
+                char buf[48], who[40];
+                parking_owner_label(ot, who, sizeof who);
+                snprintf(buf, sizeof buf, "Car for %s", who);
+                PUSH(buf);
+            }
+        }
+    }
 
     /* [8. Lobby-zone #21 — DEFERRED: port's floor_to_zone never returns <0.] */
 
