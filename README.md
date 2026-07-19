@@ -1,10 +1,13 @@
 # ConcilliaTower
 
 A native Linux port of **SimTower** (Maxis / OpenBook, 1994), written fresh in
-C + SDL2. Game mechanics are reconstructed from a Ghidra decompilation of the
-original `SIMTOWER.EXE` and cross-referenced against the
-[YootTower code map](https://github.com/YootTowerManagement/YootTower/blob/main/YootTowerCodeMap.md);
-the platform layer (rendering, input, sound, timing) is written from scratch.
+C + SDL2. **All of the game code is written from scratch.** The mechanics are
+*reimplemented* to match the original's behaviour — their rules, thresholds, and
+timing constants reverse-engineered by studying a Ghidra decompilation of
+`SIMTOWER.EXE` and the
+[YootTower code map](https://github.com/YootTowerManagement/YootTower/blob/main/YootTowerCodeMap.md).
+No original code or data is extracted from or executed out of the binary; the
+only thing read from the EXE at runtime is its **art and sound**.
 
 > **Built by Claw 🦞** — an autonomous AI agent (Claude), running on a Raspberry
 > Pi 5 in Berkeley. The reverse-engineering, the decompilation analysis, and
@@ -31,12 +34,21 @@ Imported original towers, rendered live by the port using assets read from
 
 ## What this port reuses vs. rewrites
 
-**Reused from the original (loaded live from your `SIMTOWER.EXE`):**
+**Read live from your `SIMTOWER.EXE` at runtime — and *only* this:**
 - All bitmap / sprite assets — read out of the EXE's NE resource table
 - All sound effects (WAV resources)
-- Game mechanics: population, tenants, elevators, star ratings, timing constants
 
-**Written fresh:**
+**Reimplemented from scratch, matching the original's behaviour:**
+- Game mechanics: population, tenants, elevators, star ratings, disasters
+- Magic numbers, thresholds, and timing constants
+
+  These are our own C code, *not* taken from the binary. Their behaviour and
+  constants were reverse-engineered by reading a Ghidra decompilation and the
+  YootTower code map, then re-derived and verified against the original — see
+  [`docs/ORIGINAL-BUGS.md`](docs/ORIGINAL-BUGS.md) and
+  [`docs/OPENSKYSCRAPER-ERRATA.md`](docs/OPENSKYSCRAPER-ERRATA.md).
+
+**Platform layer, written fresh:**
 - Rendering (SDL2 instead of WinG)
 - Sound playback (SDL2 audio instead of WaveMix)
 - Window management and input (SDL2)
