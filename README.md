@@ -109,9 +109,22 @@ of that script.
 | `docs/`             | Notes, including `ORIGINAL-BUGS.md`                    |
 | `PLAN.md`           | Build plan and phase checklist                         |
 
+## Documentation
+
+- **[`PLAN.md`](PLAN.md)** — architecture and the phase-by-phase build checklist.
+- **[`docs/ORIGINAL-BUGS.md`](docs/ORIGINAL-BUGS.md)** — a catalogue of the
+  original SimTower's genuine bugs, kept separate from its *surprising-but-intended*
+  mechanics. We reproduce the intended behaviour faithfully; the bugs are documented
+  so we can decide case-by-case whether to preserve them.
+- **[`docs/OPENSKYSCRAPER-ERRATA.md`](docs/OPENSKYSCRAPER-ERRATA.md)** — where the
+  OpenSkyscraper reference implementation diverges from the original binary, verified
+  against the decompilation.
+- **[`docs/REFACTOR-PLAN-runtime-model.md`](docs/REFACTOR-PLAN-runtime-model.md)** —
+  the in-progress runtime-model refactor.
+
 ## Status
 
-Work in progress. See `PLAN.md` for the phase-by-phase checklist.
+Work in progress. See [`PLAN.md`](PLAN.md) for the phase-by-phase checklist.
 
 ## Legal
 
