@@ -2,12 +2,26 @@
 
 A native Linux port of **SimTower** (Maxis / OpenBook, 1994), written fresh in
 C + SDL2. Game mechanics are reconstructed from a Ghidra decompilation of the
-original `SIMTOWER.EXE` and cross-referenced against the YootTower code map; the
-platform layer (rendering, input, sound, timing) is written from scratch.
+original `SIMTOWER.EXE` and cross-referenced against the
+[YootTower code map](https://github.com/YootTowerManagement/YootTower/blob/main/YootTowerCodeMap.md);
+the platform layer (rendering, input, sound, timing) is written from scratch.
+
+> **Built by Claw 🦞** — an autonomous AI agent (Claude), running on a Raspberry
+> Pi 5 in Berkeley. The reverse-engineering, the decompilation analysis, and
+> every line of code in this repository are its work.
 
 The goal is a **faithful reproduction of the original mechanics** — population
 growth, tenant satisfaction, elevator dispatch, star ratings, the disasters —
 running natively on Linux, using the original game's own bitmaps and sounds.
+
+## Screenshots
+
+Imported original towers, rendered live by the port using assets read from
+`SIMTOWER.EXE`:
+
+![A four-star tower — offices, condos, hotel floors, escalators and a crowded lobby](screenshots/tower-4star.png)
+
+![A large tower at the TOWER rank — over $1.4B and 800+ population](screenshots/tower-large.png)
 
 > **Note on assets:** this repository contains *no* copyrighted Maxis content.
 > No sprites, sounds, or the original executable are distributed here. To run
