@@ -16,9 +16,12 @@
 #define AUDIO_EVENTS_H
 
 #define SND_CASH        0xA71D  /* #10013 cash "ka-ching"        referee row 1  */
-#define SND_EXPLOSION   0xA714  /* #10004 bomb/terror explosion  row 2          */
-#define SND_EVENT_OK    0xA71F  /* #10015 event accept/reward    row 3          */
-#define SND_FIRE_LOOP   0xA719  /* #10009 fire crackle (loop)    row 5          */
+#define SND_EXPLOSION   0xA714  /* #10004 bomb EXPLOSION (once at detonation)   */
+#define SND_EVENT_OK    0xA71F  /* #10015 event accept/reward (bomb ransom paid)*/
+#define SND_FIRE_LOOP   0xA719  /* #10009 fire crackle (loop while burning)     */
+#define SND_BOMB_THREAT 0xA713  /* #10003 bomb-threat popup (once, at the offer) */
+#define SND_BOMB_ARM    0xA710  /* #10000 bomb armed (refuse/deploy dialog)      */
+#define SND_FIRE_START  0xA716  /* #10006 fire OUTBREAK alert (once, at ignition)*/
 #define SND_WEDDING     0xA718  /* #10008 wedding / 5-star TOWER  row 6          */
 #define SND_GARBAGE     0x88E8  /* #2280  garbage truck          row 7          */
 #define SND_GUARD_STEP  0xA71E  /* #10014 guard search footsteps row 8          */

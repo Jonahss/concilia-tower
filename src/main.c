@@ -145,8 +145,11 @@
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
-                                   * (1+16*n, 16); bg 25,25,25 keyed out.
-                                   * 0x87ec = red variant (purpose TBD) */
+                                   * (1+16*n, 16); bg 25,25,25 keyed out. */
+#define SPR_ELEV_DIGITS_RED 0x87ec /* red twin of 0x87e9: the floor-number plate
+                                    * lights red when a car of the group is at
+                                    * that floor (IsCarOnFloor gate, decomp
+                                    * seg_10a8:367 — the +0x58 highlight bank) */
 
 /* Stairs: 0x8968 (top) + 0x89A8 (bottom) */
 #define SPR_STAIRS_TOP    0x8968
@@ -996,10 +999,14 @@ static ElevatorShaft *find_people_shaft(int x, ItemType ty)
 static int elv_structural_stop(const ElevatorShaft *s, int fidx);
 
 /* Floor number on a shaft section, composed from the 0x87e9 digit glyphs
- * exactly like the original (OS Elevator::render). Serviced floors only. */
-static void draw_shaft_digits(int tx, int ty, int w, int wf)
+ * exactly like the original (OS Elevator::render). Serviced floors only.
+ * hot = a car of the group is on this floor -> draw the red 0x87ec twin. */
+static void draw_shaft_digits(int tx, int ty, int w, int wf, int hot)
 {
-    Sprite *d = sprites_find(&game.sprites, SPR_ELEV_DIGITS);
+    if (getenv("ELV_REDTEST")) hot = 1;   /* force red plates for a capture */
+    Sprite *d = sprites_find(&game.sprites,
+                             hot ? SPR_ELEV_DIGITS_RED : SPR_ELEV_DIGITS);
+    if (!d) d = sprites_find(&game.sprites, SPR_ELEV_DIGITS);  /* red missing */
     if (!d || wf < 0) return;     /* basements unlabeled (only 0-9 glyphs) */
     char buf[8];
     int n = snprintf(buf, sizeof(buf), "%d", wf);
@@ -1565,8 +1572,12 @@ static void render_tower(void)
         ElevatorShaft *es = find_people_shaft(t->x, t->type);
         int fi = floor_to_index(t->floor);
         if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
-            elv_structural_stop(es, fi))
-            draw_shaft_digits(tx, ty, tw, t->floor);
+            elv_structural_stop(es, fi)) {
+            int hot = 0;   /* red plate: a car of this group is on this floor */
+            for (int c = 0; c < es->num_cars; c++)
+                if (es->car[c].active && es->car[c].floor == fi) { hot = 1; break; }
+            draw_shaft_digits(tx, ty, tw, t->floor, hot);
+        }
     }
 
     /* ====== PASS 3: Transport overlays (stairs, escalators) ======
@@ -2068,7 +2079,17 @@ static void render_tuning_window(void)
 #define ELV_RESP_FLD   76, 93, 19, 22   /* Waiting Car Response value field */
 #define ELV_WAIT_FLD   76,148, 19, 22   /* Standard Floor Departure value field */
 #define ELV_GRID       18,195,132,195   /* live shaft/car grid */
+#define ELV_SCROLLBAR 152,195,  6,195   /* grid scrollbar (>15-floor shafts) */
 #define ELV_SHOW       161,206, 11, 20  /* SHOW On/Off */
+#define ELV_GRID_ROWS  15                /* visible floor rows in the grid */
+
+/* Max scroll offset for a shaft's edit grid: 0 when it fits in 15 rows,
+ * else (floors - 15) so the top floor can reach the top row. */
+static int elv_max_scroll(const ElevatorShaft *s)
+{
+    int total = s->hi - s->lo + 1;
+    return total > ELV_GRID_ROWS ? total - ELV_GRID_ROWS : 0;
+}
 #define ELV_SIM_BTN     10,398, 80, 22  /* Simulate / Resume */
 #define ELV_OK_BTN     115,398, 80, 22  /* OK */
 /* Cost of an extra car, per type (decomp-verified, globals.md #54):
@@ -2260,9 +2281,10 @@ static void render_elv_dialog_faithful(void)
     {
         int gx0 = bx + 18, gy0 = by + 195;
         int total = s->hi - s->lo + 1;
+        int maxsc = elv_max_scroll(s);
+        if (game.elv_scroll > maxsc) game.elv_scroll = maxsc;
+        if (game.elv_scroll < 0) game.elv_scroll = 0;
         int base = s->lo + game.elv_scroll;      /* bottom-most visible floor idx */
-        if (base > s->hi - 14) base = s->hi - 14;
-        if (base < s->lo) base = s->lo;
         for (int r = 0; r < 15; r++) {
             int f = base + r;
             if (f > s->hi) break;
@@ -2317,7 +2339,23 @@ static void render_elv_dialog_faithful(void)
                 }
             }
         }
-        (void)total;
+        /* Scrollbar for shafts taller than the 15-row window: thumb sits at the
+         * bottom when the base floor is shown (scroll 0) and rises toward the top
+         * as you scroll up. */
+        if (maxsc > 0) {
+            int tx = bx + 152, ty = by + 195, tw = 6, th = 195;
+            SDL_SetRenderDrawColor(game.renderer, 205, 205, 205, 255);
+            SDL_Rect track = { tx, ty, tw, th };
+            SDL_RenderFillRect(game.renderer, &track);
+            SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
+            SDL_RenderDrawRect(game.renderer, &track);
+            int thumb_h = th * ELV_GRID_ROWS / total;
+            if (thumb_h < 12) thumb_h = 12;
+            int thumb_y = ty + (th - thumb_h) * (maxsc - game.elv_scroll) / maxsc;
+            SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+            SDL_Rect thumb = { tx + 1, thumb_y, tw - 2, thumb_h };
+            SDL_RenderFillRect(game.renderer, &thumb);
+        }
     }
 
     /* SHOW On/Off marker (top half = On). */
@@ -2575,13 +2613,28 @@ static int elv_dialog_click_faithful(int mx, int my)
     /* Shaft grid (HandleGridClick, seg_1098:1ff5): col -1 = toggle floor
      * service (+0x42, group-shared); cols 0..7 = set that car's home floor
      * (+0xBA). Geometry mirrors the renderer: 9 cols x 15 rows, row 0 bottom. */
+    /* Scrollbar: click positions the 15-row window (top = highest floors). */
+    if (pt_in(mx, my, bx, by, ELV_SCROLLBAR)) {
+        int maxsc = elv_max_scroll(s);
+        if (maxsc > 0) {
+            int trel = my - (by + 195);
+            if (trel < 0) trel = 0;
+            if (trel > 195) trel = 195;
+            game.elv_scroll = maxsc - (trel * maxsc) / 195;
+            if (game.elv_scroll < 0) game.elv_scroll = 0;
+            if (game.elv_scroll > maxsc) game.elv_scroll = maxsc;
+        }
+        return 1;
+    }
+
     if (pt_in(mx, my, bx, by, ELV_GRID)) {
         int gx0 = bx + 18, gy0 = by + 195;
         int col = (mx - gx0) / 13 - 1;          /* -1 = service col, 0..7 = cars */
         int r = 14 - (my - gy0) / 13;           /* row 0 = bottom */
+        int maxsc = elv_max_scroll(s);
+        if (game.elv_scroll > maxsc) game.elv_scroll = maxsc;
+        if (game.elv_scroll < 0) game.elv_scroll = 0;
         int base = s->lo + game.elv_scroll;
-        if (base > s->hi - 14) base = s->hi - 14;
-        if (base < s->lo) base = s->lo;
         int f = base + r;
         if (r >= 0 && r < 15 && f >= s->lo && f <= s->hi) {
             if (col == -1) {
@@ -6159,6 +6212,14 @@ static void handle_event(SDL_Event *ev)
         break;
         
     case SDL_MOUSEWHEEL: {
+        /* Elevator dialog open: the wheel scrolls its floor grid (wheel up =
+         * show higher floors), not the world camera. */
+        if (game.elv_open) {
+            game.elv_scroll += ev->wheel.y;
+            if (game.elv_scroll < 0) game.elv_scroll = 0;
+            /* upper clamp happens in the renderer against the live shaft */
+            break;
+        }
         /* Shift+wheel or horizontal wheel = scroll left/right */
         int shift = (SDL_GetModState() & KMOD_SHIFT);
         if (shift || ev->wheel.x != 0) {
@@ -6352,6 +6413,8 @@ int main(int argc, char *argv[])
     /* digit sheet background is the shaft's own near-black (as in OS) */
     sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS,
                             25, 25, 25);
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS_RED,
+                            25, 25, 25);   /* red car-here twin, same key */
     /* engine animation frames (palette-cycled 'animated bitmaps') */
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
                                 SPR_ELEV_STD_LOADED, SPR_ELEV_STD_F1, 1);
@@ -7097,6 +7160,18 @@ int main(int argc, char *argv[])
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
             game_update(&game.sim, &game.tower);
+
+            /* Fire crackle (#10009): loops while a fire burns, stops when out.
+             * The one-shot outbreak alert (#10006) fires from game.c at
+             * ignition; the explosion (#10004) at detonation. */
+            {
+                static int prev_fire = 0;
+                int fire_now = game.sim.event.active &&
+                               game.sim.event.type == EVENT_FIRE;
+                if (fire_now && !prev_fire)      audio_start_loop(SND_FIRE_LOOP, 0.5f);
+                else if (!fire_now && prev_fire) audio_stop_loop();
+                prev_fire = fire_now;
+            }
 
             /* A freshly proposed disaster pauses the game for the player's
              * decision (handled by the modal). */

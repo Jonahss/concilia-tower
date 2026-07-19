@@ -2823,6 +2823,7 @@ void game_start_fire(GameSim *sim, Tower *tower, int forced_floor)
     ev->fire_left[fi] = ev->fire_right[fi] = (int16_t)ev->target_slot;
 
     printf("🔥 FIRE breaks out on floor %d at cell %d!\n", floor, ev->target_slot);
+    play_snd(SND_FIRE_START);   /* #10006 outbreak alert, once (StartFire 10e8:00b8) */
 }
 
 void game_offer_bomb(GameSim *sim, Tower *tower, int forced_floor)
@@ -2863,6 +2864,7 @@ void game_offer_bomb(GameSim *sim, Tower *tower, int forced_floor)
 
     printf("💣 BOMB THREAT — they want $%d. Floor %d (hidden from the player).\n",
            ev->ransom_cost, floor);
+    play_snd(SND_BOMB_THREAT);   /* #10003, the ransom-dialog sting (10c8:006e) */
 }
 
 static void guard_hunt_deploy(GameSim *sim, Tower *tower);
@@ -2878,6 +2880,7 @@ void game_event_proceed(GameSim *sim, Tower *tower)
     ev->pending = 0;
     if (ev->type == EVENT_BOMB) {
         ev->active = 1;                       /* detonates at 1PM unless caught */
+        play_snd(SND_BOMB_ARM);               /* #10000 armed/refuse dialog (0xBCE) */
         guard_hunt_deploy(sim, tower);        /* GuardT 033d(1) */
     }
 }
@@ -2909,6 +2912,7 @@ void game_event_ransom(GameSim *sim, Tower *tower)
     sim->expenses_this_quarter += ev->ransom_cost;
     ev->caught = 1;
     ev->type = EVENT_NONE;
+    play_snd(SND_EVENT_OK);   /* #10015 ransom paid (10c8:123 pay branch) */
 }
 
 /* Destroy the tenant covering (floor index, cell) — burned tenants leave
@@ -3003,6 +3007,10 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
         ev->active = 0;
         ev->type = EVENT_NONE;
         ev->chopper_x = 0;
+        /* Fire's own jump (10e8:02f2) is CONDITIONAL: snap to 4:00 PM only if
+         * we're still before it — a burn that outlasts 4PM keeps its own time
+         * (the guard blocks the backward write). */
+        if (sim->hour < 16) game_clock_jump(sim, tower, 16);
     }
 }
 
@@ -3186,6 +3194,10 @@ void game_resolve_event(GameSim *sim, Tower *tower)
          * the loss is the destroyed buildings. */
         printf("💥 BOMB EXPLODED on floor %d! %d tenants destroyed ($%d of construction)!\n",
                ev->target_floor, destroyed, ev->damage_cost);
+        play_snd(SND_EXPLOSION);   /* #10004, the boom (ResolveEvent(0) 10c8:021c) */
+        /* EventCleanup (10c8:02ab) writes frame_time = 0x5DC = 4:00 PM on an
+         * exploded bomb too, not just a caught one — hand back the dead hour. */
+        game_clock_jump(sim, tower, 16);
     }
 
     ev->active = 0;

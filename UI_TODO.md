@@ -42,7 +42,7 @@
 ### Menu / toolbar / HUD
 - [x] **Sub-menu selection updates the selected-tile sprite** in the group button. `b17fd4a`
 - [x] **Single wide play/pause toggle** (was two buttons) — matches Jonah's reference shot. `bd79ebb`
-- [ ] **Top menu bar still not visible** — confirm not just a VNC crop; tie into Batch 3 (MENU_BAR_H=0).
+- [x] **Top menu bar** — DONE in Batch 3 (A) `8816b9c` (MENU_BAR_H=18 + the missing render calls). Visible and functional.
 
 ### Minimap
 - [x] **Minimap legend obscures bottom floors** → moved to top (sky). `b17fd4a`
@@ -68,7 +68,15 @@
 
 ## Batch 3 (A) — menu bar — DONE
 - [x] Enabled the top menu bar (MENU_BAR_H=18 + render calls were missing too). Windows shifted below. Game/Build×4/Speed/View menus. Mode toggle -> Game menu (radio). `8816b9c`
-- [ ] Minor: grey out locked Build-menu items in Campaign (placement already blocks them).
+- [x] Grey out locked Build-menu items in Campaign — DONE (render_dropdown draws locked items in WIN31_DISABLED grey; execute_menu_item rejects their clicks with "Locked — raise your star rating first"). Confirmed 2026-07-18.
+
+## Faithful loose ends — 2026-07-18 pass
+- [x] **>15-floor elevator edit-grid scrollbar** — wheel scroll + click-to-position + a thumb (main.c); verified at the real surface on BARKLE's ~50-floor express shaft.
+- [x] **Post-catch clock jump to 4PM** — was only wired for a *caught* bomb; a *detonated* bomb now also jumps to 4PM (unconditional), and fire jumps *only if before 4PM* (the EXE's conditional guard). Verified with a sound/clock harness.
+- [x] **Event sounds** — wired the real triggers (referee-corrected labels): bomb-threat `0x2713` at the offer, arm `0x2710` on deploy, **explosion `0x2714` once at detonation**, ransom-paid `0x271F`, **fire-outbreak `0x2716` once at ignition**, fire-crackle `0x2719` looping while burning. Verified.
+- [x] **`0x87EC` red floor-plate** — the shaft floor number lights red when a car is on that floor (IsCarOnFloor). Verified at the real surface (forced via `ELV_REDTEST` for capture).
+- [ ] **24px elevator mode-icon art** — still vector glyphs (scan/shuttle/hold). The real icons are a boot-loaded GDI bitmap, not a standard NE resource, so extraction is unresolved. Low priority; needs a referee pass to locate the GDI blob.
+- [ ] **Shop closed / for-rent sprite frames** (referee 2026-07-18) — restaurants/FF already draw the state-byte closed frame (`variant*4+3` via `retail_open`); SHOPS still don't. Faithful fix: load the shop sheet's shared **closed frame 0x22** and **for-rent 0x21**, and pick shop frame by state (`0xFF→0x21`, closed→`0x22`, else `variant*3+state`) instead of the capacity bucket. Needs the two shared frames loaded (the port's per-variant 3-frame sheets omit them). See docs/ORIGINAL-BUGS.md "Resolved".
 
 ## Backlog / research / MODS
 - [ ] **MOD: merge F3 graphs into F7 financial report** — the over-time trend graphs (F3 Analytics: Population/Commuters, Income/Expenses, Value built/lost — a port invention) could be surfaced inside the faithful 1994 financial-report dialog (F7, art 0x81f4). Keep them optional/mod-gated since the original report has no graph. Jonah asked to keep both surfaces for now; merge later. (2026-07-16)

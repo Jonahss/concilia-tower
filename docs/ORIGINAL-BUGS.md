@@ -184,11 +184,19 @@ works. Kept so we don't keep asking.
 
 ---
 
-## Open questions (unverified — recorded, not confirmed)
+## Resolved (were open questions — both turned out to be normal mechanics, now settled)
 
-- **0x87EC red shaft floor-digit variant** — the EXE loads it but its render path
-  is undetermined. OS loads it but never renders row 1.
-- **Retail closed-frame vs capacity-frame mapping** — capacity maps
-  `cap 0x40 → last frame`, but for retail pairs the last frame is CLOSED,
-  hinting the closed sprite keys off opening hours, not capacity. Not yet
-  checked against the EXE.
+- **0x87EC red shaft floor-digit variant** — RESOLVED (referee 2026-07-18, HIGH).
+  Not a bug and not dead: it's the "car-is-here" highlight. The floor-number
+  plate on a shaft lights **red** (0x87ec, the +0x58 highlight bank) when a car
+  of that group is currently on that floor — gate `IsCarOnFloor`
+  (seg_10a8:367). The EXE renders it; OpenSkyscraper drops it (hardcodes atlas
+  row 0). **Now implemented in the port** (main.c `draw_shaft_digits` red twin).
+- **Retail closed-frame vs capacity-frame** — RESOLVED (referee 2026-07-18, HIGH).
+  Not capacity-driven: the displayed frame is a discrete **state byte** at the
+  venue record +0x02 (`0` empty / `1` 1-9 inside / `2` 10+ packed / `3` closed /
+  `0xFF` un-let). "Closed" (state 3) is a **clock event** — shops/FF close 9PM,
+  restaurants 11PM (`CloseOneVenue` 11a8:06ca), open 10AM. Shops draw a shared
+  closed frame 0x22 (and for-rent 0x21); restaurants/FF draw `variant*4+3`.
+  The port already does this for restaurants/FF (`retail_open`); **shops still
+  need the shared closed/for-rent frames** — logged as a fix in UI_TODO.md.
