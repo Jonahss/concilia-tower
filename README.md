@@ -53,7 +53,9 @@ Imported original towers, rendered live by the port using assets read from
 - Sound playback (SDL2 audio instead of WaveMix)
 - Window management and input (SDL2)
 - The NE-resource parser and DIB→surface asset pipeline (`src/ne_resource.c`, `src/sprites.c`)
-- Save/load in our own format
+- Save/load — a native quick-save, **plus** full import *and* export of the
+  original **SimTower 1.1 `.TWR`/`.TDT`** format (`src/twr.c`), so towers
+  round-trip and are interchangeable with the original game
 
 ## Building
 
