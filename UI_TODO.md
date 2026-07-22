@@ -1,4 +1,8 @@
-# UI Polish Pass — 2026-06-15 (live VNC review with Jonah)
+# Live worklist — remaining loose ends + mod backlog
+
+> Started 2026-06-15 as the live VNC review pass with Jonah; grew into the
+> project's running worklist. Everything checked `[x]` shipped with the commit
+> noted. The open items live in "Faithful loose ends" and "Backlog / MODS".
 
 ## Done (committed)
 - [x] Star rating: show all 5 slots (filled+empty) — faithful to DrawStarIndicators. `84ddbaa`
@@ -77,6 +81,16 @@
 - [x] **`0x87EC` red floor-plate** — the shaft floor number lights red when a car is on that floor (IsCarOnFloor). Verified at the real surface (forced via `ELV_REDTEST` for capture).
 - [ ] **24px elevator mode-icon art** — still vector glyphs (scan/shuttle/hold). The real icons are a boot-loaded GDI bitmap, not a standard NE resource, so extraction is unresolved. Low priority; needs a referee pass to locate the GDI blob.
 - [ ] **Shop closed / for-rent sprite frames** (referee 2026-07-18) — restaurants/FF already draw the state-byte closed frame (`variant*4+3` via `retail_open`); SHOPS still don't. Faithful fix: load the shop sheet's shared **closed frame 0x22** and **for-rent 0x21**, and pick shop frame by state (`0xFF→0x21`, closed→`0x22`, else `variant*3+state`) instead of the capacity bucket. Needs the two shared frames loaded (the port's per-variant 3-frame sheets omit them). See docs/ORIGINAL-BUGS.md "Resolved".
+- [ ] **Two defined-but-unwired sounds** (audit 2026-07-21): `SND_GARBAGE`
+  (#2280, garbage-truck collection) and `SND_GUARD_STEP` (#10014, bomb-guard
+  footsteps) exist in `audio_events.h` but nothing triggers them yet.
+- [ ] **Cinema soundtrack sub-index mapping** — the 9xxx movie themes play,
+  but which theme belongs to which film is a guess (`movie_id % 13`); the
+  real EXE mapping is undecoded. Needs a referee pass.
+- [ ] **NE string-table reader** — event dialog/feed text is hardcoded to
+  match the original wording; the real strings (res `0xBC2`–`0xBD0` etc.)
+  sit unread in the EXE. A small string-table loader would make the text
+  byte-faithful and localizable for free.
 
 ## Backlog / research / MODS
 - [ ] **MOD: merge F3 graphs into F7 financial report** — the over-time trend graphs (F3 Analytics: Population/Commuters, Income/Expenses, Value built/lost — a port invention) could be surfaced inside the faithful 1994 financial-report dialog (F7, art 0x81f4). Keep them optional/mod-gated since the original report has no graph. Jonah asked to keep both surfaces for now; merge later. (2026-07-16)
@@ -97,5 +111,8 @@
 - [x] RESTAURANT/FAST FOOD (empty/busy/packed/closed) + SHOP (3 fill frames): confirmed already-correct occupancy ramps.
 - Audit DONE. Only open sprite item: optional no-window office frames usage (tier mapping shipped; revisit if Jonah wants perimeter-based).
 
-## NOW
-- Posted status table to Jonah. Cranking Batch 1c top-down, starting with the placement/build-validation cluster (bulldozer over-greedy is the most destructive bug) + the stairs-reachability cluster (most impactful for gameplay).
+## NOW (2026-07-21)
+- All batches through the 2026-07-18 faithful-loose-ends pass are shipped.
+- Open: the loose ends above (shop closed frames first — smallest, fully
+  referee'd), then the mods backlog as Jonah picks. Full-project status
+  lives in the [README](README.md#status).

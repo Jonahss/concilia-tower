@@ -131,15 +131,16 @@ of that script.
 | `src/`              | Game source (C + SDL2)                                 |
 | `src/ne_resource.c` | NE-format resource parser for `SIMTOWER.EXE`           |
 | `src/sprites.c`     | Bitmap/palette → SDL surface pipeline                  |
-| `src/twr.c`         | `.TWR` / `.TDT` tower-file import                      |
-| `tests/`            | Unit tests and tower fixtures                          |
-| `tools/`            | Small standalone dev utilities                         |
-| `docs/`             | Notes, including `ORIGINAL-BUGS.md`                    |
-| `PLAN.md`           | Build plan and phase checklist                         |
+| `src/twr.c`         | `.TWR` / `.TDT` tower-file import **and export**       |
+| `tests/`            | Unit tests and real 1995/96 tower fixtures             |
+| `scripts/`          | Launch/screenshot helpers and small dev utilities      |
+| `docs/`             | Research notes — original bugs, OpenSkyscraper errata  |
+| `PLAN.md`           | Build plan and phase history (all phases complete)     |
 
 ## Documentation
 
-- **[`PLAN.md`](PLAN.md)** — architecture and the phase-by-phase build checklist.
+- **[`PLAN.md`](PLAN.md)** — architecture and the phase-by-phase build history
+  (all six phases complete).
 - **[`docs/ORIGINAL-BUGS.md`](docs/ORIGINAL-BUGS.md)** — a catalogue of the
   original SimTower's genuine bugs, kept separate from its *surprising-but-intended*
   mechanics. We reproduce the intended behaviour faithfully; the bugs are documented
@@ -147,12 +148,41 @@ of that script.
 - **[`docs/OPENSKYSCRAPER-ERRATA.md`](docs/OPENSKYSCRAPER-ERRATA.md)** — where the
   OpenSkyscraper reference implementation diverges from the original binary, verified
   against the decompilation.
+- **[`UI_TODO.md`](UI_TODO.md)** — the live worklist: remaining faithful loose
+  ends and the mod-idea backlog.
 - **[`docs/REFACTOR-PLAN-runtime-model.md`](docs/REFACTOR-PLAN-runtime-model.md)** —
-  the in-progress runtime-model refactor.
+  the runtime-model refactor brief (completed and merged, June 2026).
 
 ## Status
 
-Work in progress. See [`PLAN.md`](PLAN.md) for the phase-by-phase checklist.
+**Playable end to end.** All six planned build phases are complete
+([`PLAN.md`](PLAN.md)) — the port goes from an empty lot to the 5⭐ → **TOWER**
+win condition (cathedral, VIP, wedding ceremony) with the original's mechanics:
+
+- **Simulation** — population and standing-population star thresholds, the
+  EXE's banked felt-wait stress model with daily category passes, vacancy
+  re-let, per-type economies (office tiers, condo sales, hotel booking demand
+  with housekeeping/infestation, restaurant/shop patron flows and quotas,
+  cinema show cycles), zone competition, VIP visits and promotion gates.
+- **Elevators** — faithful placement rules, car state machine with the real
+  tuning constants, queues and 3-strike wait stress, the original schedule
+  dialog rebuilt on its own artwork (bitmap `0x8190`) and the full-screen
+  "Simulate" shaft-edit mode.
+- **Disasters** — scheduled fires with per-floor fronts and the $500k
+  helicopter, bomb threats with ransom/hunt, decision modals, rubble, alerts.
+- **UI** — Win3.1-style menu bar, toolbox with pull-downs, minimap overlays,
+  tenant/venue info dialogs, the quarterly financial report on the original
+  `0x81f4` artwork, campaign (star-gated) and sandbox modes.
+- **Interchange with the real game** — original 1995/96 `.TWR`/`.TDT` towers
+  import, play, and export **byte-identically**.
+- **Tests** — a 320-check SDL-free simulation suite (`tests/test_sim.c`).
+
+Remaining loose ends are small and tracked in [`UI_TODO.md`](UI_TODO.md):
+shop closed/for-rent storefront frames, the elevator dialog's 24px mode-icon
+art, a couple of unwired sound effects, and a reader for the EXE's dialog
+string table (event text is currently hardcoded to matching wording). A
+backlog of deliberate, clearly-labelled **mods** (multi-tower bridges,
+window-washing cranes, …) lives there too — the faithful base stays clean.
 
 ## Legal
 

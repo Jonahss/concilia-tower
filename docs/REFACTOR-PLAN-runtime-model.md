@@ -1,5 +1,13 @@
 # Overnight refactor pass — runtime model modernization (worst offenders)
 
+> **Completed.** The branch (`refactor/runtime-model-20260616`, 4 commits)
+> ran under these guardrails, sat reviewed-clean, and was fast-forward merged
+> to master on 2026-06-29 with the test suite green. The capacity byte became
+> an explicit occupancy model, and the same "be explicit, no reason to save
+> bytes" principle carried into later work (e.g. the hotel `RoomCondition`
+> enum, July 2026). Kept as the brief + guardrail template for future
+> unsupervised passes.
+
 **Authorized by Jonah 2026-06-16 to run ~11pm PT, unsupervised.**
 Scope chosen: "worst offenders." Goal: clearer, modern runtime code — NOT a
 byte-for-byte transcription of the 1994 original. See memory
