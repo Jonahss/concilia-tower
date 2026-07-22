@@ -228,8 +228,12 @@ OS models disasters as random events and has no chopper/front mechanics.
 
 ## Open questions being dug (will confirm or add entries)
 
-- **0x87EC**: the red variant of the shaft floor digits — purpose unknown
-  (OS loads it but never renders row 1).
+- **0x87EC** — RESOLVED (referee 2026-07-18): the red shaft floor-digit
+  variant is the "car-is-here" highlight — the plate lights red when a car
+  of that group is on that floor (`IsCarOnFloor`, seg_10a8:367). The EXE
+  renders it; OS loads it but hardcodes atlas row 0 and never shows it.
+  Port implements it (main.c draw_shaft_digits). Full entry in
+  ORIGINAL-BUGS.md "Resolved" section.
 - Tuning words 0xde10/12 (change-movie costs, found) — 0xde14/1c/1e/20
   settled above (chopper + bomb ransoms).
 

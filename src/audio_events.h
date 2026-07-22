@@ -7,10 +7,9 @@
  * are the resource ids (what audio_play() / ne_find() want). The "#NNNNN" is
  * the EXE's decimal WAVE number; the referee row is cited in the comment.
  *
- * Only HIGH-confidence rows with a locatable port sim point are wired.
- * The ambient background pool (referee event #24) is MED confidence — its
- * category selection is UNPROVEN — so it is deliberately left unwired rather
- * than guessed.
+ * Only HIGH-confidence rows with a locatable port sim point are wired,
+ * plus the ambient background pool (referee event #24, MED confidence:
+ * its category selection is UNPROVEN — see ambient_tick in main.c).
  */
 #ifndef AUDIO_EVENTS_H
 #define AUDIO_EVENTS_H

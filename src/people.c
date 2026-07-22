@@ -21,10 +21,7 @@
  *   - walk chains are approximated by "walk hop toward a lobby that has
  *     a connecting elevator" instead of precomputed chain/slot tables
  *   - cars use a flat ticks-per-floor speed instead of the 4-level
- *     accel curve; schedules (per-day car counts, both-direction
- *     pickup) are not modeled yet
- *   - people exist only as commuters (office in/out, hotel in/out);
- *     restaurant/shop patrons and staff trips come later
+ *     accel curve
  */
 #include <string.h>
 #include <stdio.h>

@@ -58,8 +58,7 @@ typedef enum {
     ITEM_ELEVATOR_EXPRESS, /* Express elevator: stops only on lobby/sky-lobby floors */
     ITEM_HOUSEKEEPING,  /* Housekeeping: services hotel rooms */
     ITEM_RAMP,          /* Parking ramp: 16 cells, one strip per basement
-                           floor (file type 44) — kept for .TDT round-trip;
-                           not yet buildable in the port */
+                           floor (file type 44) */
     ITEM_TYPE_COUNT
 } ItemType;
 

@@ -2061,8 +2061,8 @@ static void render_tuning_window(void)
  *  - a live 9-col x 15-row shaft grid: col -1 = shared floor service (+0x42),
  *    cols 0..7 = each car's home floor (+0xBA); row 0 is the bottom floor
  *  - SHOW toggles car visibility (+0x3C); Simulate = the full-screen edit mode
- *    (seg_10f0, deferred); OK commits and closes. Cars are added by the build
- *    tool, not here. */
+ *    (seg_10f0, see elv_edit_* below); OK commits and closes. Cars are added
+ *    by the build tool, not here. */
 #define SPR_ELV_DIALOG 0x8190
 #define ELV_DLG_W      200
 #define ELV_DLG_H      428
