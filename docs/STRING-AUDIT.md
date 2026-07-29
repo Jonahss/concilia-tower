@@ -345,10 +345,11 @@ decomp `output/pass3_coverage_2026-07-29.md` + the pass-2 commits.
   [0xB406]&9); menus/dialogs stay live.
 
 **Verified, deferred (needs art/UI work, not rules):**
-- Style-variant round-robin: hotel s/t/suite, office, condo, medical cycle
-  persistent per-type counters (mod 2/4/2/6/3/3) for their ART variant at
-  placement. The port has no per-style art for these types yet; when it
-  does, add the counters (save bump) — do NOT randomize.
+- ~~Style-variant round-robin~~ **DONE 2026-07-29** (32bd2ea): per-type
+  rotation counters + Tenant.style, 7 new style composites, .TDT word +6
+  round-trip; the trace also killed the "medical rotates" claim (its
+  counter feeds an initial-status byte the renderer never reads) and
+  found two import bugs (hotel condition byte, rate-class byte), fixed.
 - Grand-lobby stairs: with a 2/3-story ground lobby, stairs/escalators in
   the lobby span become multi-floor variants snapped to the lobby top.
   Port can only get a tall lobby via .TDT import today.
