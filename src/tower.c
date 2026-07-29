@@ -109,6 +109,7 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
             for (int cx = x; cx < x + width; cx++) {
                 ItemType existing = tower->grid[fidx][cx].type;
+                if (item_is_elevator(existing)) continue;  /* lobby coexists with shafts */
                 if (existing != ITEM_NONE && existing != ITEM_LOBBY &&
                     existing != ITEM_FLOOR) {
                     printf("  [reject] Lobby at F%d x%d: cell %d has %s\n",
@@ -231,6 +232,10 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                  * shaft columns with tenants. The shaft stamps the grid cells
                  * (the tenant keeps rendering from the tenant array). */
                 if (elev && !item_is_elevator(occ)) continue;
+                /* Symmetrically, a room spans through an existing shaft
+                 * column (the shaft keeps those grid cells — see
+                 * tower_place). */
+                if (!elev && item_is_elevator(occ)) continue;
                 printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
                        tower_item_name(type), floor, x, f, cx,
                        tower_item_name(occ));
@@ -399,18 +404,23 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
             /* Count cells that aren't lobby yet (the gap + the new segment),
              * so we charge per newly-built segment rather than per click. */
             int new_cells = 0;
-            for (int cx = final_left; cx < final_right; cx++)
-                if (tower->grid[fidx][cx].type != ITEM_LOBBY) new_cells++;
+            for (int cx = final_left; cx < final_right; cx++) {
+                ItemType e = tower->grid[fidx][cx].type;
+                if (e != ITEM_LOBBY && !item_is_elevator(e)) new_cells++;
+            }
 
             existing_lobby->x = final_left;
             existing_lobby->width = final_right - final_left;
-            /* Fill the WHOLE contiguous span as lobby. */
+            /* Fill the WHOLE contiguous span as lobby — except shaft cells,
+             * which the shaft keeps (the lobby passes behind it). */
             for (int cx = final_left; cx < final_right; cx++) {
                 TowerCell *cell = &tower->grid[fidx][cx];
+                if (item_is_elevator(cell->type)) continue;
                 cell->type = ITEM_LOBBY;
                 cell->tenant_id = existing_lobby->id;
                 cell->cell_index = cx - final_left;
-                cell->flags = CELL_OCCUPIED;
+                cell->flags = CELL_OCCUPIED |
+                              (cell->flags & CELL_TRANSPORT_OVERLAY);
             }
             if (new_cells > 0) {
                 /* $cost per width-sized segment newly covered (round up). */
@@ -479,6 +489,11 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
         if (!is_transport) {
             for (int cx = x; cx < x + width; cx++) {
                 TowerCell *cell = &tower->grid[fidx][cx];
+                /* an existing shaft keeps its grid cells — the room spans
+                 * through it (tower_remove's repair pass restores these
+                 * cells to the room if the shaft goes) */
+                if (item_is_elevator(cell->type) && !item_is_elevator(type))
+                    continue;
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
@@ -641,6 +656,11 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
         if (!is_transport) {
             for (int cx = x; cx < x + width; cx++) {
                 TowerCell *cell = &tower->grid[fidx][cx];
+                /* an existing shaft keeps its grid cells — the room spans
+                 * through it (tower_remove's repair pass restores these
+                 * cells to the room if the shaft goes) */
+                if (item_is_elevator(cell->type) && !item_is_elevator(type))
+                    continue;
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;

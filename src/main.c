@@ -1546,6 +1546,54 @@ static void render_tower(void)
         }
     }
 
+    /* ====== PASS 2.3: Decorative overlays (awning, fire escape) ======
+     * All of OverlayT (seg_11c0) anchors to the FLOOR MAP's per-floor
+     * extents — transports live in separate file blocks and do not
+     * count, so a shaft poking past the wall never drags an overlay
+     * with it. Drawn BEFORE the shafts so a shaft standing at the wall
+     * covers the fire escape, not the reverse. Extents computed once
+     * per frame, shared with the crane (drawn later, after people). */
+    floor_map_extents();
+
+    /* Entrance awnings — GROUND FLOOR ONLY (11c0:0374 draws solely on
+     * file floor 10): 56x36 halves of 0x83E9 hanging outside the
+     * ground extent's edges. Sky lobbies get none. */
+    if (game.entrances) {
+        int gi = floor_to_index(0);
+        if (ovl_right[gi] > 0) {
+            int half_w = game.entrances->w / 2;
+            int tx, ty;
+            grid_to_screen(0, ovl_left[gi], &tx, &ty);
+            SDL_Rect src_l = { 0, 0, half_w, game.entrances->h };
+            SDL_Rect awning_l = { tx - half_w, ty, half_w, CELL_H };
+            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_l, &awning_l);
+            grid_to_screen(0, ovl_right[gi], &tx, &ty);
+            SDL_Rect src_r = { half_w, 0, half_w, game.entrances->h };
+            SDL_Rect awning_r = { tx, ty, half_w, CELL_H };
+            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
+        }
+    }
+
+    /* Fire escapes — both sides of every floor's extent, ABOVE the ground
+     * floor up to the build ceiling. Jonah's call: no fire escapes on the
+     * ground floor (the lobby/entrance level); basements get none either. */
+    if (game.fireladder) {
+        int half_w = game.fireladder->w / 2;
+        for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
+            int fidx = floor_to_index(floor);
+            if (ovl_right[fidx] == 0) continue;     /* empty floor */
+            int lx, ly, rx, ry;
+            grid_to_screen(floor, ovl_left[fidx], &lx, &ly);
+            grid_to_screen(floor, ovl_right[fidx], &rx, &ry);
+            SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
+            SDL_Rect fe_left = { lx - half_w, ly, half_w, CELL_H };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
+            SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
+            SDL_Rect fe_right = { rx, ry, half_w, CELL_H };
+            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
+        }
+    }
+
     /* ====== PASS 2.5: Elevator shafts ======
      * Drawn after tenants so shafts overlay lobbies the same way they
      * overlay the ceiling joists — as in the original. */
@@ -1668,53 +1716,6 @@ static void render_tower(void)
         }
     }
     
-    /* ====== PASS 4: Decorative overlays (awning, fire escape) ======
-     * All of OverlayT (seg_11c0) anchors to the FLOOR MAP's per-floor
-     * extents — transports live in separate file blocks and do not
-     * count, so a shaft poking past the wall never drags an overlay
-     * with it. Extents computed once per frame, shared with the crane
-     * (drawn later, after the people pass). */
-    floor_map_extents();
-
-    /* Entrance awnings — GROUND FLOOR ONLY (11c0:0374 draws solely on
-     * file floor 10): 56x36 halves of 0x83E9 hanging outside the
-     * ground extent's edges. Sky lobbies get none. */
-    if (game.entrances) {
-        int gi = floor_to_index(0);
-        if (ovl_right[gi] > 0) {
-            int half_w = game.entrances->w / 2;
-            int tx, ty;
-            grid_to_screen(0, ovl_left[gi], &tx, &ty);
-            SDL_Rect src_l = { 0, 0, half_w, game.entrances->h };
-            SDL_Rect awning_l = { tx - half_w, ty, half_w, CELL_H };
-            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_l, &awning_l);
-            grid_to_screen(0, ovl_right[gi], &tx, &ty);
-            SDL_Rect src_r = { half_w, 0, half_w, game.entrances->h };
-            SDL_Rect awning_r = { tx, ty, half_w, CELL_H };
-            SDL_RenderCopy(game.renderer, game.entrances->texture, &src_r, &awning_r);
-        }
-    }
-
-    /* Fire escapes — both sides of every floor's extent, ABOVE the ground
-     * floor up to the build ceiling. Jonah's call: no fire escapes on the
-     * ground floor (the lobby/entrance level); basements get none either. */
-    if (game.fireladder) {
-        int half_w = game.fireladder->w / 2;
-        for (int floor = 1; floor <= TOWER_MAX_FLOOR; floor++) {
-            int fidx = floor_to_index(floor);
-            if (ovl_right[fidx] == 0) continue;     /* empty floor */
-            int lx, ly, rx, ry;
-            grid_to_screen(floor, ovl_left[fidx], &lx, &ly);
-            grid_to_screen(floor, ovl_right[fidx], &rx, &ry);
-            SDL_Rect src_left = { 0, 0, half_w, game.fireladder->h };
-            SDL_Rect fe_left = { lx - half_w, ly, half_w, CELL_H };
-            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_left, &fe_left);
-            SDL_Rect src_right = { half_w, 0, half_w, game.fireladder->h };
-            SDL_Rect fe_right = { rx, ry, half_w, CELL_H };
-            SDL_RenderCopy(game.renderer, game.fireladder->texture, &src_right, &fe_right);
-        }
-    }
-
     /* Floor number labels on the left edge */
     {
         int top_f, bot_f, dummy2;
@@ -5741,6 +5742,32 @@ static void execute_menu_item(const MenuItem *item)
     game.menu_open = -1;
 }
 
+/* Mouse-down on a shaft's motor room or pit: grab the cap and drag it away
+ * from the shaft to extend — the original's mechanical-room handles. Works
+ * from the plain pointer and the finger tool. Borrows the shaft's type as
+ * the build tool for this one drag so the ghost/placement machinery runs
+ * unchanged (cap_drag restores ITEM_NONE on release). Returns 1 if a cap
+ * was grabbed. */
+static int try_cap_drag(void)
+{
+    PeopleSim *ps = &game.sim.people;
+    int fidx = floor_to_index(game.mouse_floor);
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active) continue;
+        if (game.mouse_cell < s->x ||
+            game.mouse_cell >= s->x + ITEM_WIDTH[s->type]) continue;
+        if (fidx != s->hi + 1 && fidx != s->lo - 1) continue;
+        game.build_type = s->type;
+        game.cap_drag = 1;
+        game.dragging = 1;
+        game.drag_start_cell = s->x;
+        game.drag_start_floor = game.mouse_floor;
+        return 1;
+    }
+    return 0;
+}
+
 /* ---------- Input handling ---------- */
 static void handle_event(SDL_Event *ev)
 {
@@ -6165,8 +6192,12 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
 
-            /* Inspector tool: click a unit to open its info popup. */
+            /* Inspector tool: click a unit to open its info popup.
+             * Elevators aren't tenants — inspecting a shaft opens its real
+             * elevator dialog instead of a garbage tenant popup. */
             if (game.inspect_mode) {
+                if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
+                    break;
                 int fidx = floor_to_index(game.mouse_floor);
                 if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                     game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
@@ -6194,37 +6225,24 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
 
-            /* Finger/pointer tool: a single click on a shaft opens its dialog
-             * (where cars are added). Double-click still works without the tool
-             * — handy since double-click can be flaky over VNC. */
+            /* Finger/pointer tool: grabbing a motor room / pit starts the
+             * extend drag; a single click on a shaft body opens its dialog
+             * (where cars are added). Double-click still works without the
+             * tool — handy since double-click can be flaky over VNC. */
             if (game.finger_mode || ev->button.clicks >= 2) {
+                if (game.finger_mode && game.build_type == ITEM_NONE &&
+                    try_cap_drag())
+                    break;
                 if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
                     break;
                 if (game.finger_mode) break;   /* tool consumes the click */
             }
 
-            /* Plain pointer on a shaft's motor room or pit: grab the cap and
-             * drag it away from the shaft to extend — the original's
-             * mechanical-room handles. Borrow the shaft's type as the build
-             * tool for this one drag so the ghost/placement machinery runs
-             * unchanged, then restore on release. */
+            /* Plain pointer on a shaft's motor room or pit: the extend drag. */
             if (game.build_type == ITEM_NONE && !game.demolish_mode &&
-                !game.finger_mode && !game.inspect_mode) {
-                PeopleSim *ps = &game.sim.people;
-                int fidx = floor_to_index(game.mouse_floor);
-                for (int i = 0; i < ps->shaft_count; i++) {
-                    ElevatorShaft *s = &ps->shafts[i];
-                    if (!s->active) continue;
-                    if (game.mouse_cell < s->x ||
-                        game.mouse_cell >= s->x + ITEM_WIDTH[s->type]) continue;
-                    if (fidx != s->hi + 1 && fidx != s->lo - 1) continue;
-                    game.build_type = s->type;
-                    game.cap_drag = 1;
-                    game.dragging = 1;
-                    game.drag_start_cell = s->x;
-                    game.drag_start_floor = game.mouse_floor;
-                    break;
-                }
+                !game.finger_mode && !game.inspect_mode &&
+                try_cap_drag()) {
+                /* drag armed by try_cap_drag */
             }
             /* Normal game click — anchor centered on the cursor, matching
              * the placement ghost. */
