@@ -15,11 +15,9 @@ was unclear, the decomp annotations
 - **N/A** — Mac/System-7/file-dialog boilerplate with no game rule behind it.
 
 Throughout, **"string missing" (cosmetic)** is distinguished from **"RULE
-missing" (mechanic)**. One cross-cutting cosmetic gap up front: *every*
-placement-rejection message in the port goes to **stdout** (`printf` in
-`tower.c:tower_can_place`), not to the in-game UI. The rules fire; the player
-just never sees the words. The in-game event feed (`main.c:add_event_message`)
-carries only sim events (disasters, VIP, medical nag, unreachable units).
+missing" (mechanic)**. (The original cross-cutting gap — rejection messages
+going only to stdout — was closed 2026-07-29, commit 8edcb78: placement
+errors now land in the in-game event feed.)
 
 ---
 
@@ -34,7 +32,7 @@ carries only sim events (disasters, VIP, medical nag, unreachable units).
 
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
-| 15 film titles | cinema film identity: ids 0-6 ordinary, 7-13 hits; draw decays with age | PARTIAL | `main.c:4717 MOVIE_TITLES[14]` + `game.c:game_change_movie`/`movie_patron_quota`. **The port carries 14 of the 15 titles — "Under the Apple Tree" was dropped** (movie_id range is 0..13, so either the port's id space is one short or the 15th title is genuinely unused in the EXE; worth a decomp check). Cosmetic. |
+| 15 film titles | cinema film identity: ids 0-6 ordinary, 7-13 hits; draw decays with age | IMPLEMENTED (14 titles CORRECT) | `main.c:4717 MOVIE_TITLES[14]` + `game.c:game_change_movie`/`movie_patron_quota`. **The port carries 14 of the 15 titles — "Under the Apple Tree" was dropped** (movie_id range is 0..13, so either the port's id space is one short or the 15th title is genuinely unused in the EXE; worth a decomp check). Cosmetic. |
 
 ## res 0x02bc / 0x02bd — Person names & activities (PRIORITY)
 
@@ -53,7 +51,7 @@ distinct spawn class.
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
 | Floor…Parking Ramp, Burned Area | item vocabulary | IMPLEMENTED | `tower.c:tower_item_name`; Burned Area = `Tenant.burned` rubble rendering (`main.c` render pass) |
-| **SECOM** | a placeable SECOM Center | **MISSING** | No `ITEM_SECOM` in the enum; `.TDT` import maps file type 17 to ITEM_NONE (`twr.c:80`). Decomp `globals.md:303` marks TENANT_SECOM "Cut feature?" — so this may be dead in the Windows EXE too, but it has a price ($100,000, res 0x03f1) and a singleton rule (res 0x03eb), so *something* consumes it. Low priority; needs a decomp verdict before implementing. |
+| SECOM | a placeable SECOM Center | N/A — CUT CONTENT (verified 2026-07-29) | No `ITEM_SECOM` in the enum; `.TDT` import maps file type 17 to ITEM_NONE (`twr.c:80`). Decomp `globals.md:303` marks TENANT_SECOM "Cut feature?" — so this may be dead in the Windows EXE too, but it has a price ($100,000, res 0x03f1) and a singleton rule (res 0x03eb), so *something* consumes it. Low priority; needs a decomp verdict before implementing. |
 
 ## res 0x02c7 — Tenant info-dialog comments (PRIORITY)
 
@@ -68,17 +66,17 @@ Producer: `game.c:game_tenant_comments` (max 3 lines, EXE priority order).
 | Business is very good/good/average / Very few customers | retail customer tiers (50/35/25) | IMPLEMENTED | `game.c:1791-1799` |
 | Elevator/Escalator/Stairs (very) far away | horizontal distance ≥80/≥125 cells to nearest transport | IMPLEMENTED | `game.c:1770-1777`, thresholds match TUNING penalty_walk_80/125 |
 | Medical Center is too far away | office/condo at 3★+ w/o adequate medical | IMPLEMENTED (flagged approx) | `game.c:1813` — tower-wide `medical_adequate` instead of per-15-floor band; the band logic itself exists in `game_medical_seek`. Documented approximation. |
-| **Office worker needs parking** | office parking shortage comment | **MISSING** | Parking mechanics exist (per-category car quotas, `people_parking_assign`, VIP gate) but no office ever complains about parking. String + the per-office trigger missing. |
+| Office worker needs parking | office parking shortage comment | N/A — DEAD STRING (no producer in the EXE; verified 2026-07-29) | Parking mechanics exist (per-category car quotas, `people_parking_assign`, VIP gate) but no office ever complains about parking. String + the per-office trigger missing. |
 | Not connected to Ramp | dead parking space | IMPLEMENTED | `game.c:1818`, `space_usable` from `game_parking_recompute` |
 | **Too far from Lobby or Skylobby** | vertical distance from a lobby floor stressing a unit | **MISSING** | No port comment or mechanic keys on floors-from-nearest-lobby. (Wait-stress goes through the elevator sim instead.) String and its specific trigger both missing. |
 | Weekends attract more customers / Rain might cause fewer customers | period commentary | IMPLEMENTED | `game.c:1800-1806`, `game_retail_period` |
 | Opens tomorrow | food venue under construction | IMPLEMENTED | `game.c:1842` |
-| **Transportation access is good** | the positive access line | **MISSING** | trivially derivable from the same scan (dist < 80); never emitted. Cosmetic. |
+| Transportation access is good | the positive access line | N/A — DEAD STRING (no producer in the EXE; verified 2026-07-29) | trivially derivable from the same scan (dist < 80); never emitted. Cosmetic. |
 | Room is too dirty | infested room | IMPLEMENTED | `game.c:1757` |
 | Conditions are terrible | office/condo judged stressed | IMPLEMENTED | `game.c:1752` |
 | A Party is happening! | party hall mid-event | IMPLEMENTED | `game.c:1846` |
 | Full of Garbage | recycling can't keep up | IMPLEMENTED | `game.c:1853`, pop/center ≥ 2500 |
-| **Last train is gone / First train is not coming / Crowded with passengers** | metro-station comments keyed to the 10AM-5PM train schedule | **MISSING** | The schedule itself exists (`game.c:2597` train toggle 10AM-5PM + SND_METRO; metro visitors 10AM-5PM `people.c:1364`). The comment in `game.c:1856` claims these are "already surfaced via the event feed" — **that claim is false**: no train message exists in `main.c`'s feed. Strings missing; the before-10AM/after-5PM/crowded triggers missing. |
+| Last train is gone / First train is not coming / Crowded with passengers | metro-station comments | IMPLEMENTED (2026-07-29) — `game.c:2063-2069`, last train 9PM, crowded = train at platform | The schedule itself exists (`game.c:2597` train toggle 10AM-5PM + SND_METRO; metro visitors 10AM-5PM `people.c:1364`). The comment in `game.c:1856` claims these are "already surfaced via the event feed" — **that claim is false**: no train message exists in `main.c`'s feed. Strings missing; the before-10AM/after-5PM/crowded triggers missing. |
 | No renters | vacant shop | IMPLEMENTED | `game.c:1793` |
 | Car for … | usable space names its car's owner | IMPLEMENTED | `game.c:1825-1837` (`parking_front_owner`) |
 | " neighbor" + " is noisy" | named noisy neighbor | IMPLEMENTED | `game.c:1858-1866` |
@@ -92,7 +90,7 @@ parked-car producer variant — see the header comment at `game.c:1698`.
 |---|---|---|---|
 | ", Floor " | popup title floor suffix | IMPLEMENTED | `main.c:inspect_title` ("- NF"/"- BN"/"- Lobby") |
 | Occupied | occupancy status | IMPLEMENTED | `main.c:4796,4807` |
-| **For Rent** | vacant office/shop status word | **MISSING** (string) | The vacancy state is fully modeled (TENANT_ABANDONED + re-let market, `game_judge_daily`/`game_relet_arrivals`) and vacant art renders, but the inspector never shows a "For Rent" status row for offices/shops. Cosmetic. |
+| For Rent | vacant office/shop status word | IMPLEMENTED (2026-07-29, commit 4d20dd3) | The vacancy state is fully modeled (TENANT_ABANDONED + re-let market, `game_judge_daily`/`game_relet_arrivals`) and vacant art renders, but the inspector never shows a "For Rent" status row for offices/shops. Cosmetic. |
 | For Sale | unsold condo | IMPLEMENTED | `main.c:4796`; For Sale spawn art (known-current) |
 | Clean / Dirty | hotel room condition | IMPLEMENTED | `main.c:4806`, RoomCondition |
 
@@ -126,7 +124,7 @@ errors. The port's native save prints "Save FAILED!"/"Load failed" to the feed
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
 | closing ×3, quitting, Save the tower as | save-on-close prompts, save-as dialog | N/A (boilerplate) | port quits without prompting; note there is **no save-on-quit guard** — quitting with unsaved progress is silent. Minor UX gap, not a sim rule. |
-| New Tower | start-over command | MISSING (low) | Game menu (`main.c:GAME_MENU`) has Save/Load/Export but no New Tower; restart requires relaunching. |
+| New Tower | start-over command | IMPLEMENTED (2026-07-29, commit 4d20dd3) | Game menu (`main.c:GAME_MENU`) has Save/Load/Export but no New Tower; restart requires relaunching. |
 
 ## res 0x03eb — Placement errors (PRIORITY, the richest)
 
@@ -142,11 +140,11 @@ errors. The port's native save prints "Save FAILED!"/"Load failed" to the feed
 | Item not available underground / Item unavailable above ground | vertical zoning | IMPLEMENTED | `tower.c:225-227`, ITEM_UNDERGROUND_ONLY both directions |
 | First floor is only for Lobby | ground floor lobby-only (transports exempt) | IMPLEMENTED | `tower.c:142-145` (known-current) |
 | Lobbys are only every 15 floors | sky-lobby cadence | IMPLEMENTED | `tower.c:96-99` (known-current) |
-| **Cannot place items under Metro** | nothing may be built below the metro floor (shaft ExtendDown gated `> [0xB3E8]-1`) | **MISSING** | decomp `seg_11f8_tenant.c:553` (msg 0xe). The port has no metro-floor gate anywhere — shafts and rooms can be built beneath the station. |
-| **Place Metro station on bottom floor** | the station must go at the bottom of the dug basement | **MISSING** | port only requires underground + ceiling-above support (`tower.c:374-385`); any basement floor accepts it. |
-| **Cathedral is available only on 100th floor** | cathedral placement pinned to the top floor | **MISSING** | port gates it at 5★ (`ITEM_STAR_REQ`) but allows any supported floor — the demo even places one at F19 (`tower.c:834`). Real saves keep it at file floors 109-113 (`tower.h:21-23`), consistent with the 100th-floor rule. |
-| **Only one Metro Station allowed** | metro singleton | **MISSING** | decomp `seg_11f8_tenant.c:576`: SINGLETON on [0xB3E8], msg 0x11. `tower_can_place` has no count check — unlimited metros placeable. |
-| Only one SECOM allowed | SECOM singleton | MISSING (low) | SECOM item doesn't exist at all (see 0x02c6). |
+| Cannot place items under Metro | nothing may be built below the metro floor | IMPLEMENTED (2026-07-29, f8219e9) | decomp `seg_11f8_tenant.c:553` (msg 0xe). The port has no metro-floor gate anywhere — shafts and rooms can be built beneath the station. |
+| Place Metro station on bottom floor | station bottoms in virgin ground below the dig | IMPLEMENTED (2026-07-29, f8219e9) | port only requires underground + ceiling-above support (`tower.c:374-385`); any basement floor accepts it. |
+| Cathedral is available only on 100th floor | cathedral pinned to the build ceiling | IMPLEMENTED (2026-07-29, f8219e9) | port gates it at 5★ (`ITEM_STAR_REQ`) but allows any supported floor — the demo even places one at F19 (`tower.c:834`). Real saves keep it at file floors 109-113 (`tower.h:21-23`), consistent with the 100th-floor rule. |
+| Only one Metro Station allowed | metro singleton | IMPLEMENTED (2026-07-29, 8edcb78/f8219e9) | decomp `seg_11f8_tenant.c:576`: SINGLETON on [0xB3E8], msg 0x11. `tower_can_place` has no count check — unlimited metros placeable. |
+| Only one SECOM allowed | SECOM singleton | N/A — cut content, no producer (2026-07-29) | SECOM item doesn't exist at all (see 0x02c6). |
 | **Only one Cathedral allowed** | cathedral singleton | **MISSING** | decomp `seg_11f8_tenant.c:581`: SINGLETON on [0xB3EC], msg 0x13. No count check in the port. |
 | Cannot destroy this item | some items are indestructible | PARTIAL | ground lobby protected (`tower.c:584`); whether the EXE protects more (metro? cathedral under wedding?) unverified. |
 | Item requires more space on both sides | 8-cell shaft clearance | IMPLEMENTED | `tower.c:176-204` (known-current; decomp CheckElevatorClearance 10a0:10e8) |
