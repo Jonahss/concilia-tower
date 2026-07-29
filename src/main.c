@@ -5620,7 +5620,9 @@ static void render_name_editor(void)
     draw_bevel(d, 1);
     SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
     SDL_RenderDrawRect(game.renderer, &d);
-    stats_label(d.x + 12, d.y + 10, "Tenant's name:", ink);
+    stats_label(d.x + 12, d.y + 10,
+                game.name_edit_person ? "Person's name:" : "Tenant's name:",
+                ink);
 
     SDL_Rect e = name_dlg_edit(d);
     SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
