@@ -57,12 +57,17 @@ enum {
     FINEXP_HOUSEKEEPING, FINEXP_SECURITY, FIN_EXPENSE_CATS
 };
 
-/* Game speed */
+/* Game speed. The original's model (menu resource + TimeT 1200:01a5,
+ * 2026-07-29): pause, or a 6ms-per-tick throttle, or Options -> Fast
+ * Mode = unthrottled ("as fast as the machine can", 1994 hardware).
+ * NORMAL is our throttled rate; FAST approximates era-unthrottled at
+ * 2x and is the UI cap. TURBO is kept for old saves/debug only — no
+ * menu entry; finer control is a mod idea. */
 typedef enum {
     SPEED_PAUSED = 0,
-    SPEED_NORMAL = 1,   /* Original: game_speed = 2 */
-    SPEED_FAST   = 2,   /* Original: game_speed = 3 */
-    SPEED_TURBO  = 3,   /* Not in original — our addition */
+    SPEED_NORMAL = 1,
+    SPEED_FAST   = 2,
+    SPEED_TURBO  = 3,
 } GameSpeed;
 
 /* Tenant occupancy state — lifecycle of a placed unit */

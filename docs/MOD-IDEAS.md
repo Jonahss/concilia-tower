@@ -19,11 +19,15 @@ the faithful port stays the default; mods are opt-in flavor on top.
   every hit-test that assumes CELL_W/CELL_H; consider a global
   view-scale factor those helpers own.
 
-- **Multi-speed simulation** (existing, flagged 2026-07-29) — the
-  original's only speed control is the Options → Fast Mode toggle
-  (removes the 6ms tick throttle; menu id 40007 → [0xDE34] → TimeT
-  1200:01a5). Our 1x/2x/3x Speed menu is already a mod by that
-  standard; keeping it.
+- **Finer speed control** (Jonah, 2026-07-29) — the original's only
+  speed control is Options → Fast Mode (removes the 6ms tick throttle;
+  menu id 40007 → [0xDE34] → TimeT 1200:01a5), i.e. pause / throttled /
+  unthrottled. The base game now matches: Paused / Normal / Fast Mode,
+  with Fast capped at 2x normal as an era-hardware approximation
+  (a 1994 machine unthrottled wasn't much faster than that; a Pi 5
+  unthrottled would be a time-lapse). Mod: extra tiers (the old Turbo
+  = 6x still exists in the enum, UI-unreachable), or a free-form
+  speed slider.
 
 - **Deliberate multi-tower gaps** (older note in tower.c) — the
   original forbids horizontal gaps in a floor (deck is one contiguous

@@ -540,14 +540,18 @@ static const MenuItem menu_build_svc[] = {
 };
 #define MENU_BUILD_SVC_COUNT 5
 
-/* Speed menu */
+/* Speed menu — Paused / Normal / Fast only, matching the original's
+ * model (Options -> Fast Mode toggle, menu id 40007 -> [0xDE34] ->
+ * TimeT 1200:01a5). "Fast" is capped at 2x normal as a stand-in for
+ * "unthrottled on era hardware"; finer/faster control is a mod
+ * (MOD-IDEAS.md). Turbo survives in the enum for old saves and debug
+ * but has no menu entry. */
 static const MenuItem menu_speed[] = {
     { "Paused\tSpace",    ITEM_NONE,  ACT_SPEED_PAUSE },
     { "Normal\t+",        ITEM_NONE,  ACT_SPEED_1 },
-    { "Fast\t++",         ITEM_NONE,  ACT_SPEED_2 },
-    { "Turbo\t+++",       ITEM_NONE,  ACT_SPEED_3 },
+    { "Fast Mode\t++",    ITEM_NONE,  ACT_SPEED_2 },
 };
-#define MENU_SPEED_COUNT 4
+#define MENU_SPEED_COUNT 3
 
 /* View menu */
 static const MenuItem menu_view[] = {
@@ -6485,7 +6489,9 @@ static void handle_event(SDL_Event *ev)
             break;
         case SDLK_EQUALS:
         case SDLK_PLUS:
-            if (game.sim.speed < SPEED_TURBO) {
+            /* UI cap is FAST (era-hardware approximation); TURBO is
+             * mod/debug territory. */
+            if (game.sim.speed < SPEED_FAST) {
                 game.sim.speed++;
                 printf("Speed: %d\n", game.sim.speed);
             }

@@ -3524,5 +3524,11 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
              fread(sim, sizeof(*sim), 1, f) == 1 &&
              fread(&TUNING, sizeof(TUNING), 1, f) == 1;
     fclose(f);
+    /* Turbo lost its UI entry (speed capped at FAST, 2026-07-29) —
+     * clamp saves made before the cap. */
+    if (ok && sim->speed > SPEED_FAST) {
+        sim->speed = SPEED_FAST;
+        sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_FAST];
+    }
     return ok ? 0 : -1;
 }
