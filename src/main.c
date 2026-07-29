@@ -336,6 +336,9 @@ typedef struct {
     int             dragging;       /* 1 if currently dragging to place */
     int             drag_start_cell;
     int             drag_start_floor;
+    int             cap_drag;       /* pointer-drag on a motor room / pit: the
+                                     * shaft's type was borrowed into build_type
+                                     * for the drag; restore ITEM_NONE on release */
     
     /* Camera smoothing */
     float           cam_fx, cam_fy;
@@ -1401,13 +1404,29 @@ static void render_tower(void)
                 Sprite *cgrid = (tenant->state == TENANT_CONSTRUCTION)
                               ? sprites_find(&game.sprites, cg_id) : NULL;
                 if (cgrid && cgrid->w > 0) {
+                    /* Anchor to the CELL top, not the tenant strip: the 36px
+                     * scaffold art covers the full floor incl. the ceiling
+                     * band (drawing it at tenant_y sank it 12px into the
+                     * floor below). The 24px walls-up stage (0x8E29) sits in
+                     * the tenant strip, with the scaffold sheet's slab band
+                     * keeping the ceiling above it. Tiles blit 1:1 — never
+                     * stretched. */
+                    int cy0 = ty - (item_floors - 1) * CELL_H;
+                    Sprite *scaf = sprites_find(&game.sprites, SPR_CONST_GRID);
                     for (int fr = 0; fr < item_floors; fr++) {
-                        int fy = draw_y + fr * CELL_H;
+                        int fy = cy0 + fr * CELL_H;
                         for (int gx = tx; gx < tx + tw; gx += cgrid->w) {
                             int gw = cgrid->w;
                             if (gx + gw > tx + tw) gw = tx + tw - gx;
+                            if (cgrid->h < CELL_H && scaf) {
+                                SDL_Rect cs = { 0, 0, gw, CEIL_H };
+                                SDL_Rect cd = { gx, fy, gw, CEIL_H };
+                                SDL_RenderCopy(game.renderer, scaf->texture,
+                                               &cs, &cd);
+                            }
                             SDL_Rect gs = { 0, 0, gw, cgrid->h };
-                            SDL_Rect gd = { gx, fy, gw, CELL_H };
+                            SDL_Rect gd = { gx, fy + CELL_H - cgrid->h,
+                                            gw, cgrid->h };
                             SDL_RenderCopy(game.renderer, cgrid->texture, &gs, &gd);
                         }
                     }
@@ -1483,27 +1502,11 @@ static void render_tower(void)
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
                 
                 if (tenant->state == TENANT_CONSTRUCTION) {
-                    /* The construction-grid floor (drawn above) is the look; just
-                     * a whisper of amber warmth, then the workers on top. */
-                    SDL_SetRenderDrawColor(game.renderer, 200, 160, 0, 22);
-                    SDL_Rect overlay = { tx, draw_y, tw, draw_h };
-                    SDL_RenderFillRect(game.renderer, &overlay);
-
-                    Sprite *cw = sprites_find(&game.sprites, SPR_CONST_WORKER);
-                    if (cw) {
-                        int fw = 32, nf = cw->w / fw;     /* 3 frames */
-                        if (nf < 1) nf = 1;
-                        int ww = 24, wh = 30;             /* drawn worker size */
-                        int wy = draw_y + draw_h - wh;    /* stand on the floor */
-                        /* one worker per ~56px of width, each on its own phase
-                         * so they're not lock-stepped. */
-                        for (int wx = tx + 6; wx + ww <= tx + tw; wx += 56) {
-                            int phase = (game.sim.frame / 8 + wx / 56) % nf;
-                            SDL_Rect src = { phase * fw, 0, fw, cw->h };
-                            SDL_Rect dst = { wx, wy, ww, wh };
-                            SDL_RenderCopy(game.renderer, cw->texture, &src, &dst);
-                        }
-                    }
+                    /* The scaffold tiles (drawn above) are the whole look; the
+                     * occupants pass supplies the EXE's one worker figure.
+                     * (The old extra worker loop here sliced the 16px-frame
+                     * sheet at 32px and stretched it — the flashing
+                     * half-workers bug.) */
                 } else if (tenant->state == TENANT_STRESSED) {
                     /* Stressed: pulsing red (from MainteT stress cascade) */
                     int pulse = 40 + (game.sim.frame % 30) * 2;
@@ -1547,6 +1550,17 @@ static void render_tower(void)
         int tx, ty;
         grid_to_screen(t->floor, t->x, &tx, &ty);
         int tw = t->width * CELL_W;
+
+        /* Dialog Show Off: the shaft renders as just its two guide rails —
+         * whatever it passes through stays visible. */
+        ElevatorShaft *hs = find_people_shaft(t->x, t->type);
+        if (hs && hs->hidden) {
+            SDL_SetRenderDrawColor(game.renderer, 70, 70, 78, 255);
+            SDL_RenderDrawLine(game.renderer, tx, ty, tx, ty + CELL_H - 1);
+            SDL_RenderDrawLine(game.renderer, tx + tw - 1, ty,
+                               tx + tw - 1, ty + CELL_H - 1);
+            continue;
+        }
 
         /* Shaft section: always tile 0 of 0x87E8. The 36px tile spans
          * the FULL floor height. The wide (express, 6-cell) shaft = 8px
@@ -2124,8 +2138,6 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx)
     return wf <= 0 || (wf % 15) == 0;
 }
 
-/* UI-only state for the faithful dialog (not sim state). */
-static int elv_show_preview = 1;
 
 /* ---- Elevator "Simulate" full-screen edit mode (seg_10f0 "ElvEditT") ----
  * The EXE's Simulate button opens a separate surface: the whole tower dims to
@@ -2326,7 +2338,7 @@ static void render_elv_dialog_faithful(void)
                     }
                 }
                 /* live car at this floor */
-                if (elv_show_preview && s->car[c].active && s->car[c].floor == f) {
+                if (!s->hidden && s->car[c].active && s->car[c].floor == f) {
                     ElevatorCar *car = &s->car[c];
                     if (car->passengers >= s->capacity)
                         SDL_SetRenderDrawColor(game.renderer, 200, 30, 30, 255);
@@ -2362,7 +2374,7 @@ static void render_elv_dialog_faithful(void)
     {
         int sx = bx + 161, sy = by + 206;
         SDL_SetRenderDrawColor(game.renderer, 20, 20, 20, 255);
-        SDL_Rect m = { sx + 2, sy + (elv_show_preview ? 1 : 11), 7, 7 };
+        SDL_Rect m = { sx + 2, sy + (!s->hidden ? 1 : 11), 7, 7 };
         SDL_RenderFillRect(game.renderer, &m);
     }
 
@@ -2597,9 +2609,11 @@ static int elv_dialog_click_faithful(int mx, int my)
     if (pt_in(mx, my, bx, by, 64, 148, 12, 10)) { if (*pa < 3) (*pa)++; return 1; }
     if (pt_in(mx, my, bx, by, 64, 158, 12, 11)) { if (*pa > 0) (*pa)--; return 1; }
 
-    /* SHOW On/Off (top half = On, bottom half = Off) */
+    /* SHOW On/Off (top half = On, bottom half = Off): per-shaft — Off draws
+     * the shaft in the world as just its two guide rails so what's behind
+     * (rooms the shaft passes through) is visible. */
     if (pt_in(mx, my, bx, by, ELV_SHOW)) {
-        elv_show_preview = (my - (by + 206)) < 10;
+        s->hidden = ((my - (by + 206)) < 10) ? 0 : 1;
         return 1;
     }
 
@@ -2760,6 +2774,9 @@ static void render_shaft(ElevatorShaft *s)
     Sprite *queue_spr = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
 
     if (!s->active) return;
+    /* Show Off hides cars and queues with the shaft body (caps stay — they
+     * are the extend handles). Edit mode always shows the shaft it's editing. */
+    if (s->hidden && !game.elv_edit_mode) queue_spr = NULL;
     {
         int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
 
@@ -2840,6 +2857,7 @@ static void render_shaft(ElevatorShaft *s)
         for (int ci = 0; ci < s->num_cars; ci++) {
             ElevatorCar *c = &s->car[ci];
             if (!c->active) continue;
+            if (s->hidden && !game.elv_edit_mode) continue;
             int sx, sy;
             grid_to_screen(index_to_floor(c->floor), s->x, &sx, &sy);
             if (c->target != c->floor && c->move_total) {
@@ -5266,8 +5284,15 @@ static int elev_add_car_at(int x, int floor)
         game.tower.money -= cost;
         game.tower.built_value += cost;
         people_set_num_cars(ps, i, s->num_cars + 1);
-        printf("Added car to shaft x=%d: now %d cars (cost $%d)\n",
-               x, s->num_cars, cost);
+        /* The EXE sets the new car's home to the CLICKED floor (PlaceElevator
+         * add-a-car path: car home (+0xBA+slot) = floor) and spawns it there. */
+        {
+            int ci = s->num_cars - 1;
+            people_set_home(ps, i, ci, fidx);
+            s->car[ci].floor = s->car[ci].target = (uint8_t)fidx;
+        }
+        printf("Added car to shaft x=%d: now %d cars (home F%d, cost $%d)\n",
+               x, s->num_cars, floor, cost);
         return 1;
     }
     return 0;
@@ -6146,9 +6171,32 @@ static void handle_event(SDL_Event *ev)
                 if (game.finger_mode) break;   /* tool consumes the click */
             }
 
+            /* Plain pointer on a shaft's motor room or pit: grab the cap and
+             * drag it away from the shaft to extend — the original's
+             * mechanical-room handles. Borrow the shaft's type as the build
+             * tool for this one drag so the ghost/placement machinery runs
+             * unchanged, then restore on release. */
+            if (game.build_type == ITEM_NONE && !game.demolish_mode &&
+                !game.finger_mode && !game.inspect_mode) {
+                PeopleSim *ps = &game.sim.people;
+                int fidx = floor_to_index(game.mouse_floor);
+                for (int i = 0; i < ps->shaft_count; i++) {
+                    ElevatorShaft *s = &ps->shafts[i];
+                    if (!s->active) continue;
+                    if (game.mouse_cell < s->x ||
+                        game.mouse_cell >= s->x + ITEM_WIDTH[s->type]) continue;
+                    if (fidx != s->hi + 1 && fidx != s->lo - 1) continue;
+                    game.build_type = s->type;
+                    game.cap_drag = 1;
+                    game.dragging = 1;
+                    game.drag_start_cell = s->x;
+                    game.drag_start_floor = game.mouse_floor;
+                    break;
+                }
+            }
             /* Normal game click — anchor centered on the cursor, matching
              * the placement ghost. */
-            if (game.build_type != ITEM_NONE) {
+            else if (game.build_type != ITEM_NONE) {
                 game.dragging = 1;
                 game.drag_start_cell = build_origin_cell(game.mouse_cell);
                 game.drag_start_floor = game.mouse_floor;
@@ -6207,6 +6255,10 @@ static void handle_event(SDL_Event *ev)
                     drag_place_units();
                 }
                 game.dragging = 0;
+                if (game.cap_drag) {   /* hand back the plain pointer */
+                    game.build_type = ITEM_NONE;
+                    game.cap_drag = 0;
+                }
             }
         }
         break;
@@ -6519,8 +6571,12 @@ int main(int argc, char *argv[])
         sprites_apply_white_key(&game.sprites, game.renderer, 0x8828);
         /* Recycling collection truck (0x892E): white-keyed deco overlay. */
         sprites_apply_white_key(&game.sprites, game.renderer, 0x892E);
-        /* Construction workers (0x85EA, 3 frames): white-keyed. */
+        /* Construction workers (0x85EA, 6 16px frames): white-keyed. */
         sprites_apply_white_key(&game.sprites, game.renderer, SPR_CONST_WORKER);
+        /* Construction floors: the scaffold grid's open diamonds and the
+         * walls-up stage's gaps are white in the sheet = see-through. */
+        sprites_apply_white_key(&game.sprites, game.renderer, SPR_CONST_GRID);
+        sprites_apply_white_key(&game.sprites, game.renderer, SPR_CONST_SOLID);
         /* Medical: 0x8728 + 0x8729 horizontally (+ 0x872A via triple) */
         if (sprites_compose_h(&game.sprites, game.renderer, 0x8728, 0x8729, SPR_MEDICAL_COMP) == 0) {
             /* Try adding 0x872A if present */

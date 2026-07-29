@@ -150,6 +150,10 @@ typedef struct {
     uint8_t  active;
     ItemType type;          /* ITEM_ELEVATOR_SHAFT / _SERVICE / _EXPRESS */
     uint8_t  lo, hi;        /* shaft floor range (grid indices) */
+    uint8_t  hidden;        /* dialog Show Off: world render draws only the
+                             * two guide rails so what's behind shows through.
+                             * Lives in the struct's alignment hole before x —
+                             * sizeof unchanged, old saves read 0 = shown. */
     int      x;             /* shaft x cell */
     uint8_t  capacity;      /* 42 express, 21 standard/service (group+2) */
     uint8_t  num_cars;

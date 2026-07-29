@@ -460,7 +460,16 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         Tenant *t = &tower->tenants[i];
         if (t->type == ITEM_NONE || t->type == ITEM_LOBBY || t->type == ITEM_FLOOR)
             continue;
-        if (item_is_transport(t->type)) continue;
+        if (item_is_transport(t->type)) {
+            /* Transports build instantly and are never state-machined, but
+             * saves from before that fix hold shafts frozen in
+             * TENANT_CONSTRUCTION (with an eternal worker on them) — heal. */
+            if (t->state != TENANT_OCCUPIED) {
+                t->state = TENANT_OCCUPIED;
+                t->construction = 0;
+            }
+            continue;
+        }
 
         int type_idx = (int)t->type;
         int is_active = (type_idx < ITEM_TYPE_COUNT) ?

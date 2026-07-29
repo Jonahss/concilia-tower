@@ -168,6 +168,7 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             if (!os->active || os->x != ns->x || os->type != ns->type)
                 continue;
             ns->num_cars = os->num_cars;
+            ns->hidden = os->hidden;
             int lo = os->lo > ns->lo ? os->lo : ns->lo;
             int hi = os->hi < ns->hi ? os->hi : ns->hi;
             for (int f = lo; f <= hi; f++) ns->serviced[f] = os->serviced[f];

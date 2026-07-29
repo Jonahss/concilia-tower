@@ -109,7 +109,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
             for (int cx = x; cx < x + width; cx++) {
                 ItemType existing = tower->grid[fidx][cx].type;
-                if (existing != ITEM_NONE && existing != ITEM_LOBBY) {
+                if (existing != ITEM_NONE && existing != ITEM_LOBBY &&
+                    existing != ITEM_FLOOR) {
                     printf("  [reject] Lobby at F%d x%d: cell %d has %s\n",
                            floor, x, cx, tower_item_name(existing));
                     return 0;
@@ -220,11 +221,16 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             for (int cx = x; cx < x + width; cx++) {
                 ItemType occ = tower->grid[fidx][cx].type;
                 if (occ == ITEM_NONE) continue;
-                /* An elevator shaft passes THROUGH the lobby and plain floors —
-                 * the shaft shares those structural cells (this is how you run a
-                 * shaft up from the ground lobby). It still can't overlap rooms
-                 * or another shaft. */
-                if (elev && (occ == ITEM_LOBBY || occ == ITEM_FLOOR)) continue;
+                /* Plain floorspace is buildable-over: the EXE's placement gate
+                 * (ValidatePlacementArea 11f8:2e64) is floor-DECK based — a
+                 * built floor with nothing on it is exactly where you build. */
+                if (occ == ITEM_FLOOR && type != ITEM_FLOOR) continue;
+                /* An elevator shaft passes THROUGH everything except another
+                 * shaft — the same deck-extent gate is the EXE's only overlap
+                 * rule for elevators, and real .TWR saves legally overlap
+                 * shaft columns with tenants. The shaft stamps the grid cells
+                 * (the tenant keeps rendering from the tenant array). */
+                if (elev && !item_is_elevator(occ)) continue;
                 printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
                        tower_item_name(type), floor, x, f, cx,
                        tower_item_name(occ));
@@ -436,6 +442,11 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->state = 0;
     t->capacity = CAP_EMPTY;
     t->construction = (type < ITEM_TYPE_COUNT) ? CONSTRUCTION_TIME[type] : 0;
+    /* Transports appear instantly — the EXE shows no build animation on
+     * shafts or stairs, and update_tenants skips transports entirely, so a
+     * transport left in TENANT_CONSTRUCTION would never finish (the
+     * everlasting-construction-workers-on-the-shaft bug). */
+    if (item_is_transport(type)) t->construction = 0;
     t->population = 0;
     t->stress = 0;
     t->complaints = 0;
@@ -471,7 +482,9 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
-                cell->flags = CELL_OCCUPIED;
+                /* keep any stair/escalator overlay riding on this cell */
+                cell->flags = CELL_OCCUPIED |
+                              (cell->flags & CELL_TRANSPORT_OVERLAY);
             }
         } else {
             /* Mark transport presence with a flag but keep existing cell data */
@@ -519,6 +532,9 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
         if (idx < 0 || idx >= TOWER_FLOOR_COUNT) continue;
         for (int cx = t->x; cx < t->x + t->width; cx++) {
             TowerCell *cell = &tower->grid[idx][cx];
+            /* A shaft stamped over this tenant's cells owns them now —
+             * removing the tenant must not punch holes in the shaft. */
+            if (!is_transport && cell->tenant_id != t->id) continue;
             if (is_transport) {
                 cell->flags &= ~CELL_TRANSPORT_OVERLAY;  /* drop overlay, keep cell */
             } else if (t->type != ITEM_FLOOR && f >= 0) {
@@ -538,10 +554,38 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
         }
     }
     
+    /* Restore cells the removed item had stamped over other tenants (a
+     * bulldozed shaft that passed through rooms): re-assert every surviving
+     * non-overlay tenant whose footprint intersects the cleared rect. */
+    if (item_is_elevator(t->type)) {
+        int rf0 = t->floor, rf1 = t->floor + t->height - 1;
+        int rx0 = t->x, rx1 = t->x + t->width - 1;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *o = &tower->tenants[i];
+            if (o == t || o->type == ITEM_NONE ||
+                o->type == ITEM_STAIRS || o->type == ITEM_ESCALATOR) continue;
+            if (o->floor > rf1 || o->floor + o->height - 1 < rf0) continue;
+            if (o->x > rx1 || o->x + o->width - 1 < rx0) continue;
+            for (int f = o->floor; f < o->floor + o->height; f++) {
+                int idx = floor_to_index(f);
+                if (idx < 0 || idx >= TOWER_FLOOR_COUNT) continue;
+                for (int cx = o->x; cx < o->x + o->width; cx++) {
+                    TowerCell *cell = &tower->grid[idx][cx];
+                    if (cell->tenant_id) continue;   /* not a cleared cell */
+                    cell->type = o->type;
+                    cell->tenant_id = o->id;
+                    cell->cell_index = (uint8_t)(cx - o->x);
+                    cell->flags = CELL_OCCUPIED |
+                                  (cell->flags & CELL_TRANSPORT_OVERLAY);
+                }
+            }
+        }
+    }
+
     /* Remove tenant (swap with last) */
     int ti = (int)(t - tower->tenants);
     tower->tenants[ti] = tower->tenants[--tower->tenant_count];
-    
+
     return 1;
 }
 
@@ -600,7 +644,9 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
                 cell->type = type;
                 cell->tenant_id = id;
                 cell->cell_index = cx - x;
-                cell->flags = CELL_OCCUPIED;
+                /* keep any stair/escalator overlay riding on this cell */
+                cell->flags = CELL_OCCUPIED |
+                              (cell->flags & CELL_TRANSPORT_OVERLAY);
             }
         } else {
             for (int cx = x; cx < x + width; cx++) {
