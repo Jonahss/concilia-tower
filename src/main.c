@@ -218,6 +218,17 @@
 #define SPR_RECYCLING_COMP    0x002B  /* 5-frame trash-accumulation cycle: top row
                                        * 0x88E9..0x88ED over bottom 0x8929..0x892D
                                        * (OS loadRecycling). 200px frames. */
+/* Style-variant composites (style trace 2026-07-29): each type's extra
+ * styles are the next consecutive resource pairs after the style-0 art.
+ * Selection = Tenant.style; missing art falls back to style 0. */
+#define SPR_HOTEL_S_S1        0x0040  /* 0x84AA + 0x84AB */
+#define SPR_HOTEL_T_S1        0x0041  /* 0x84EA + 0x84EB (S2/S3 follow) */
+#define SPR_HOTEL_T_S2        0x0042
+#define SPR_HOTEL_T_S3        0x0043
+#define SPR_HOTEL_SUITE_S1    0x0044  /* 0x852A + 0x852B */
+#define SPR_CONDO_S1          0x0045  /* 0x862D..0x8631 joined */
+#define SPR_CONDO_S2          0x0046  /* 0x8632..0x8636 joined */
+
 #define SPR_CONDO_COMP        0x002A  /* 0x8628..0x862c joined = 5 frames of 128px:
                                        * 0 occupied-day, 1 occupied-evening,
                                        * 2 occupied-night, 3 for-sale-day,
@@ -1296,6 +1307,25 @@ static void render_tower(void)
                                 tenant->type == ITEM_HOTEL_TWIN ||
                                 tenant->type == ITEM_HOTEL_SUITE);
 
+                /* Art style: swap in this tenant's style sheet (the
+                 * intra-sheet frame math below is style-invariant). */
+                if (tenant->style && (is_hotel || tenant->type == ITEM_CONDO)) {
+                    uint16_t sid = 0;
+                    switch (tenant->type) {
+                    case ITEM_HOTEL_SINGLE: sid = SPR_HOTEL_S_S1; break;
+                    case ITEM_HOTEL_TWIN:
+                        sid = (uint16_t)(SPR_HOTEL_T_S1 + tenant->style - 1);
+                        break;
+                    case ITEM_HOTEL_SUITE:  sid = SPR_HOTEL_SUITE_S1; break;
+                    case ITEM_CONDO:
+                        sid = (uint16_t)(SPR_CONDO_S1 + tenant->style - 1);
+                        break;
+                    default: break;
+                    }
+                    Sprite *alt = sid ? sprites_find(&game.sprites, sid) : NULL;
+                    if (alt) { spr = alt; nframes = spr->w / frame_w_hint; }
+                }
+
                 int frame_idx;
                 if (is_hotel && nframes >= 9) {
                     /* Hotel room sheet = door (frame 0) + 8 room frames as
@@ -1341,7 +1371,9 @@ static void render_tower(void)
                         office_sheet = 0x85ab;             /* bare vacant room */
                         frame_idx = night ? 1 : 0;
                     } else {
-                        int variant = tenant->id % 6;      /* stable furniture pick */
+                        /* Furniture style from the build rotation (the
+                         * EXE's 0x7954 counter mod 6), not id-random. */
+                        int variant = tenant->style % 6;
                         office_sheet = 0x85a8 + variant / 2;
                         frame_idx = (variant % 2) * 2 + (night ? 1 : 0);
                     }
@@ -7347,6 +7379,29 @@ int main(int argc, char *argv[])
             sprites_compose_h(&game.sprites, game.renderer, 0x00F4, 0x862A, 0x00F5) == 0 &&
             sprites_compose_h(&game.sprites, game.renderer, 0x00F5, 0x862B, 0x00F6) == 0 &&
             sprites_compose_h(&game.sprites, game.renderer, 0x00F6, 0x862C, SPR_CONDO_COMP) == 0)
+            ok++; else fail++;
+        /* Style variants: hotel single/suite style 1, twin styles 1-3,
+         * condo styles 1-2 (style trace 2026-07-29). Failures are
+         * tolerated — draw falls back to the style-0 composite. */
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84AA, 0x84AB, SPR_HOTEL_S_S1) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84EA, 0x84EB, SPR_HOTEL_T_S1) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84EC, 0x84ED, SPR_HOTEL_T_S2) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x84EE, 0x84EF, SPR_HOTEL_T_S3) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x852A, 0x852B, SPR_HOTEL_SUITE_S1) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x862D, 0x862E, 0x00C0) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C0, 0x862F, 0x00C1) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C1, 0x8630, 0x00C2) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C2, 0x8631, SPR_CONDO_S1) == 0)
+            ok++; else fail++;
+        if (sprites_compose_h(&game.sprites, game.renderer, 0x8632, 0x8633, 0x00C3) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C3, 0x8634, 0x00C4) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C4, 0x8635, 0x00C5) == 0 &&
+            sprites_compose_h(&game.sprites, game.renderer, 0x00C5, 0x8636, SPR_CONDO_S2) == 0)
             ok++; else fail++;
         /* Recycling: 5-frame trash cycle — each frame is top row 0x88E9+i over
          * bottom row 0x8929+i (OS loadRecycling), then the 5 joined across. */

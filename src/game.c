@@ -3474,7 +3474,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 12u  /* v12: person inspection (Person.member,
+#define SAVE_VERSION 13u  /* v13: art styles (Tenant.style,
+                             Tower.style_ctr).
+                             v12: person inspection (Person.member,
                              Tower.person_names registry).
                              v11: parking (space_usable, car counters,
                            * Person.parked_cat) */
@@ -3530,5 +3532,9 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
         sim->speed = SPEED_FAST;
         sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_FAST];
     }
+    /* The EXE zeroes the style rotation on load (tower_clear runs
+     * before deserializing; the counters are not in the file) — the
+     * per-tenant styles it stamped survive in the records. */
+    if (ok) memset(tower->style_ctr, 0, sizeof tower->style_ctr);
     return ok ? 0 : -1;
 }

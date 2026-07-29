@@ -2372,6 +2372,70 @@ static void test_route_loss(void)
           "public shafts don't cover the service network");
 }
 
+static void test_art_styles(void)
+{
+    printf("art styles (build rotation 0x794C.., record word +6):\n");
+    fresh();
+    tower_extend_deck(&tw, 1, 100, 170);
+    int seq_ok = 1;
+    for (int i = 0; i < 7; i++) {
+        uint16_t o = place(ITEM_OFFICE, 1, 100 + i * 9);
+        if (!o || tenant(o)->style != (uint8_t)(i % 6)) seq_ok = 0;
+    }
+    CHECK(seq_ok, "offices cycle 6 furniture styles in strict order");
+
+    tower_extend_deck(&tw, 2, 100, 140);
+    uint16_t tw0 = place(ITEM_HOTEL_TWIN, 2, 100);
+    place(ITEM_HOTEL_TWIN, 2, 106);
+    place(ITEM_HOTEL_TWIN, 2, 112);
+    place(ITEM_HOTEL_TWIN, 2, 118);
+    uint16_t tw4 = place(ITEM_HOTEL_TWIN, 2, 124);
+    CHECK(tenant(tw0) && tenant(tw4) &&
+          tenant(tw0)->style == 0 && tenant(tw4)->style == 0,
+          "twin rotation wraps at 4 styles");
+
+    /* The EXE zeroes the counters on load; stamped styles survive */
+    const char *sv = "/tmp/ct_styletest.sav";
+    game_save(&sim, &tw, sv);
+    tw.style_ctr[3] = 5;               /* dirty the office counter */
+    CHECK(game_load(&sim, &tw, sv) == 0, "save/load round-trip");
+    CHECK(tw.style_ctr[3] == 0, "rotation counters reset on load");
+    int styles_ok = 1, k = 0;
+    for (int i = 0; i < tw.tenant_count; i++)
+        if (tw.tenants[i].type == ITEM_OFFICE) {
+            if (tw.tenants[i].style != (uint8_t)(k % 6)) styles_ok = 0;
+            k++;
+        }
+    CHECK(styles_ok && k == 7, "per-tenant styles survive the load");
+
+    /* .TDT round-trip: style word +6, hotel condition at STATUS +5 (not
+     * the money byte), rent class at +0x10 (not the judge byte) */
+    Tenant *room = tenant(tw0);
+    room->condition = ROOM_INFESTED;
+    room->rent_class = 2;
+    uint8_t want_style = tenant(tw4)->style;
+    char err[128];
+    CHECK(twr_export("/tmp/ct_styletest.tdt", &tw, &sim, err, sizeof err) == 0,
+          "export with styles");
+    fresh();
+    CHECK(twr_import("/tmp/ct_styletest.tdt", &tw, &sim, err, sizeof err) == 0,
+          "re-import");
+    Tenant *back = NULL, *back4 = NULL;
+    int twins = 0;
+    for (int i = 0; i < tw.tenant_count; i++)
+        if (tw.tenants[i].type == ITEM_HOTEL_TWIN) {
+            if (twins == 0) back = &tw.tenants[i];
+            back4 = &tw.tenants[i];
+            twins++;
+        }
+    CHECK(back && back->condition == ROOM_INFESTED,
+          "hotel condition round-trips through status byte +5");
+    CHECK(back && back->rent_class == 2,
+          "rent class round-trips through +0x10");
+    CHECK(back4 && twins == 5 && back4->style == want_style,
+          "art styles round-trip through record word +6");
+}
+
 static void test_construct_queue(void)
 {
     printf("construction queue (ConstructQ 11f0:004b):\n");
@@ -2510,6 +2574,7 @@ int main(void)
     test_build_caps();
     test_deck_economics();
     test_person_names();
+    test_art_styles();
     test_construct_queue();
     test_route_loss();
     test_unreachable_empty();

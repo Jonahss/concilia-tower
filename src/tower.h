@@ -342,6 +342,11 @@ typedef struct {
      * ages, quotas set), matinee + evening showings for movies / one
      * evening event for the party hall, tiered income at close from the
      * day's total attendance. */
+    uint8_t  style;            /* art style — the EXE's per-type build
+                                  rotation (counters 0x794C..0x7956):
+                                  hotel single/suite 0-1, twin 0-3,
+                                  office 0-5, condo 0-2; .TDT record
+                                  bytes +6..7. Others: 0. */
     uint8_t  movie_id;         /* cinema: 0..13 (0-6 ordinary, 7-13 hits);
                                   party hall: 0xFF; others: 0 */
     uint8_t  venue_age_days;   /* days since the film changed (caps 0x7F);
@@ -440,6 +445,13 @@ typedef struct {
     uint8_t   twr_retail[0x2400];
     /* Named tenants ("Office Girl", ...): 16-byte C strings appended
      * after the serializer proper; preserved for round-trip. */
+    /* Art-style rotation counters (EXE globals 0x794C/4E/50/54/56):
+     * single, twin, suite, office, condo. Advanced by tower_style_next
+     * at placement; the EXE zeroes them on BOTH new game and load
+     * (tower_clear 10d0:086c runs before deserializing), so game_load
+     * resets them too — per-tenant picks survive in Tenant.style. */
+    uint8_t   style_ctr[5];
+
     char      twr_names[20][16];
     int       twr_name_count;
 
@@ -539,6 +551,13 @@ int tower_shaft_group_count(const Tower *tower);
 int  tower_deck_price(const Tower *tower, int floor);
 long tower_deck_extend_cost(const Tower *tower, int floor, int x1, int x2);
 int  tower_extend_deck(Tower *tower, int floor, int x1, int x2);
+
+/* Art-style rotation: returns the next style for a type and advances
+ * its counter (hotel single/suite mod 2, twin mod 4, office mod 6,
+ * condo mod 3); 0 for unstyled types. tower_style_mod gives the base
+ * (1 for unstyled) for import clamping. */
+uint8_t tower_style_next(Tower *tower, ItemType type);
+int     tower_style_mod(ItemType type);
 
 /* Person-name registry (20 slots, 15-char names — NameT seg_1188).
  * set() returns 0 on success, -1 when all 20 slots are taken (the UI

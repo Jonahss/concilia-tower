@@ -88,6 +88,38 @@ Tenant *tower_tenant(Tower *tower, uint16_t id)
     return NULL;
 }
 
+/* ---- Art-style rotation (EXE build counters 0x794C.., style trace
+ * 2026-07-29): unit looks cycle per type in strict order — offices walk
+ * 6 furniture styles, condos 3 facades, hotels 2/4/2 rooms. Never
+ * random. ---- */
+
+static int style_slot(ItemType ty, int *mod)
+{
+    switch (ty) {
+    case ITEM_HOTEL_SINGLE: *mod = 2; return 0;
+    case ITEM_HOTEL_TWIN:   *mod = 4; return 1;
+    case ITEM_HOTEL_SUITE:  *mod = 2; return 2;
+    case ITEM_OFFICE:       *mod = 6; return 3;
+    case ITEM_CONDO:        *mod = 3; return 4;
+    default:                *mod = 1; return -1;
+    }
+}
+
+int tower_style_mod(ItemType type)
+{
+    int mod; style_slot(type, &mod);
+    return mod;
+}
+
+uint8_t tower_style_next(Tower *tower, ItemType type)
+{
+    int mod, slot = style_slot(type, &mod);
+    if (slot < 0) return 0;
+    uint8_t s = (uint8_t)(tower->style_ctr[slot] % mod);
+    tower->style_ctr[slot] = (uint8_t)((s + 1) % mod);
+    return s;
+}
+
 /* ---- Person-name registry (NameT seg_1188: 20 slots, 15-char names) ---- */
 
 static struct PersonNameSlot *person_name_find(Tower *tower,
@@ -964,6 +996,10 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->demand_category = 0xFF;
     if (type == ITEM_CINEMA)          t->movie_id = (uint8_t)(rand() % 14);
     else if (type == ITEM_PARTY_HALL) t->movie_id = 0xFF;  /* Average until JudgeT moves it */
+    /* Art style from the per-type rotation. (EXE quirk not kept: it
+     * advances the counter even when placement FAILS — invisible, and
+     * our can_place runs on hover previews where that would spin.) */
+    t->style = tower_style_next(tower, type);
     
     /* Skip construction for instant-build items */
     if (t->construction <= 0) {

@@ -187,7 +187,11 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
             if (id) {
                 placed++;
                 Tenant *ten = &tower->tenants[tower->tenant_count - 1];
-                ten->rent_class = t[0x0f] <= 3 ? t[0x0f] : 1;
+                /* Player rate class is +0x10; +0x0F is the JudgeT
+                 * category byte (style trace 2026-07-29 — the old
+                 * t[0x0f] read grabbed the judge's verdict). */
+                ten->rent_class = t[0x10] <= 3 ? t[0x10] : 1;
+                if (t[0x0f] <= 2) ten->demand_category = t[0x0f];
                 /* the venue slot table (movie ids) lives outside the floor
                  * map; assign an id-stable film like the retail variants */
                 if (ten->type == ITEM_CINEMA)          ten->movie_id = id % 14;
@@ -195,18 +199,24 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
                 if (it == ITEM_RESTAURANT || it == ITEM_SHOP ||
                     it == ITEM_FAST_FOOD)
                     ten->retail_ref = t[6] + 1;
+                /* Art style: record word +6..7 for the five styled
+                 * types (polymorphic field — retail index above). */
+                ten->style = (uint8_t)(((t[6] | (t[7] << 8)))
+                                       % tower_style_mod(it));
                 ten->twr_unk[0] = t[0x0c];
                 ten->twr_unk[1] = t[0x0d];
                 ten->twr_unk[2] = t[0x0e];
                 ten->twr_unk[3] = t[0x10];
                 ten->twr_unk[4] = t[0x11];
-                /* Hotel room condition rides in the status byte's band
-                 * (+0x0B: >=0x38 infested, >=0x28 dirty — the EXE
-                 * round-trips it verbatim, so real saves carry roaches) */
+                /* Hotel room condition rides in the STATUS byte +5
+                 * (day/night bands: 0x18/0x20 clean, 0x28/0x30 dirty,
+                 * 0x38/0x40 infested). The old +0x0B read hit the
+                 * always-zero money high byte, so imported saves never
+                 * showed their roaches (style trace 2026-07-29). */
                 if (item_is_hotel_room(it)) {
-                    if (t[0x0b] >= 0x38)      ten->condition = ROOM_INFESTED;
-                    else if (t[0x0b] >= 0x28) ten->condition = ROOM_DIRTY;
-                    else                      ten->condition = ROOM_CLEAN;
+                    if (t[5] >= 0x38)      ten->condition = ROOM_INFESTED;
+                    else if (t[5] >= 0x28) ten->condition = ROOM_DIRTY;
+                    else                   ten->condition = ROOM_CLEAN;
                 }
                 if (under_construction) {
                     ten->state = TENANT_CONSTRUCTION;
@@ -719,24 +729,35 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             int ty = r->type;
             if (r->ten && r->ten->state == TENANT_CONSTRUCTION) ty = -ty;
             t[4] = (uint8_t)(int8_t)ty;
-            /* +5 status and +7 people ref stay 0: no people exported */
+            /* +7 people ref stays 0: no people exported */
             if (r->ten && r->ten->retail_ref)
                 t[6] = (uint8_t)(r->ten->retail_ref - 1);
             if (r->ten) {
-                /* Hotel rooms: write the condition band back into the
-                 * status byte (day variants; no people are exported, so
-                 * every room goes out as a vacant band) */
+                /* Hotel rooms: condition band in the STATUS byte +5
+                 * (day variants; no people exported, so every room
+                 * goes out vacant). +0x0B is the money high byte —
+                 * the old code wrote the band there (style trace). */
                 if (item_is_hotel_room(r->ten->type))
-                    t[0x0b] = (r->ten->condition == ROOM_INFESTED) ? 0x38
-                            : (r->ten->condition == ROOM_DIRTY)    ? 0x28
-                            : 0x18;
+                    t[5] = (r->ten->condition == ROOM_INFESTED) ? 0x38
+                         : (r->ten->condition == ROOM_DIRTY)    ? 0x28
+                         : 0x18;
+                /* Art style word +6..7 for the styled types */
+                if (tower_style_mod(r->ten->type) > 1) {
+                    t[6] = r->ten->style;
+                    t[7] = 0;
+                }
                 t[0x0c] = r->ten->twr_unk[0];
                 t[0x0d] = r->ten->twr_unk[1];
                 t[0x0e] = r->ten->twr_unk[2] ? r->ten->twr_unk[2] : 1;
+                /* +0x0F = JudgeT category, +0x10 = player rate class */
                 t[0x0f] = (r->ten->type == ITEM_LOBBY ||
                            r->ten->type == ITEM_FLOOR)
-                              ? 0xff : r->ten->rent_class;
-                t[0x10] = r->ten->twr_unk[3];
+                              ? 0xff : r->ten->demand_category;
+                t[0x10] = (tower_style_mod(r->ten->type) > 1 ||
+                           r->ten->type == ITEM_RESTAURANT ||
+                           r->ten->type == ITEM_SHOP ||
+                           r->ten->type == ITEM_FAST_FOOD)
+                              ? r->ten->rent_class : r->ten->twr_unk[3];
                 t[0x11] = r->ten->twr_unk[4];
             } else {
                 t[0x0e] = 1;
