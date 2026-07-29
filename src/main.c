@@ -2273,6 +2273,31 @@ static void elv_mode_glyph(int cx, int cy, int mode)
 
 /* Faithful elevator dialog: the original 0x8190 artwork with live data
  * overlaid. Interaction model grounded in the decomp (seg_1098 ElvDlogT). */
+/* Person-inspection popup opener (defined with the person popup code). */
+static void open_person_popup_at(uint16_t pid, int x, int y);
+/* Clickable silhouette strip shared by the occupant/rider lists. */
+static void draw_person_strip(const uint16_t *pids, int n, int x, int y);
+static uint16_t person_strip_hit(const uint16_t *pids, int n, int x, int y,
+                                 int mx, int my);
+#define PSTRIP_PITCH 18
+#define PSTRIP_H     36
+
+/* Riders strip under the elevator dialog: everyone aboard this shaft's
+ * cars, as clickable silhouettes (the original's passenger list —
+ * people-list family 1100:327f clicks through to PepleInfoDialog). */
+#define ELV_RIDERS_H 46
+static int elv_riders_collect(const ElevatorShaft *s, uint16_t *out, int max)
+{
+    int n = 0;
+    for (int c = 0; c < CARS_PER_SHAFT && n < max; c++) {
+        const ElevatorCar *car = &s->car[c];
+        if (!car->active) continue;
+        for (int k = 0; k < CAR_SLOTS && n < max; k++)
+            if (car->pax[k]) out[n++] = car->pax[k];
+    }
+    return n;
+}
+
 static void render_elv_dialog_faithful(void)
 {
     int si = elv_dialog_shaft();
@@ -2455,6 +2480,19 @@ static void render_elv_dialog_faithful(void)
         elv_box(bx, by, ELV_SIM_BTN, 255, 0, 255, 0);
         elv_box(bx, by, ELV_OK_BTN, 255, 0, 255, 0);
     }
+
+    /* Riders strip — a panel below the EXE bitmap listing everyone
+     * aboard this shaft's cars; click a silhouette to inspect them. */
+    {
+        uint16_t pids[10];
+        int n = elv_riders_collect(s, pids, 10);
+        elv_box(bx, by, 0, ELV_DLG_H, ELV_DLG_W, ELV_RIDERS_H,
+                192, 192, 192, 1);
+        if (n)
+            draw_person_strip(pids, n, bx + 8, by + ELV_DLG_H + 5);
+        else
+            stats_label(bx + 8, by + ELV_DLG_H + 15, "No riders", ink);
+    }
     (void)ps;
 }
 
@@ -2629,7 +2667,17 @@ static int elv_dialog_click_faithful(int mx, int my)
     int bx = game.elv_x, by = game.elv_y + WIN_TITLEBAR_H;
 
     if (mx < game.elv_x || mx >= game.elv_x + ELV_DLG_W ||
-        my < game.elv_y || my >= by + ELV_DLG_H) return 0;
+        my < game.elv_y || my >= by + ELV_DLG_H + ELV_RIDERS_H) return 0;
+
+    /* Riders strip below the bitmap: click a silhouette to inspect. */
+    if (my >= by + ELV_DLG_H) {
+        uint16_t pids[10];
+        int n = elv_riders_collect(s, pids, 10);
+        uint16_t pid = person_strip_hit(pids, n, bx + 8, by + ELV_DLG_H + 5,
+                                        mx, my);
+        if (pid) open_person_popup_at(pid, mx, my);
+        return 1;
+    }
 
     /* WD / WE day-type tabs */
     if (pt_in(mx, my, bx, by, ELV_WD_TAB)) { game.elv_day = 0; return 1; }
@@ -2769,7 +2817,7 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
     game.elv_y = btn_y - 60;
     if (game.elv_x + ELV_W > game.screen_w)
         game.elv_x = game.screen_w - ELV_W - 8;
-    int dlg_h = WIN_TITLEBAR_H + ELV_DLG_H;
+    int dlg_h = WIN_TITLEBAR_H + ELV_DLG_H + ELV_RIDERS_H;
     if (game.elv_y + dlg_h > game.screen_h)
         game.elv_y = game.screen_h - dlg_h - 8;
     if (game.elv_y < 0) game.elv_y = 8;
@@ -5025,6 +5073,9 @@ typedef struct {
     SDL_Rect price_box, price_items[4];
     int has_newmovie;
     SDL_Rect newmovie_btn, rename_btn, ok_btn;
+    SDL_Rect occ_row;                 /* occupants-now silhouette strip */
+    uint16_t occ_pid[12];
+    int occ_n;
 } TiLayout;
 
 static void ti_build(const Tenant *t, TiLayout *L)
@@ -5105,6 +5156,26 @@ static void ti_build(const Tenant *t, TiLayout *L)
         }
         y += 20;
     }
+    /* Occupants-now row (the original's people-list family, 1100:327f):
+     * everyone whose home is this tenant and who is inside it right now,
+     * as clickable silhouettes feeding the person popup. */
+    L->occ_n = 0;
+    {
+        PeopleSim *ps = &game.sim.people;
+        int fidx = floor_to_index(t->floor);
+        for (int i = 0; i < ps->people_high && L->occ_n < 12; i++) {
+            const Person *p = &ps->people[i];
+            if (p->home_tenant != t->id) continue;
+            if (p->state != PERSON_AT_DEST) continue;
+            if (p->cur_floor != (uint8_t)fidx) continue;
+            L->occ_pid[L->occ_n++] = (uint16_t)(i + 1);
+        }
+    }
+    if (L->occ_n) {
+        L->occ_row = (SDL_Rect){ pad, y + 4, INSPECT_W - 2 * pad, PSTRIP_H };
+        y += 4 + PSTRIP_H + 4;
+    }
+
     int btn_y = y + 6;
     L->rename_btn = (SDL_Rect){ pad, btn_y, 64, 20 };
     if (L->has_newmovie) L->newmovie_btn = (SDL_Rect){ pad + 72, btn_y, 74, 20 };
@@ -5424,6 +5495,46 @@ static SDL_Rect person_btn_name(SDL_Rect d)
 static SDL_Rect person_btn_ok(SDL_Rect d)
 { return (SDL_Rect){ d.x + d.w - 76, d.y + d.h - 34, 64, 22 }; }
 
+static void draw_person_strip(const uint16_t *pids, int n, int x, int y)
+{
+    Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+    for (int k = 0; k < n; k++) {
+        if (!pids[k]) continue;
+        if (qs) {
+            int fig = (pids[k] * 7) % 40;   /* same identity as the portrait */
+            SDL_Rect src = { fig * 16, 0, 16, PSTRIP_H };
+            SDL_Rect dst = { x + k * PSTRIP_PITCH, y, 16, PSTRIP_H };
+            SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+        } else {
+            SDL_SetRenderDrawColor(game.renderer, 40, 40, 40, 255);
+            SDL_Rect dst = { x + k * PSTRIP_PITCH, y + 8, 12, PSTRIP_H - 8 };
+            SDL_RenderFillRect(game.renderer, &dst);
+        }
+    }
+}
+
+static uint16_t person_strip_hit(const uint16_t *pids, int n, int x, int y,
+                                 int mx, int my)
+{
+    if (my < y || my >= y + PSTRIP_H) return 0;
+    int k = (mx - x) / PSTRIP_PITCH;
+    if (mx < x || k < 0 || k >= n) return 0;
+    return pids[k];
+}
+
+static void open_person_popup_at(uint16_t pid, int x, int y)
+{
+    game.person_open = 1;
+    game.person_pid = pid;
+    game.person_x = x + 16;
+    game.person_y = y - 30;
+    if (game.person_x + PINFO_W > game.screen_w)
+        game.person_x = game.screen_w - PINFO_W - 8;
+    if (game.person_y + PINFO_H > game.screen_h)
+        game.person_y = game.screen_h - PINFO_H - 8;
+    if (game.person_y < 0) game.person_y = 8;
+}
+
 static const Person *person_popup_person(void)
 {
     if (!game.person_open || !game.person_pid) return NULL;
@@ -5553,6 +5664,10 @@ static void render_inspect_popup(void)
                                    L.price_items[k].w, L.price_items[k].h };
         draw_price_dropdown(t, box, items);
     }
+
+    if (L.occ_n)
+        draw_person_strip(L.occ_pid, L.occ_n,
+                          wx + L.occ_row.x, wy + L.occ_row.y);
 
     draw_dlg_button((SDL_Rect){ wx + L.rename_btn.x, wy + L.rename_btn.y, L.rename_btn.w, L.rename_btn.h },
                     "Rename", 1);
@@ -5785,6 +5900,12 @@ static int inspect_popup_click(int mx, int my)
     if (point_in_rect(mx, my, TIABS(L.ok_btn))) {
         game.inspect_open = 0; game.rent_dd_open = 0;
         return 1;
+    }
+    if (L.occ_n) {
+        uint16_t pid = person_strip_hit(L.occ_pid, L.occ_n,
+                                        wx + L.occ_row.x, wy + L.occ_row.y,
+                                        mx, my);
+        if (pid) { open_person_popup_at(pid, mx, my); return 1; }
     }
     SDL_Rect panel = { wx, wy, L.w, L.h };
     if (point_in_rect(mx, my, panel)) return 1;   /* swallow body clicks */
@@ -6164,7 +6285,7 @@ static int point_in_any_window(int mx, int my)
     /* Elevator dialog */
     if (game.elv_open &&
         mx >= game.elv_x && mx < game.elv_x + ELV_W &&
-        my >= game.elv_y && my < game.elv_y + WIN_TITLEBAR_H + ELV_DLG_H) {
+        my >= game.elv_y && my < game.elv_y + WIN_TITLEBAR_H + ELV_DLG_H + ELV_RIDERS_H) {
         return 1;
     }
     /* Financial report */
@@ -6861,15 +6982,7 @@ static void handle_event(SDL_Event *ev)
                 {
                     uint16_t pid = person_hit_test(ev->button.x, ev->button.y);
                     if (pid) {
-                        game.person_open = 1;
-                        game.person_pid = pid;
-                        game.person_x = ev->button.x + 16;
-                        game.person_y = ev->button.y - 30;
-                        if (game.person_x + PINFO_W > game.screen_w)
-                            game.person_x = game.screen_w - PINFO_W - 8;
-                        if (game.person_y + PINFO_H > game.screen_h)
-                            game.person_y = game.screen_h - PINFO_H - 8;
-                        if (game.person_y < 0) game.person_y = 8;
+                        open_person_popup_at(pid, ev->button.x, ev->button.y);
                         break;
                     }
                 }
