@@ -5388,6 +5388,10 @@ static void drag_place_units(void)
         play_snd(SND_BUILD_PLACE);   /* place/stamp confirm (referee row 17) */
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
+    } else if (tower_reject_reason()[0]) {
+        /* Nothing went down — tell the player why (the original shows the
+         * res-0x3eb placement error; ours lands in the event feed). */
+        add_event_message(tower_reject_reason());
     }
 }
 
@@ -6209,8 +6213,11 @@ static void handle_event(SDL_Event *ev)
                         if (tower_remove(&game.tower, tid)) {
                             play_snd(SND_DELETE);   /* referee row 22 */
                             printf("Demolish: %s\n", tower_item_name(ty));
-                        } else
+                        } else {
                             printf("Can't demolish %s\n", tower_item_name(ty));
+                            if (tower_reject_reason()[0])
+                                add_event_message(tower_reject_reason());
+                        }
                     }
                 }
                 break;
@@ -6322,9 +6329,12 @@ static void handle_event(SDL_Event *ev)
                                  : game.drag_start_cell;
                     if (item_unlocked(game.build_type) &&
                         !(item_is_elevator(game.build_type) &&
-                          elev_add_car_at(px, game.drag_start_floor)))
-                        tower_place(&game.tower, game.build_type,
-                                   game.drag_start_floor, px);
+                          elev_add_car_at(px, game.drag_start_floor))) {
+                        if (!tower_place(&game.tower, game.build_type,
+                                         game.drag_start_floor, px) &&
+                            tower_reject_reason()[0])
+                            add_event_message(tower_reject_reason());
+                    }
                 } else {
                     drag_place_units();
                 }

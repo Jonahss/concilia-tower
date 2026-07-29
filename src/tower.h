@@ -495,6 +495,23 @@ uint16_t tower_import_item(Tower *tower, ItemType type, int floor, int x,
 /* Check if placement is valid (no overlap, valid floor, etc.) */
 int tower_can_place(Tower *tower, ItemType type, int floor, int x);
 
+/* Why the last tower_can_place / tower_remove call refused, as the original
+ * game's player-facing string (res 0x3eb). Empty string when the last call
+ * succeeded. Lives outside Tower so the save format doesn't carry UI state. */
+const char *tower_reject_reason(void);
+
+/* The EXE's fixed tables: 24 elevator groups (seg_11f8 new-shaft slot scan),
+ * 64 stairs + 64 escalators (StairsT seg_10c0 stairs_data[64]), 16 venues
+ * (cinemas + party halls, [0xB400]). */
+#define TOWER_MAX_SHAFT_GROUPS 24
+#define TOWER_MAX_STAIRS       64
+#define TOWER_MAX_ESCALATORS   64
+#define TOWER_MAX_VENUES       16
+
+/* One group per contiguous same-type vertical shaft run (matches the
+ * people-sim collector's grouping). */
+int tower_shaft_group_count(const Tower *tower);
+
 /* Get the cell at grid position. Returns NULL if out of bounds. */
 TowerCell *tower_cell(Tower *tower, int floor, int x);
 

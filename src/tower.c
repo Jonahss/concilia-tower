@@ -4,6 +4,29 @@
 #include "game.h"  /* For CONSTRUCTION_TIME[], CAP_* defines */
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+
+/* ---- Player-facing rejection reason (res 0x3eb strings) ----
+ * Every refusal in tower_can_place/tower_remove records the original game's
+ * placement-error text here; the UI shows it when a click actually fails.
+ * Module-static (not in Tower) so the save format stays free of UI state. */
+static char last_reject[160];
+
+const char *tower_reject_reason(void)
+{
+    return last_reject;
+}
+
+static void set_reject(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(last_reject, sizeof last_reject, fmt, ap);
+    va_end(ap);
+    printf("  [reject] %s\n", last_reject);
+}
+
+#define REJECT(...) do { set_reject(__VA_ARGS__); return 0; } while (0)
 
 void tower_init(Tower *tower)
 {
@@ -65,44 +88,57 @@ Tenant *tower_tenant(Tower *tower, uint16_t id)
     return NULL;
 }
 
+/* Count elevator groups the way the transport collector does: one group per
+ * contiguous same-type vertical run of shaft cells (left column only). */
+int tower_shaft_group_count(const Tower *tower)
+{
+    int count = 0;
+    for (int x = 0; x < TOWER_WIDTH; x++) {
+        for (int f = 0; f < TOWER_FLOOR_COUNT; ) {
+            const TowerCell *c = &tower->grid[f][x];
+            if (!item_is_elevator(c->type) || c->cell_index != 0) { f++; continue; }
+            ItemType ty = c->type;
+            while (f < TOWER_FLOOR_COUNT && tower->grid[f][x].type == ty &&
+                   tower->grid[f][x].cell_index == 0) f++;
+            count++;
+        }
+    }
+    return count;
+}
+
 int tower_can_place(Tower *tower, ItemType type, int floor, int x)
 {
+    last_reject[0] = '\0';
     if (type <= ITEM_NONE || type >= ITEM_TYPE_COUNT) return 0;
-    
+
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
-    
+
     /* Check bounds — multi-floor items extend upward from placement floor */
-    if (x < 0 || x + width > TOWER_WIDTH) {
-        printf("  [reject] %s at F%d x%d: bounds (x+w=%d > TW=%d)\n",
-               tower_item_name(type), floor, x, x+width, TOWER_WIDTH);
-        return 0;
-    }
-    if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
-    if (floor + height - 1 > TOWER_MAX_FLOOR) return 0;
-    
+    if (x < 0 || x + width > TOWER_WIDTH)
+        REJECT("Cannot place item there");
+    if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR)
+        REJECT("Maximum height has been reached");
+    if (floor + height - 1 > TOWER_MAX_FLOOR)
+        REJECT("Maximum height has been reached");
+
     /* Check funds */
-    if (tower->money < cost) {
-        printf("  [reject] %s at F%d x%d: insufficient funds ($%ld < $%d)\n",
-               tower_item_name(type), floor, x, tower->money, cost);
-        return 0;
-    }
+    if (tower->money < cost)
+        REJECT("Not enough money for construction");
     
     /* Lobby placement: 4-cell segments on every 15th floor.
      * Can overlap existing lobby cells (extends the lobby).
      * From LobbyMake (seg_11e8) + OpenSkyscraper Game.cpp. */
     if (type == ITEM_LOBBY) {
-        if (floor % 15 != 0) {
-            printf("  [reject] Lobby at F%d: not a lobby floor (F%%15=%d)\n", floor, floor%15);
-            return 0;
-        }
-        if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) return 0;
-        if (x < 0 || x + width > TOWER_WIDTH) {
-            printf("  [reject] Lobby at F%d x%d: bounds (x+w=%d > TW=%d)\n", floor, x, x+width, TOWER_WIDTH);
-            return 0;
-        }
-        if (tower->money < cost) return 0;
+        if (floor % 15 != 0)
+            REJECT("Lobbys are only every 15 floors");
+        if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR)
+            REJECT("Maximum height has been reached");
+        if (x < 0 || x + width > TOWER_WIDTH)
+            REJECT("Cannot place item there");
+        if (tower->money < cost)
+            REJECT("Not enough money for construction");
         /* Lobby segments CAN overlap existing lobby — that's how extension works.
          * But they can't overlap non-lobby items. */
         int fidx = floor_to_index(floor);
@@ -111,11 +147,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                 ItemType existing = tower->grid[fidx][cx].type;
                 if (item_is_elevator(existing)) continue;  /* lobby coexists with shafts */
                 if (existing != ITEM_NONE && existing != ITEM_LOBBY &&
-                    existing != ITEM_FLOOR) {
-                    printf("  [reject] Lobby at F%d x%d: cell %d has %s\n",
-                           floor, x, cx, tower_item_name(existing));
-                    return 0;
-                }
+                    existing != ITEM_FLOOR)
+                    REJECT("Cannot place on top of other items");
             }
         }
         /* Floor 0: always allowed. Upper lobbies: need floor below. */
@@ -128,7 +161,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                         has_support = 1;
                 }
             }
-            if (!has_support) return 0;
+            if (!has_support)
+                REJECT("Cannot place item there");
         }
         return 1;
     }
@@ -139,10 +173,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
 
     /* Floor 0 is lobby-only — except transports: elevators and stairs connect
      * at the ground lobby in the original. */
-    if (floor == 0 && type != ITEM_LOBBY && type != ITEM_FLOOR && !item_is_transport(type)) {
-        printf("  [reject] %s at F0: only lobbies on ground floor\n", tower_item_name(type));
-        return 0;
-    }
+    if (floor == 0 && type != ITEM_LOBBY && type != ITEM_FLOOR && !item_is_transport(type))
+        REJECT("First floor is only for Lobby");
 
     /* Elevator placement has NO lobby/adjacency/content requirement — verified
      * against the binary (MakeElevator 11f8:0fea, globals.md #51/#52): a
@@ -166,11 +198,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             if (tower->grid[fidx2][x].type == ITEM_ELEVATOR_EXPRESS)
                 touches = 1;
         }
-        if (!touches) {
-            printf("  [reject] Express at F%d: new express shafts anchor at "
-                   "lobby floors (ground/basement/every 15th)\n", floor);
-            return 0;
-        }
+        if (!touches)
+            REJECT("New express shafts anchor at lobby floors (every 15th)");
     }
 
     /* Shaft clearance (CheckElevatorClearance 10a0:10e8 — seg44 drag trace
@@ -188,18 +217,10 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                 const TowerCell *c = &tower->grid[fi2][cx];
                 int inside = (cx >= x && cx < x + width);
                 if (item_is_elevator(c->type) &&
-                    (c->type != type || !inside)) {
-                    printf("  [reject] %s at F%d x%d: too close to another "
-                           "shaft (cell F%d,x%d)\n",
-                           tower_item_name(type), floor, x, f, cx);
-                    return 0;
-                }
-                if (inside && (c->flags & CELL_TRANSPORT_OVERLAY)) {
-                    printf("  [reject] %s at F%d x%d: a stair/escalator is "
-                           "in the way (F%d,x%d)\n",
-                           tower_item_name(type), floor, x, f, cx);
-                    return 0;
-                }
+                    (c->type != type || !inside))
+                    REJECT("Item requires more space on both sides");
+                if (inside && (c->flags & CELL_TRANSPORT_OVERLAY))
+                    REJECT("Cannot place over other transportation items");
             }
         }
 
@@ -213,18 +234,65 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                  tower->grid[f][x].type == type; f--) run++;
             for (int f = fi0 + 1; f < TOWER_FLOOR_COUNT &&
                  tower->grid[f][x].type == type; f++) run++;
-            if (run > 30) {
-                printf("  [reject] %s at F%d x%d: a shaft serves at most "
-                       "30 floors\n", tower_item_name(type), floor, x);
-                return 0;
-            }
+            if (run > 30)
+                REJECT("Elevator shaft can cover only 30 floors");
         }
+
+        /* Hard cap: 24 elevator groups tower-wide (the EXE's new-shaft slot
+         * scan, seg_11f8_tenant.c:527-530 — "max 0x18 = 24 groups; none
+         * free -> reject"). Only a segment that STARTS a new column run
+         * counts; touching an existing same-type run vertically is an
+         * extension of that group. Without this gate a 25th shaft takes the
+         * player's money and silently never gets cars (the sim-side
+         * MAX_SHAFTS collector stops at 24). */
+        int extends = 0;
+        for (int df = -1; df <= 1; df += 2) {
+            int fi2 = floor_to_index(floor + df);
+            if (fi2 >= 0 && fi2 < TOWER_FLOOR_COUNT &&
+                tower->grid[fi2][x].type == type)
+                extends = 1;
+        }
+        if (!extends && tower_shaft_group_count(tower) >= TOWER_MAX_SHAFT_GROUPS)
+            REJECT("No more elevator shafts available");
     }
 
     /* Underground-only items must be below floor 0 */
-    if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
+    if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0)
+        REJECT("Item unavailable above ground");
     if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
-        type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0) return 0;
+        type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0)
+        REJECT("Item not available underground");
+
+    /* Singletons and fixed-table caps (placement dispatcher seg_11f8 +
+     * StairsT seg_10c0): one metro ([0xB3E8], msg "Only one Metro Station
+     * allowed"), one cathedral ([0xB3EC]), 16 venue records (cinemas +
+     * party halls, [0xB400]), 64-record stairs and escalator tables. */
+    if (type == ITEM_METRO || type == ITEM_CATHEDRAL || type == ITEM_CINEMA ||
+        type == ITEM_PARTY_HALL || type == ITEM_STAIRS || type == ITEM_ESCALATOR) {
+        int metros = 0, cathedrals = 0, venues = 0, stairs = 0, escalators = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            switch (tower->tenants[i].type) {
+            case ITEM_METRO:      metros++;               break;
+            case ITEM_CATHEDRAL:  cathedrals++;           break;
+            case ITEM_CINEMA:
+            case ITEM_PARTY_HALL: venues++;               break;
+            case ITEM_STAIRS:     stairs++;               break;
+            case ITEM_ESCALATOR:  escalators++;           break;
+            default: break;
+            }
+        }
+        if (type == ITEM_METRO && metros > 0)
+            REJECT("Only one Metro Station allowed");
+        if (type == ITEM_CATHEDRAL && cathedrals > 0)
+            REJECT("Only one Cathedral allowed");
+        if ((type == ITEM_CINEMA || type == ITEM_PARTY_HALL) &&
+            venues >= TOWER_MAX_VENUES)
+            REJECT("Item no longer available");
+        if (type == ITEM_STAIRS && stairs >= TOWER_MAX_STAIRS)
+            REJECT("No more stairs available");
+        if (type == ITEM_ESCALATOR && escalators >= TOWER_MAX_ESCALATORS)
+            REJECT("No more escalators available");
+    }
 
     /* Parking (ParkingT, byte-verified 2026-07-11 referee):
      * one ramp strip per basement floor (real .TDT saves store exactly
@@ -236,11 +304,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (type == ITEM_RAMP) {
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
-            if (t->type == ITEM_RAMP && t->floor == floor) {
-                printf("  [reject] Ramp at F%d: floor already has a ramp\n",
-                       floor);
-                return 0;
-            }
+            if (t->type == ITEM_RAMP && t->floor == floor)
+                REJECT("This floor already has a Parking Ramp");
         }
     }
     if (type == ITEM_PARKING) {
@@ -250,15 +315,10 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             if (t->type == ITEM_RAMP && t->floor == floor) has_ramp = 1;
             if (t->type == ITEM_PARKING) spaces++;
         }
-        if (!has_ramp) {
-            printf("  [reject] Parking at F%d: build a ramp on this floor "
-                   "first\n", floor);
-            return 0;
-        }
-        if (spaces >= 512) {
-            printf("  [reject] Parking: the 512-space cap is reached\n");
-            return 0;
-        }
+        if (!has_ramp)
+            REJECT("Parking Ramps must be placed on this level");
+        if (spaces >= 512)
+            REJECT("Item no longer available");
     }
     
     /* Check for overlap on ALL floors this item occupies */
@@ -284,10 +344,7 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                  * column (the shaft keeps those grid cells — see
                  * tower_place). */
                 if (!elev && item_is_elevator(occ)) continue;
-                printf("  [reject] %s at F%d x%d: cell F%d,x%d has %s\n",
-                       tower_item_name(type), floor, x, f, cx,
-                       tower_item_name(occ));
-                return 0;
+                REJECT("Cannot place on top of other items");
             }
         }
     } else {
@@ -304,11 +361,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (uf >= 0 && uf < TOWER_FLOOR_COUNT)
             for (int cx = x; cx < x + width; cx++)
                 if (cell_has_transport_overlay(&tower->grid[uf][cx])) ov_upper = 1;
-        if (ov_lower && ov_upper) {
-            printf("  [reject] %s at F%d x%d: overlaps an existing stair/escalator\n",
-                   tower_item_name(type), floor, x);
-            return 0;
-        }
+        if (ov_lower && ov_upper)
+            REJECT("Cannot place over other transportation items");
     }
 
     /* Support check:
@@ -350,11 +404,9 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
 
-        if (!has_lower || !has_upper) {
-            printf("  [reject] %s at F%d: needs content on both floors (lower=%d upper=%d)\n",
-                   tower_item_name(type), floor, has_lower, has_upper);
-            return 0;
-        }
+        if (!has_lower || !has_upper)
+            REJECT(type == ITEM_ESCALATOR ? "Cannot place item there"
+                                          : "Cannot place stairs here");
     } else if (floor > 0) {
         /* Above ground: the WHOLE footprint needs support directly below —
          * a floor's extent can't overhang the one under it (the EXE's
@@ -362,25 +414,20 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
          * built floor, and decks grow only over decks). Partial support let
          * units cantilever off the tower edge — Jonah's overhang bug. */
         int below_idx = floor_to_index(floor - 1);
-        if (below_idx < 0 || below_idx >= TOWER_FLOOR_COUNT) return 0;
+        if (below_idx < 0 || below_idx >= TOWER_FLOOR_COUNT)
+            REJECT("Cannot place item there");
         for (int cx = x; cx < x + width; cx++) {
-            if (tower->grid[below_idx][cx].type == ITEM_NONE) {
-                printf("  [reject] %s at F%d x%d: overhangs the floor below "
-                       "(no deck under cell x%d)\n",
-                       tower_item_name(type), floor, x, cx);
-                return 0;
-            }
+            if (tower->grid[below_idx][cx].type == ITEM_NONE)
+                REJECT("Cannot place items wider than floor below");
         }
     } else {
         /* Underground (floor < 0): the whole footprint needs support above */
         int above_idx = floor_to_index(floor + height);
-        if (above_idx < 0 || above_idx >= TOWER_FLOOR_COUNT) return 0;
+        if (above_idx < 0 || above_idx >= TOWER_FLOOR_COUNT)
+            REJECT("Cannot place item there");
         for (int cx = x; cx < x + width; cx++) {
-            if (tower->grid[above_idx][cx].type == ITEM_NONE) {
-                printf("  [reject] %s at B%d x%d: no ceiling above cell x%d\n",
-                       tower_item_name(type), -floor, x, cx);
-                return 0;
-            }
+            if (tower->grid[above_idx][cx].type == ITEM_NONE)
+                REJECT("Cannot place item there");
         }
     }
     
@@ -576,12 +623,19 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
 
 int tower_remove(Tower *tower, uint16_t tenant_id)
 {
+    last_reject[0] = '\0';
     Tenant *t = tower_tenant(tower, tenant_id);
     if (!t) return 0;
 
     /* The lobby is structural and permanent — the bulldozer can't remove it
      * (matches the original: you can never demolish the ground lobby). */
-    if (t->type == ITEM_LOBBY) return 0;
+    if (t->type == ITEM_LOBBY)
+        REJECT("Cannot destroy this item");
+
+    /* The bulldozer refuses units still being built (res 0x3eb: "Cannot
+     * destroy items under construction"). */
+    if (t->state == TENANT_CONSTRUCTION)
+        REJECT("Cannot destroy items under construction");
 
     /* Value accounting: bulldozed construction is lost value */
     tower->built_value -= ITEM_COST[t->type];

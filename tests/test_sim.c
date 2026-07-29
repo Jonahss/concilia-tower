@@ -2118,7 +2118,16 @@ static void test_bulldozer(void)
     uint16_t off = place(ITEM_OFFICE, 1, 105);   /* 105..113 */
     int fidx = floor_to_index(1);
 
-    /* Bulldozing the office leaves the build floor behind, not bare dirt. */
+    /* The bulldozer refuses units still under construction ("Cannot destroy
+     * items under construction"). */
+    Tenant *offt = tower_tenant(&tw, off);
+    CHECK(offt->state == TENANT_CONSTRUCTION, "fresh office is under construction");
+    CHECK(tower_remove(&tw, off) == 0, "bulldozer refuses mid-construction unit");
+
+    /* Finish construction, then bulldozing works and leaves the build
+     * floor behind, not bare dirt. */
+    offt->construction = 0;
+    offt->state = TENANT_OCCUPIED;
     CHECK(tower_remove(&tw, off) == 1, "office bulldozed");
     int left_floor = 1;
     for (int cx = 105; cx <= 113; cx++)
@@ -2134,12 +2143,81 @@ static void test_bulldozer(void)
     CHECK(tw.grid[lidx][BX].type == ITEM_LOBBY, "lobby still standing after bulldoze attempt");
 }
 
+static void test_build_caps(void)
+{
+    printf("\n-- build caps and singletons (res 0x3eb) --\n");
+    fresh();
+
+    /* 24 elevator groups max: the 25th NEW shaft is rejected at build
+     * (seg_11f8 slot scan), while extending an existing shaft still works. */
+    int made = 0;
+    for (int i = 0; i < 24; i++)
+        if (place(ITEM_ELEVATOR_SHAFT, 1, 4 + i * 13)) made++;
+    CHECK(made == 24, "24 standard shafts placeable");
+    CHECK(tower_shaft_group_count(&tw) == 24, "collector sees 24 groups");
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_SHAFT, 1, 4 + 24 * 13) == 0,
+          "25th shaft rejected");
+    CHECK(strcmp(tower_reject_reason(),
+                 "No more elevator shafts available") == 0,
+          "player-facing shaft-cap reason");
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_SHAFT, 2, 4) == 1,
+          "extending shaft 1 upward is not a new group");
+
+    /* Metro is a singleton. */
+    fresh();
+    place(ITEM_FLOOR, 0, 100);
+    uint16_t m1 = place(ITEM_METRO, -3, 105);
+    CHECK(m1 != 0, "first metro placeable");
+    CHECK(tower_can_place(&tw, ITEM_METRO, -3, 140) == 0,
+          "second metro rejected");
+    CHECK(strcmp(tower_reject_reason(), "Only one Metro Station allowed") == 0,
+          "metro singleton reason");
+
+    /* Cathedral is a singleton. */
+    CHECK(place(ITEM_CATHEDRAL, 1, 105) != 0, "first cathedral placeable");
+    CHECK(tower_can_place(&tw, ITEM_CATHEDRAL, 1, 135) == 0,
+          "second cathedral rejected");
+    CHECK(strcmp(tower_reject_reason(), "Only one Cathedral allowed") == 0,
+          "cathedral singleton reason");
+
+    /* Fixed tables: 64 stairs, 64 escalators, 16 venue records. Inject
+     * counter fodder directly — the cap check only counts tenant types. */
+    fresh();
+    for (int i = 0; i < 64; i++) {
+        Tenant *t = &tw.tenants[tw.tenant_count++];
+        memset(t, 0, sizeof *t);
+        t->id = tw.next_tenant_id++;
+        t->type = ITEM_STAIRS;
+    }
+    CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX) == 0,
+          "65th stairs rejected");
+    CHECK(strcmp(tower_reject_reason(), "No more stairs available") == 0,
+          "stairs cap reason");
+    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX) != 0 ||
+          strcmp(tower_reject_reason(), "No more escalators available") != 0,
+          "stairs cap does not bleed into escalators");
+
+    fresh();
+    for (int i = 0; i < 16; i++) {
+        Tenant *t = &tw.tenants[tw.tenant_count++];
+        memset(t, 0, sizeof *t);
+        t->id = tw.next_tenant_id++;
+        t->type = (i & 1) ? ITEM_CINEMA : ITEM_PARTY_HALL;
+    }
+    place(ITEM_FLOOR, 0, 100);
+    CHECK(tower_can_place(&tw, ITEM_CINEMA, 1, 105) == 0,
+          "17th venue rejected");
+    CHECK(tower_can_place(&tw, ITEM_PARTY_HALL, 1, 105) == 0,
+          "party hall counts against the same 16-record table");
+}
+
 int main(void)
 {
     test_stairs();
     test_flavor();
     test_floor_fill();
     test_bulldozer();
+    test_build_caps();
     test_unreachable_empty();
     test_elevators();
     test_housekeeping();
