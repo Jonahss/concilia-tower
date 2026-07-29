@@ -88,6 +88,55 @@ Tenant *tower_tenant(Tower *tower, uint16_t id)
     return NULL;
 }
 
+/* ---- Person-name registry (NameT seg_1188: 20 slots, 15-char names) ---- */
+
+static struct PersonNameSlot *person_name_find(Tower *tower,
+                                               uint16_t tid, int member)
+{
+    for (int i = 0; i < 20; i++) {
+        struct PersonNameSlot *s = &tower->person_names[i];
+        if (s->tenant_id == tid && s->member == (uint8_t)member)
+            return s;
+    }
+    return NULL;
+}
+
+const char *tower_person_name(const Tower *tower, uint16_t tid, int member)
+{
+    struct PersonNameSlot *s = person_name_find((Tower *)tower, tid, member);
+    return (s && s->name[0]) ? s->name : NULL;
+}
+
+int tower_person_name_set(Tower *tower, uint16_t tid, int member,
+                          const char *name)
+{
+    if (!name || !name[0]) {
+        tower_person_name_clear(tower, tid, member);
+        return 0;
+    }
+    struct PersonNameSlot *s = person_name_find(tower, tid, member);
+    if (!s) {
+        if (tower->person_name_count >= 20) return -1;
+        for (int i = 0; i < 20 && !s; i++)
+            if (!tower->person_names[i].tenant_id)
+                s = &tower->person_names[i];
+        if (!s) return -1;
+        tower->person_name_count++;
+        s->tenant_id = tid;
+        s->member = (uint8_t)member;
+    }
+    snprintf(s->name, sizeof s->name, "%s", name);
+    return 0;
+}
+
+void tower_person_name_clear(Tower *tower, uint16_t tid, int member)
+{
+    struct PersonNameSlot *s = person_name_find(tower, tid, member);
+    if (!s || !s->tenant_id) return;
+    memset(s, 0, sizeof *s);
+    if (tower->person_name_count > 0) tower->person_name_count--;
+}
+
 /* Count elevator groups the way the transport collector does: one group per
  * contiguous same-type vertical run of shaft cells (left column only). */
 int tower_shaft_group_count(const Tower *tower)
@@ -106,6 +155,193 @@ int tower_shaft_group_count(const Tower *tower)
     return count;
 }
 
+/* ==== Floor-deck economics (MoneyT TerrainCost 1178:0583, byte-verified
+ * 2026-07-29) ====
+ * A floor's deck is ONE contiguous span; building charges only cells
+ * outside the current span, at $500/cell — identical above and below
+ * ground (the EXE has no excavation premium) — except the ground-lobby
+ * band, where a cell costs $5,000 x band height. Every placement pays
+ * this on top of its item cost (ChargeBuild = ItemCost + TerrainCost),
+ * which is how the EXE prices the gap-fill and the overhang cells. */
+
+/* Ground-lobby band height (seg21:0x1310 in_lobby_band): floors 0..2
+ * carrying a lobby. The build path can only make a 1-high lobby today,
+ * but .TDT imports bring in 2-3-high grand lobbies. */
+static int deck_lobby_band(const Tower *tower)
+{
+    int h = 1;
+    for (int f = 1; f <= 2; f++) {
+        int found = 0;
+        for (int i = 0; i < tower->tenant_count && !found; i++)
+            if (tower->tenants[i].type == ITEM_LOBBY &&
+                tower->tenants[i].floor == f)
+                found = 1;
+        if (!found) break;
+        h++;
+    }
+    return h;
+}
+
+int tower_deck_price(const Tower *tower, int floor)
+{
+    if (floor >= 0 && floor < deck_lobby_band(tower))
+        return ITEM_COST[ITEM_LOBBY] * deck_lobby_band(tower);
+    return ITEM_COST[ITEM_FLOOR];
+}
+
+/* Current deck extent [*left, *right) on a floor row, from the grid
+ * (any built cell counts — shafts carry their own deck stubs in the
+ * EXE, EnsureFloorDeckUnderShaft). Returns 0 when the floor is bare. */
+static int deck_extent(const Tower *tower, int fidx, int *left, int *right)
+{
+    int L = -1, R = -1;
+    for (int cx = 0; cx < TOWER_WIDTH; cx++) {
+        if (tower->grid[fidx][cx].type != ITEM_NONE) {
+            if (L < 0) L = cx;
+            R = cx + 1;
+        }
+    }
+    if (L < 0) return 0;
+    *left = L; *right = R;
+    return 1;
+}
+
+long tower_deck_extend_cost(const Tower *tower, int floor, int x1, int x2)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
+    if (x1 < 0) x1 = 0;
+    if (x2 > TOWER_WIDTH) x2 = TOWER_WIDTH;
+    if (x2 <= x1) return 0;
+    int L, R;
+    long cells;
+    if (!deck_extent(tower, fidx, &L, &R))
+        cells = x2 - x1;
+    else
+        cells = (L > x1 ? L - x1 : 0) + (x2 > R ? x2 - R : 0);
+    return cells * (long)tower_deck_price(tower, floor);
+}
+
+/* Validate + price a floor-tool span. Returns the charge, or -1 with the
+ * reject reason set. u1 and u2 get the resulting union span to stamp. */
+static long deck_check(Tower *tower, int floor, int x1, int x2,
+                       int *u1, int *u2)
+{
+    if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR) {
+        set_reject("Maximum height has been reached");
+        return -1;
+    }
+    int fidx = floor_to_index(floor);
+    if (x1 < 0) x1 = 0;
+    if (x2 > TOWER_WIDTH) x2 = TOWER_WIDTH;
+    if (x2 <= x1) { set_reject("Cannot place item there"); return -1; }
+
+    long cost = tower_deck_extend_cost(tower, floor, x1, x2);
+
+    int L, R;
+    if (deck_extent(tower, fidx, &L, &R)) {
+        *u1 = x1 < L ? x1 : L;
+        *u2 = x2 > R ? x2 : R;
+    } else {
+        *u1 = x1; *u2 = x2;
+    }
+
+    /* Decks grow only over decks (below-ground: under them): every NEW
+     * cell needs deck directly below (above ground) or above (basement).
+     * Floor 0 rests on the ground itself. */
+    if (floor != 0) {
+        int sup = floor_to_index(floor > 0 ? floor - 1 : floor + 1);
+        if (sup < 0 || sup >= TOWER_FLOOR_COUNT) {
+            set_reject("Cannot place item there");
+            return -1;
+        }
+        for (int cx = *u1; cx < *u2; cx++) {
+            if (tower->grid[fidx][cx].type != ITEM_NONE) continue;
+            if (tower->grid[sup][cx].type == ITEM_NONE) {
+                set_reject(floor > 0
+                           ? "Cannot place items wider than floor below"
+                           : "Cannot place item there");
+                return -1;
+            }
+        }
+    }
+
+    if (tower->money < cost) {
+        set_reject("Not enough money to build floor");
+        return -1;
+    }
+    return cost;
+}
+
+int tower_extend_deck(Tower *tower, int floor, int x1, int x2)
+{
+    last_reject[0] = '\0';
+    int u1, u2;
+    long cost = deck_check(tower, floor, x1, x2, &u1, &u2);
+    if (cost < 0) return 0;
+    int fidx = floor_to_index(floor);
+    for (int cx = u1; cx < u2; cx++) {
+        TowerCell *cell = &tower->grid[fidx][cx];
+        if (cell->type != ITEM_NONE) continue;
+        cell->type = ITEM_FLOOR;
+        cell->tenant_id = 0;
+        cell->cell_index = 0;
+        cell->flags = CELL_OCCUPIED | (cell->flags & CELL_TRANSPORT_OVERLAY);
+    }
+    tower->money -= cost;
+    tower->built_value += cost;
+    printf("Extended deck on floor %d to x=%d..%d (cost $%ld, balance $%ld)\n",
+           floor, u1, u2, cost, tower->money);
+    return 1;
+}
+
+/* An elevator segment touching a same-type segment above or below at the
+ * same column is an EXTENSION of that shaft, not a new one — it charges
+ * no item cost (ExtendUp/Down charge pure TerrainCost, seg21 drag trace
+ * 2026-07-28) and doesn't count against the 24-group cap. */
+static int elevator_extends_column(const Tower *tower, ItemType type,
+                                   int floor, int x)
+{
+    for (int df = -1; df <= 1; df += 2) {
+        int fi = floor_to_index(floor + df);
+        if (fi >= 0 && fi < TOWER_FLOOR_COUNT &&
+            tower->grid[fi][x].type == type)
+            return 1;
+    }
+    return 0;
+}
+
+/* The lobby's charge (LobbyMake via ChargeBuild): per-cell, not per
+ * 4-cell segment. Ground lobby has NO item cost — it is priced entirely
+ * through TerrainCost's lobby-band row ($5,000 x band height per newly
+ * decked cell; converting existing deck to lobby is free). Sky lobbies
+ * pay $5,000 per new lobby cell plus normal deck cost for any extent
+ * growth. Charges the whole union span (a lobby is one contiguous run —
+ * a far click fills the gap too, and pays for it). */
+static long lobby_charge(const Tower *tower, int floor, int x, int width)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
+    int u1 = x, u2 = x + width;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_LOBBY || t->floor != floor) continue;
+        if (t->x < u1) u1 = t->x;
+        if (t->x + t->width > u2) u2 = t->x + t->width;
+        break;
+    }
+    if (u2 > TOWER_WIDTH) u2 = TOWER_WIDTH;
+    if (u1 < 0) u1 = 0;
+    long deck = tower_deck_extend_cost(tower, floor, u1, u2);
+    if (floor == 0) return deck;
+    long cells = 0;
+    for (int cx = u1; cx < u2; cx++) {
+        ItemType e = tower->grid[fidx][cx].type;
+        if (e != ITEM_LOBBY && !item_is_elevator(e)) cells++;
+    }
+    return cells * (long)ITEM_COST[ITEM_LOBBY] + deck;
+}
+
 int tower_can_place(Tower *tower, ItemType type, int floor, int x)
 {
     last_reject[0] = '\0';
@@ -114,6 +350,14 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
+
+    /* The floor tool is deck extension, not an item: per-cell charge for
+     * cells outside the floor's extent (build dispatch 0dc4 -> deck
+     * builder 17fd -> ChargeBuild(0,...) with ItemCost(0) = 0). */
+    if (type == ITEM_FLOOR) {
+        int u1, u2;
+        return deck_check(tower, floor, x, x + width, &u1, &u2) >= 0;
+    }
 
     /* Check bounds — multi-floor items extend upward from placement floor */
     if (x < 0 || x + width > TOWER_WIDTH)
@@ -137,10 +381,24 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (type == ITEM_CATHEDRAL && floor != TOWER_MAX_FLOOR)
         REJECT("Cathedral is available only on 100th floor");
 
-    /* Check funds */
-    if (tower->money < cost)
-        REJECT("Not enough money for construction");
-    
+    /* Check funds — the EXE's two-stage gate (CanAffordBuild 1178:009e):
+     * item cost alone unaffordable -> msg #7; item + deck (TerrainCost
+     * for footprint cells outside each floor's extent) -> msg #8. An
+     * elevator segment extending an existing column has no item cost. */
+    {
+        long icost = cost;
+        if (item_is_elevator(type) &&
+            elevator_extends_column(tower, type, floor, x))
+            icost = 0;
+        long terrain = 0;
+        for (int f = floor; f < floor + height; f++)
+            terrain += tower_deck_extend_cost(tower, f, x, x + width);
+        if (tower->money < icost)
+            REJECT("Not enough money for construction");
+        if (tower->money < icost + terrain)
+            REJECT("Not enough money to build floor");
+    }
+
     /* Lobby placement: 4-cell segments on every 15th floor.
      * Can overlap existing lobby cells (extends the lobby).
      * From LobbyMake (seg_11e8) + OpenSkyscraper Game.cpp. */
@@ -151,8 +409,9 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             REJECT("Maximum height has been reached");
         if (x < 0 || x + width > TOWER_WIDTH)
             REJECT("Cannot place item there");
-        if (tower->money < cost)
-            REJECT("Not enough money for construction");
+        if (tower->money < lobby_charge(tower, floor, x, width))
+            REJECT(floor == 0 ? "Not enough money to build floor"
+                              : "Not enough money for construction");
         /* Lobby segments CAN overlap existing lobby — that's how extension works.
          * But they can't overlap non-lobby items. */
         int fidx = floor_to_index(floor);
@@ -259,14 +518,8 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
          * extension of that group. Without this gate a 25th shaft takes the
          * player's money and silently never gets cars (the sim-side
          * MAX_SHAFTS collector stops at 24). */
-        int extends = 0;
-        for (int df = -1; df <= 1; df += 2) {
-            int fi2 = floor_to_index(floor + df);
-            if (fi2 >= 0 && fi2 < TOWER_FLOOR_COUNT &&
-                tower->grid[fi2][x].type == type)
-                extends = 1;
-        }
-        if (!extends && tower_shaft_group_count(tower) >= TOWER_MAX_SHAFT_GROUPS)
+        if (!elevator_extends_column(tower, type, floor, x) &&
+            tower_shaft_group_count(tower) >= TOWER_MAX_SHAFT_GROUPS)
             REJECT("No more elevator shafts available");
     }
 
@@ -551,13 +804,20 @@ static void fill_floor_gaps(Tower *tower, int floor)
 
 uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
 {
+    /* The floor tool builds deck cells, no tenant record — success
+     * returns a sentinel id that maps to no tenant. */
+    if (type == ITEM_FLOOR)
+        return tower_extend_deck(tower, floor, x, x + ITEM_WIDTH[type])
+                   ? UINT16_MAX : 0;
+
     if (!tower_can_place(tower, type, floor, x)) return 0;
     if (tower->tenant_count >= MAX_TENANTS) return 0;
-    
+
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
-    
+    long charged = cost;
+
     /* Lobby segments: check if extending an existing lobby on this floor.
      * If so, just fill the new cells — don't create a duplicate tenant.
      * From LobbyMake: TWO records per slot, but we simplify to one tenant
@@ -587,8 +847,10 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
             int final_left = (new_left < old_left) ? new_left : old_left;
             int final_right = (new_right > old_right) ? new_right : old_right;
 
-            /* Count cells that aren't lobby yet (the gap + the new segment),
-             * so we charge per newly-built segment rather than per click. */
+            /* Price BEFORE stamping — per-cell, via the verified charge
+             * (ground: TerrainCost's lobby-band row only; sky: $5,000 per
+             * new lobby cell + deck growth). */
+            long charge = lobby_charge(tower, floor, x, width);
             int new_cells = 0;
             for (int cx = final_left; cx < final_right; cx++) {
                 ItemType e = tower->grid[fidx][cx].type;
@@ -608,13 +870,10 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 cell->flags = CELL_OCCUPIED |
                               (cell->flags & CELL_TRANSPORT_OVERLAY);
             }
-            if (new_cells > 0) {
-                /* $cost per width-sized segment newly covered (round up). */
-                int segs = (new_cells + width - 1) / width;
-                int charge = cost * segs;
+            if (charge > 0) {
                 tower->money -= charge;
                 tower->built_value += charge;
-                printf("Extended lobby on F%d: now x=%d w=%d (+%d cells, cost $%d, balance $%ld)\n",
+                printf("Extended lobby on F%d: now x=%d w=%d (+%d cells, cost $%ld, balance $%ld)\n",
                        floor, final_left, existing_lobby->width, new_cells, charge, tower->money);
             }
             return existing_lobby->id;
@@ -622,9 +881,27 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
         /* Otherwise fall through to create a new lobby tenant */
     }
     
-    /* Deduct cost */
-    tower->money -= cost;
-    tower->built_value += cost;
+    /* Deduct item + deck cost (ChargeBuild 1178:01db = ItemCost +
+     * TerrainCost on every floor of the footprint — the overhang and
+     * gap-fill cells are paid for here). An elevator segment extending
+     * an existing column is pure deck cost; a NEW lobby record prices
+     * per-cell exactly like the extension path. */
+    {
+        long icost = cost;
+        if (item_is_elevator(type) &&
+            elevator_extends_column(tower, type, floor, x))
+            icost = 0;
+        long terrain = 0;
+        for (int f = floor; f < floor + height; f++)
+            terrain += tower_deck_extend_cost(tower, f, x, x + width);
+        if (type == ITEM_LOBBY) {
+            icost = lobby_charge(tower, floor, x, width);
+            terrain = 0;
+        }
+        charged = icost + terrain;
+    }
+    tower->money -= charged;
+    tower->built_value += charged;
 
     /* Create tenant */
     uint16_t id = tower->next_tenant_id++;
@@ -703,8 +980,8 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
             fill_floor_gaps(tower, f);
     }
 
-    printf("Placed %s at floor %d, x=%d (cost $%d, balance $%ld)\n",
-           tower_item_name(type), floor, x, cost, tower->money);
+    printf("Placed %s at floor %d, x=%d (cost $%ld, balance $%ld)\n",
+           tower_item_name(type), floor, x, charged, tower->money);
 
     return id;
 }
@@ -1011,21 +1288,16 @@ void tower_floor_extents(const Tower *tower, int16_t *left, int16_t *right)
         left[i] = TOWER_WIDTH;
         right[i] = 0;
     }
-    for (int i = 0; i < tower->tenant_count; i++) {
-        const Tenant *t = &tower->tenants[i];
-        if (t->type == ITEM_NONE) continue;
-        /* Stairs/escalators are overlays and never widen a floor. Elevators
-         * DO count: the EXE auto-builds floor deck exactly the shaft's
-         * footprint when a shaft grows past the built tower
-         * (EnsureFloorDeckUnderShaft 11f8:15f7, called by ExtendUp/Down and
-         * PlaceElevator — seg44 drag trace 2026-07-28), and that deck lives
-         * in the floor map that anchors overlays and the crane. */
-        if (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR) continue;
-        for (int f = t->floor; f < t->floor + t->height; f++) {
-            int fi = floor_to_index(f);
-            if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
-            if (t->x < left[fi]) left[fi] = t->x;
-            if (t->x + t->width > right[fi]) right[fi] = t->x + t->width;
+    /* Scan the GRID, not the tenant array: floor-tool deck and gap-fill
+     * cells carry no tenant record, and shafts stamp their cells (the
+     * EXE's auto-deck under shafts, EnsureFloorDeckUnderShaft 11f8:15f7).
+     * Stairs/escalators are overlays — they never stamp a cell type, so
+     * they naturally don't widen a floor. */
+    for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
+        for (int cx = 0; cx < TOWER_WIDTH; cx++) {
+            if (tower->grid[fi][cx].type == ITEM_NONE) continue;
+            if (cx < left[fi]) left[fi] = (int16_t)cx;
+            if (cx + 1 > right[fi]) right[fi] = (int16_t)(cx + 1);
         }
     }
 }

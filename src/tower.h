@@ -443,6 +443,19 @@ typedef struct {
     char      twr_names[20][16];
     int       twr_name_count;
 
+    /* Named PEOPLE (res 0x3ed: "You may only name 20 people.", 15-char
+     * names). The EXE keys names on the raw people-array index; the port
+     * keys on (home tenant id, member index), which survives the daily
+     * commuter respawn for workers/residents/staff. Hotel-guest names
+     * purge at 4PM, visitor names at the day boundary, everything else
+     * when its tenant is demolished — mirroring the EXE's purges. */
+    struct PersonNameSlot {
+        uint16_t tenant_id;   /* 0 = slot free */
+        uint8_t  member;
+        char     name[16];
+    }         person_names[20];
+    int       person_name_count;
+
     /* --- Parking (ParkingT, byte-verified 2026-07-11 referee) --- */
     int       usable_spaces;   /* spaces on the B1 ramp chain (recomputed) */
     int       cars_office;     /* cars in per admitting category; quota =
@@ -516,6 +529,25 @@ const char *tower_reject_reason(void);
 /* One group per contiguous same-type vertical shaft run (matches the
  * people-sim collector's grouping). */
 int tower_shaft_group_count(const Tower *tower);
+
+/* Floor-deck economics (MoneyT TerrainCost 1178:0583): a floor's deck is
+ * one contiguous span; building charges cells outside the current span
+ * at $500/cell (identical above and below ground), or $5,000 x band
+ * height inside the ground-lobby band. tower_extend_deck is the floor
+ * tool: extends the span to cover [x1,x2), gap included, and rejects
+ * with "Not enough money to build floor" when broke. */
+int  tower_deck_price(const Tower *tower, int floor);
+long tower_deck_extend_cost(const Tower *tower, int floor, int x1, int x2);
+int  tower_extend_deck(Tower *tower, int floor, int x1, int x2);
+
+/* Person-name registry (20 slots, 15-char names — NameT seg_1188).
+ * set() returns 0 on success, -1 when all 20 slots are taken (the UI
+ * shows the original's "You may only name 20 people."). Setting an
+ * empty name clears the slot. */
+const char *tower_person_name(const Tower *tower, uint16_t tid, int member);
+int  tower_person_name_set(Tower *tower, uint16_t tid, int member,
+                           const char *name);
+void tower_person_name_clear(Tower *tower, uint16_t tid, int member);
 
 /* Get the cell at grid position. Returns NULL if out of bounds. */
 TowerCell *tower_cell(Tower *tower, int floor, int x);

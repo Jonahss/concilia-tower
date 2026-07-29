@@ -2330,6 +2330,114 @@ static void test_route_loss(void)
           "public shafts don't cover the service network");
 }
 
+static void test_person_names(void)
+{
+    printf("person naming (NameT seg_1188):\n");
+    fresh();
+    place(ITEM_FLOOR, 1, BX);
+    uint16_t office = place(ITEM_OFFICE, 1, BX);
+    uint16_t hotel  = place(ITEM_HOTEL_SINGLE, 1, BX + 20);
+    uint16_t shop   = place(ITEM_SHOP, 1, BX + 30);
+
+    CHECK(tower_person_name_set(&tw, office, 0, "Bud Fox") == 0 &&
+          strcmp(tower_person_name(&tw, office, 0), "Bud Fox") == 0,
+          "name a person and read it back");
+    CHECK(tower_person_name_set(&tw, office, 0, "Gekko") == 0 &&
+          strcmp(tower_person_name(&tw, office, 0), "Gekko") == 0 &&
+          tw.person_name_count == 1,
+          "rename reuses the slot in place");
+
+    /* 20-slot cap: the 21st distinct person is refused */
+    for (int m = 1; m < 20; m++)
+        tower_person_name_set(&tw, office, m, "Filler");
+    CHECK(tw.person_name_count == 20, "registry holds 20 names");
+    CHECK(tower_person_name_set(&tw, hotel, 0, "One Too Many") < 0,
+          "21st name refused (You may only name 20 people.)");
+    for (int m = 10; m < 20; m++)
+        tower_person_name_clear(&tw, office, m);
+    CHECK(tw.person_name_count == 10, "clearing frees slots");
+
+    /* Purges: hotel-guest names at 4PM, visitor names at the day
+     * boundary, dead-tenant names always */
+    tower_person_name_set(&tw, hotel, 1, "Guest");
+    tower_person_name_set(&tw, shop, 1, "Shopper");
+    game_purge_person_names(&tw, 1, 0);
+    CHECK(tower_person_name(&tw, hotel, 1) == NULL &&
+          tower_person_name(&tw, shop, 1) != NULL,
+          "4PM purge drops hotel-guest names only");
+    game_purge_person_names(&tw, 0, 1);
+    CHECK(tower_person_name(&tw, shop, 1) == NULL &&
+          tower_person_name(&tw, office, 0) != NULL,
+          "day-boundary purge drops visitor names, workers keep theirs");
+    force_occupied(office);   /* under-construction units refuse the bulldozer */
+    tower_remove(&tw, office);
+    game_purge_person_names(&tw, 0, 0);
+    CHECK(tower_person_name(&tw, office, 0) == NULL,
+          "demolishing the tenant drops its people's names");
+}
+
+static void test_deck_economics(void)
+{
+    printf("floor-deck economics (MoneyT TerrainCost 1178:0583):\n");
+    fresh();   /* ground lobby spans x=100..284 */
+
+    /* Floor tool: per-cell, charging only cells outside the extent */
+    long before = tw.money;
+    CHECK(tower_extend_deck(&tw, 1, 150, 213), "deck tool lays a 63-cell strip");
+    CHECK(before - tw.money == 63L * 500, "63 fresh cells cost $31,500");
+
+    before = tw.money;
+    CHECK(tower_extend_deck(&tw, 1, 150, 213), "re-covering the span succeeds");
+    CHECK(before - tw.money == 0, "cells inside the extent are free");
+
+    before = tw.money;
+    CHECK(tower_extend_deck(&tw, 1, 140, 160), "extending the strip leftward");
+    CHECK(before - tw.money == 10L * 500, "only the 10 new cells are charged");
+
+    /* No excavation premium: basement deck is the same $500/cell */
+    before = tw.money;
+    CHECK(tower_extend_deck(&tw, -1, 150, 213), "basement deck under the lobby");
+    CHECK(before - tw.money == 63L * 500, "basement cells cost $500 too");
+
+    /* Decks grow only over decks */
+    CHECK(!tower_extend_deck(&tw, 2, 100, 120),
+          "floor 2 deck can't overhang floor 1");
+
+    /* Items pay deck cost for overhang + gap cells (extent-union model) */
+    before = tw.money;
+    CHECK(place(ITEM_OFFICE, 1, 220) != 0, "office placed past the deck edge");
+    CHECK(before - tw.money == 40000L + (229 - 213) * 500L,
+          "office pays item + deck for the 16 gap/footprint cells");
+
+    /* Shafts: new column pays the item; extension segments pay deck only
+     * (ExtendUp/Down charge pure TerrainCost — free through built floors,
+     * auto-deck stubs charged past the tower). */
+    before = tw.money;
+    CHECK(place(ITEM_ELEVATOR_SHAFT, 0, 200) != 0, "new shaft on the lobby");
+    CHECK(before - tw.money == 200000L, "new shaft = $200k, no deck charge");
+    before = tw.money;
+    CHECK(place(ITEM_ELEVATOR_SHAFT, 1, 200) != 0, "extend through built floor 1");
+    CHECK(before - tw.money == 0, "extension through existing deck is free");
+    before = tw.money;
+    CHECK(place(ITEM_ELEVATOR_SHAFT, 2, 200) != 0, "extend past the built tower");
+    CHECK(before - tw.money == 4L * 500,
+          "auto-deck stub = shaft footprint x $500");
+
+    /* The broke message is the floor-specific one */
+    tw.money = 1000;
+    CHECK(!tower_extend_deck(&tw, 1, 229, 250) &&
+          strcmp(tower_reject_reason(), "Not enough money to build floor") == 0,
+          "deck refusal says 'Not enough money to build floor'");
+    tw.money = 100000000L;
+
+    /* Ground lobby: no item cost — $5,000 x band height per newly decked
+     * cell through TerrainCost (converting existing deck stays free) */
+    before = tw.money;
+    CHECK(tower_place(&tw, ITEM_LOBBY, 0, 90) != 0, "extend the ground lobby left");
+    CHECK(before - tw.money == 10L * 5000,
+          "10 new lobby cells (gap included) = $50,000");
+}
+
 int main(void)
 {
     test_stairs();
@@ -2337,6 +2445,8 @@ int main(void)
     test_floor_fill();
     test_bulldozer();
     test_build_caps();
+    test_deck_economics();
+    test_person_names();
     test_route_loss();
     test_unreachable_empty();
     test_elevators();

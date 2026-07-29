@@ -810,6 +810,11 @@ int game_remove_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx);
 int game_take_star_nag(void);
 void game_parking_nag_daily(GameSim *sim, Tower *tower);
 
+/* Person-name purge (NameT): hotels=1 drops hotel-guest names (4PM),
+ * visitors=1 drops venue-visitor names (day boundary); dead-tenant
+ * names always drop. */
+void game_purge_person_names(Tower *tower, int hotels, int visitors);
+
 /* Parking usability (ParkingT CheckAllParking): mark each space usable
  * iff its floor's ramp chains from B1 (vertical same-x stack) and no
  * >=4-cell bare gap cuts the floor. Runs daily at 7AM + on build/

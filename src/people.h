@@ -118,6 +118,11 @@ typedef struct {
                              * released against the tower's category counter
                              * when the person leaves for good (ParkingT
                              * gate counts, 1198:002f/031a) */
+    uint8_t  member;        /* index within the home tenant's people pool —
+                             * the EXE's numInTenant, which drives the
+                             * person-type classifier (InfoPeple: office
+                             * member 0/1 = Salesman, condo 1 = Mother
+                             * with Baby, ...). Assigned at spawn. */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
     int      wait_start;    /* sim frame when the queue was joined (+0xA) */
     int      x;             /* walking-origin x (home tenant x, GetPersonX) */

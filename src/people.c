@@ -1000,6 +1000,16 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
     Person *p = &ps->people[slot];
     memset(p, 0, sizeof(*p));
     p->home_tenant = t->id;
+    /* numInTenant: position among this tenant's live people — commuters
+     * respawn in the same order daily, so the index is stable for
+     * workers/residents/staff (what the person-type classifier and the
+     * name registry key on). */
+    {
+        int member = 0;
+        for (int i = 0; i < ps->people_high; i++)
+            if (ps->people[i].home_tenant == t->id && i != slot) member++;
+        p->member = (uint8_t)(member > 255 ? 255 : member);
+    }
     p->state = PERSON_PLANNING;
     p->cur_floor = (uint8_t)from;
     p->dest_floor = (uint8_t)to;

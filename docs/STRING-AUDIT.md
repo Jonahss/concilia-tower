@@ -40,8 +40,8 @@ carries only sim events (disasters, VIP, medical nag, unreachable units).
 
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
-| Outside, VIP, Man, Salesman, Woman, Child, Security, Woman with Kid, Homebody, Housekeeper, Janitor | person TYPES — clicking a person shows who they are (InfoPeple seg_1110) | **MISSING** | The port's `Person` struct (`people.h`) has no type field and there is **no person-inspection UI at all** — the inspector tool (`main.c:inspect_*`) only opens *tenant* popups. Persons exist (commuters, patrons, staff via the `service` flag, guards during hunts) but are anonymous and unclickable. RULE missing (an original inspection feature), not just strings. |
-| " for sales calls", " to leave", " to eat", " to go home" | person ACTIVITY suffixes in the same popup | **MISSING** (display) / PARTIAL (state) | The underlying trip intents exist internally: `Person.going_home`, `stay`, the hotel dinner excursions (`people.c dinner_sent`, "to eat"), condo shopping trips. Only the *display* is absent — but it is absent entirely. |
+| Outside, VIP, Man, Salesman, Woman, Child, Security, Woman with Kid, Homebody, Housekeeper, Janitor | person TYPES — clicking a person shows who they are (InfoPeple seg_1110) | IMPLEMENTED (2026-07-29) | The label is DERIVED, never stored (classifier 1100:3856 on home-tenant type × member index — office member 0/1 = Salesman, condo 1 = Mother with Baby, visitors on n&7) — ported as `person_kind()` in `main.c`, with the two code quirks kept ("Homebody"→"Mother with Baby" always; Housekeeper→"Janitor" evenings). Inspector-tool hit-test on queue figures (exact cell, like 10a8:0aae), popup with type/home/whereabouts/stress lines, 20-slot naming registry (`tower_person_names`) with the EXE's purge schedule. `Person.member` added at spawn. |
+| " for sales calls", " to leave", " to eat", " to go home" | person ACTIVITY suffixes in the same popup | IMPLEMENTED (2026-07-29, port-state mapping) | `person_where_line()` maps the port's trip states to the seg_1110 status table ("to go home" with the Lobby/Parking Space split by `parked_cat`, venue name + floor for visitors, "Housekeeping, floor N" for maids on the job). The EXE's status 0x40 office midday errand ("Lobby for sales calls") isn't modeled in the port sim, so that line can't occur yet — flagged in code. |
 
 Note: "VIP" as a mechanic **is** modeled (visit every day%9==3 at 3★+, car-gated,
 satisfaction gates 3→4 — `game.c:1395-1436`), but as an abstract event, not a
@@ -137,7 +137,7 @@ errors. The port's native save prints "Save FAILED!"/"Load failed" to the feed
 | Maximum height has been reached | build ceiling F100 / B10 | IMPLEMENTED | `tower.c:82-83`, TOWER_MAX_FLOOR/TOWER_MIN_FLOOR |
 | Cannot place items wider than floor below | no overhang | IMPLEMENTED | `tower.c:358-373` (known-current) |
 | Not enough money for construction | funds gate on items | IMPLEMENTED | `tower.c:86-90` |
-| **Not enough money to build floor** | floor-DECK cost as a distinct charge | **PARTIAL** | A Floor tool exists (ITEM_FLOOR, $500 per 63-cell strip — `tower.h:139`) with the generic funds gate. But the EXE charges **TerrainCost = floor-deck cost for cells outside each floor's extent** when shafts extend (decomp `seg_11f8_tenant.c:553-558`: ExtendUp/Down afford gate MoneyT 1178:011d/027c) and auto-builds deck under shafts (EnsureFloorDeckUnderShaft). The port's `fill_floor_gaps` (`tower.c:394`) and shaft placement lay deck **free**. Economic rule partially missing. |
+| **Not enough money to build floor** | floor-DECK cost as a distinct charge | IMPLEMENTED (2026-07-29, byte-verified) | TerrainCost 1178:0583 fully decoded: $500/cell for cells outside each floor's contiguous extent, **identical above and below ground** (no excavation premium); ground-lobby band $5,000×height/cell; `ItemCost(0)=0` so the floor tool's whole charge IS the deck. Ported as `tower_deck_extend_cost`/`tower_extend_deck` (`tower.c`): every placement pays item + extent-growth deck (gap-fill and overhang cells included), elevator extension segments pay deck only (pure TerrainCost — and no longer a bogus $200k/floor), two-stage refusal msgs #7 construction / #8 build-floor (CanAffordBuild 1178:009e). Lobby charging is per-cell (ground = terrain-only at $5,000×H; converting existing deck to lobby is free, as in the EXE). |
 | Cannot place on top of other items | overlap rejection | IMPLEMENTED | `tower.c:264-292` |
 | Item not available underground / Item unavailable above ground | vertical zoning | IMPLEMENTED | `tower.c:225-227`, ITEM_UNDERGROUND_ONLY both directions |
 | First floor is only for Lobby | ground floor lobby-only (transports exempt) | IMPLEMENTED | `tower.c:142-145` (known-current) |
@@ -178,7 +178,7 @@ Port is unbounded. MISSING (minor).
 |---|---|---|---|
 | **"If you change this setting, you will lose a key route to this floor…" / "If the service elevator doesn't stop on this floor, housekeeping cannot reach it…" / "This floor is part of the route to the Lobby…" / "If you remove this item, you will lose a key route…"** | the game detects that a stop-toggle or a transport removal would sever a floor's route (incl. the housekeeping/service network) and asks for confirmation | **MISSING** | `people.c:people_set_serviced` (537) toggles instantly and flushes queues; `main.c` (2204, 2675) calls it with no dialog; `tower_remove` demolishes transports with no route check. The DETECTION machinery exists (`game_update_reachability` computes both networks, and the feed reports strandings *after the fact*) — what's missing is the **pre-action check + confirm dialog**. This is a real guardrail players relied on. |
 | That name is too long. Names can have up to 15 characters. | 15-char rename cap | IMPLEMENTED (structurally) | `main.c` name editor buffer `name_edit_buf[16]` (329), `Tenant.name[16]` "faithful to the rename cap" (`tower.h:373`) — overflow is impossible rather than warned. |
-| You may only name 20 people. | 20-person naming cap | MISSING | no person naming at all (see 0x02bc). |
+| You may only name 20 people. | 20-person naming cap | IMPLEMENTED (2026-07-29) | 20-slot registry `tower_person_names` keyed on (home tenant, member index) — stable across the daily commuter respawn, unlike the EXE's raw people-array key. 15-char names, exact cap string, purges: hotel-guest names at 4PM, visitor names at the day boundary, dead-tenant names always. `.TDT` person-name import stays parse-past-only: the port respawns people rather than reconstructing the original people array, so the file's people-index keys have nothing to bind to. |
 | You may only name 20 tenants. | 20-tenant naming cap | DELIBERATE (divergence) | port stores a name on every tenant (`Tenant.name`), unlimited; the EXE's 20-slot side list survives only as `.TDT` round-trip storage (`tower.h twr_names[20]`). **Caveat:** exporting a port tower with >20 named tenants can't carry them all in the file format — worth an export-time warning. |
 
 ## res 0x03ef — Income categories
@@ -261,22 +261,19 @@ missing; **[STRING]** = cosmetic/display only. One-line sketch each.
    placeable on any floor vs 100th-floor-only. *Sketch:* set
    `ITEM_COST[ITEM_CATHEDRAL]=3000000` (verify res 0x3e8 first) and gate
    `floor == 100` (top-floor anchor) in `tower_can_place`.
-5. **[RULE] Person inspection (0x02bc/0x02bd)** — a whole original feature:
-   click a person, see "Salesman, Floor 12, for sales calls", name up to 20.
-   *Sketch:* add a `kind` byte to `Person` set at spawn (commuter/patron/
-   maid/guard/VIP…), a finger-tool hit test on rendered people, and a small
-   popup reusing the inspector frame; activity string from
-   `going_home`/`stay`/venue target.
+5. ~~**[RULE] Person inspection (0x02bc/0x02bd)**~~ **DONE 2026-07-29** —
+   traced first (InfoPeple/NameT agents): the label is derived at draw time,
+   not stored, so the port adds only `Person.member` and classifies on
+   (home type, member). Hit-test, popup, naming registry + purges in.
 6. **[RULE] Metro placement family** — build-under-metro allowed, station not
    forced to the bottom floor. *Sketch:* track `metro_floor` on the tower;
    in `tower_can_place` reject any placement below it (msg 0xe semantics)
    and require the station's platform to sit at the current lowest
    excavated level.
-7. **[RULE] Floor-deck economics** — deck under shafts and gap-fill is free;
-   the EXE charges TerrainCost per newly-decked cell (and refuses when
-   broke: "Not enough money to build floor"). *Sketch:* charge
-   `ITEM_COST[ITEM_FLOOR]`-scaled per-cell cost inside `fill_floor_gaps` and
-   on shaft segments outside the floor extent; reject when unaffordable.
+7. ~~**[RULE] Floor-deck economics**~~ **DONE 2026-07-29** — TerrainCost
+   1178:0583 byte-verified first (no basement premium; lobby band ×H; the
+   floor tool IS the terrain charge). Extent-union charging on every
+   placement; shaft extension = deck only; msgs #7/#8.
 8. **[RULE] Housekeeping price $100k → $50k** — every housekeeping unit
    overcharges 2×. *Sketch:* verify res 0x3e8 item 0x0F, set
    `ITEM_COST[ITEM_HOUSEKEEPING]=50000`.

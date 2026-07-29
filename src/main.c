@@ -328,6 +328,13 @@ typedef struct {
     int             name_edit_open;  /* name-editor sub-dialog (res 0x2DC) */
     char            name_edit_buf[16]; /* editing buffer (max 15 chars, faithful) */
     int             name_edit_len;
+    int             name_edit_person; /* 1 = editor renames a person, not a tenant */
+
+    /* Person-inspection popup (InfoPeple seg_1110): click a queue figure
+     * with the inspector to see who they are. */
+    int             person_open;
+    uint16_t        person_pid;      /* people[] slot + 1 */
+    int             person_x, person_y;
     int             movie_dlg_open;  /* movie-chooser sub-dialog (res 0x2DB) */
     int             mouse_x, mouse_y;
     int             mouse_floor, mouse_cell;
@@ -3562,6 +3569,25 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &earth);
     }
 
+    /* Deck silhouette from the grid extents — floor-tool deck and
+     * gap-fill cells have no tenant record, so the shell must come from
+     * the grid, not the tenant list. */
+    {
+        int16_t dleft[TOWER_FLOOR_COUNT], dright[TOWER_FLOOR_COUNT];
+        tower_floor_extents(&game.tower, dleft, dright);
+        SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+        for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
+            if (dright[fi] <= dleft[fi]) continue;
+            int fl = fi + TOWER_MIN_FLOOR;
+            int ty = (int)(ground_line - (fl + 1) * pf);
+            int tx = map_x + (dleft[fi] * map_w / TOWER_WIDTH);
+            int tw = map_x + (dright[fi] * map_w / TOWER_WIDTH) - tx;
+            if (tw < 1) tw = 1;
+            SDL_Rect row = { tx, ty, tw, row_h };
+            SDL_RenderFillRect(game.renderer, &row);
+        }
+    }
+
     /* Tenants as colored rows; floor strips as the dark shell so the
      * silhouette includes empty floors (skipped before = invisible).
      * Overlay modes recolor tenants per the EXE's map views (seg59
@@ -5210,6 +5236,264 @@ static void draw_price_dropdown(const Tenant *t, SDL_Rect box, const SDL_Rect *i
     }
 }
 
+/* ================ Person inspection (InfoPeple seg_1110) ================
+ * The original stores no person type: the label is derived at draw time
+ * from (home tenant type, numInTenant) by the classifier at 1100:3856,
+ * with two code quirks kept — "Homebody" is always replaced by "Mother
+ * with Baby", and Housekeepers become "Janitor" in the evening. */
+
+typedef enum {
+    PK_NONE = -1, PK_MAN = 0, PK_SALESMAN, PK_WOMAN, PK_CHILD, PK_WOMAN2,
+    PK_SECURITY, PK_WOMANKID, PK_MOTHER, PK_HOUSEKEEPER
+} PersonKind;
+
+static int person_home_is_indoor(ItemType ty)
+{
+    return ty == ITEM_OFFICE || ty == ITEM_CONDO || ty == ITEM_SECURITY ||
+           ty == ITEM_HOUSEKEEPING || item_is_hotel_room(ty);
+}
+
+static PersonKind person_kind(const Person *p)
+{
+    Tenant *home = tower_tenant(&game.tower, p->home_tenant);
+    if (!home) return PK_NONE;
+    int n = p->member;
+    switch (home->type) {
+    case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
+        return n == 2 ? PK_WOMAN2 : PK_MAN;
+    case ITEM_OFFICE:
+        if (n <= 1) return PK_SALESMAN;
+        if (n <= 3) return PK_MAN;
+        return n == 4 ? PK_WOMAN : PK_WOMAN2;
+    case ITEM_CONDO:
+        if (n == 0) return PK_MAN;
+        if (n == 1) return PK_MOTHER;
+        return n == 2 ? PK_CHILD : PK_NONE;
+    case ITEM_SECURITY:     return PK_SECURITY;
+    case ITEM_HOUSEKEEPING: return PK_HOUSEKEEPER;
+    default:
+        /* every visitor class classifies on numInTenant & 7 */
+        switch (n & 7) {
+        case 1:  return PK_WOMAN;
+        case 3:  return PK_WOMAN2;
+        case 5:  return PK_WOMANKID;
+        case 7:  return PK_MOTHER;
+        default: return PK_MAN;
+        }
+    }
+}
+
+static const char *person_kind_label(PersonKind k)
+{
+    switch (k) {
+    case PK_MAN:      return "Man";
+    case PK_SALESMAN: return "Salesman";
+    case PK_WOMAN:
+    case PK_WOMAN2:   return "Woman";
+    case PK_CHILD:    return "Child";
+    case PK_SECURITY: return "Security";
+    case PK_WOMANKID: return "Woman with Kid";
+    case PK_MOTHER:   return "Mother with Baby";
+    case PK_HOUSEKEEPER:
+        return game.sim.hour >= 17 ? "Janitor" : "Housekeeper";
+    default:          return "";
+    }
+}
+
+static void person_fmt_floor(int floor, char *buf, int n)
+{
+    if (floor == 0)     snprintf(buf, n, "Lobby");
+    else if (floor < 0) snprintf(buf, n, "B%d", -floor);
+    else                snprintf(buf, n, "%dF", floor);
+}
+
+/* Home line: the tenant's title for residents/workers/staff, "Outside"
+ * (res 0x2bc entry 1) for every visitor class. */
+static void person_home_line(const Person *p, char *buf, int n)
+{
+    Tenant *home = tower_tenant(&game.tower, p->home_tenant);
+    if (!home) { snprintf(buf, n, "-"); return; }
+    if (person_home_is_indoor(home->type)) {
+        char fl[12];
+        person_fmt_floor(home->floor, fl, sizeof fl);
+        snprintf(buf, n, "%s, %s", tower_item_name(home->type), fl);
+    } else {
+        snprintf(buf, n, "Outside");
+    }
+}
+
+/* Whereabouts line, mapped from the port's trip state (the EXE derives
+ * it from person status +0x05; the port's states cover the same trips
+ * except the office midday lobby errand, which the sim doesn't model). */
+static void person_where_line(const Person *p, char *buf, int bufn)
+{
+    Tenant *home = tower_tenant(&game.tower, p->home_tenant);
+    int visitor = home && !person_home_is_indoor(home->type);
+    char fl[12];
+    switch ((PersonState)p->state) {
+    case PERSON_PLANNING: case PERSON_WALKING:
+    case PERSON_QUEUED:   case PERSON_RIDING:
+        if (p->going_home) {
+            snprintf(buf, bufn, "%s to go home",
+                     p->parked_cat ? "Parking Space" : "Lobby");
+        } else if (visitor) {
+            const char *vn = retail_variant_name(home);
+            person_fmt_floor(home->floor, fl, sizeof fl);
+            snprintf(buf, bufn, "%s, %s",
+                     vn ? vn : tower_item_name(home->type), fl);
+        } else {
+            person_fmt_floor(index_to_floor(p->dest_floor), fl, sizeof fl);
+            snprintf(buf, bufn, "to %s", fl);
+        }
+        break;
+    default:
+        if (!home) { snprintf(buf, bufn, "-"); break; }
+        if (p->service && home->type == ITEM_HOUSEKEEPING &&
+            p->cur_floor != (uint8_t)floor_to_index(home->floor)) {
+            person_fmt_floor(index_to_floor(p->cur_floor), fl, sizeof fl);
+            snprintf(buf, bufn, "Housekeeping, %s", fl);
+        } else {
+            const char *vn = visitor ? retail_variant_name(home) : NULL;
+            person_fmt_floor(home->floor, fl, sizeof fl);
+            snprintf(buf, bufn, "%s, %s",
+                     vn ? vn : tower_item_name(home->type), fl);
+        }
+        break;
+    }
+}
+
+/* Hit-test the rendered queue figures — the mirror of render_shaft's
+ * queue layout (the EXE walks the same draw cells: exact 8px column, no
+ * radius; only queue-standing people are world-clickable, car riders go
+ * through the elevator dialog). Returns people[] slot + 1, or 0. */
+static uint16_t person_hit_test(int mx, int my)
+{
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active) continue;
+        if (s->hidden && !game.elv_edit_mode) continue;
+        int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
+        for (int f = s->lo; f <= s->hi; f++) {
+            const ElevatorStop *st = &s->stop[f];
+            int n = st->up_count + st->down_count;
+            if (!n) continue;
+            int sx, sy;
+            grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
+            if (my < sy || my >= sy + CELL_H) continue;
+            int left_in = 0, right_in = 0;
+            for (int d = 1; d <= 4 && !(left_in && right_in); d++) {
+                int lx = s->x - d;
+                int rx = s->x + ITEM_WIDTH[s->type] + d - 1;
+                if (lx >= 0 && game.tower.grid[f][lx].type != ITEM_NONE)
+                    left_in = 1;
+                if (rx < TOWER_WIDTH &&
+                    game.tower.grid[f][rx].type != ITEM_NONE)
+                    right_in = 1;
+            }
+            int rightward = right_in && !left_in;
+            int shown = n > 10 ? 10 : n;
+            for (int k = shown - 1; k >= 0; k--) {   /* topmost drawn first */
+                uint16_t pid;
+                if (k < st->up_count)
+                    pid = st->up_ring[(st->up_head + k) % QUEUE_CAP];
+                else
+                    pid = st->down_ring[(st->down_head + k - st->up_count)
+                                        % QUEUE_CAP];
+                if (!pid) continue;
+                int px = rightward ? sx + shaft_w + k * 9
+                                   : sx - 16 - k * 9;
+                if (mx >= px && mx < px + 16) return pid;
+            }
+        }
+    }
+    return 0;
+}
+
+#define PINFO_W 236
+#define PINFO_H 172
+
+static SDL_Rect person_popup_rect(void)
+{ return (SDL_Rect){ game.person_x, game.person_y, PINFO_W, PINFO_H }; }
+static SDL_Rect person_btn_name(SDL_Rect d)
+{ return (SDL_Rect){ d.x + 12, d.y + d.h - 34, 78, 22 }; }
+static SDL_Rect person_btn_ok(SDL_Rect d)
+{ return (SDL_Rect){ d.x + d.w - 76, d.y + d.h - 34, 64, 22 }; }
+
+static const Person *person_popup_person(void)
+{
+    if (!game.person_open || !game.person_pid) return NULL;
+    const Person *p = &game.sim.people.people[game.person_pid - 1];
+    if (!p->home_tenant) return NULL;   /* despawned under us */
+    return p;
+}
+
+static void render_person_popup(void)
+{
+    const Person *p = person_popup_person();
+    if (!p) { game.person_open = 0; return; }
+
+    SDL_Rect d = person_popup_rect();
+    char title[48], line[64], fl[12];
+    person_fmt_floor(index_to_floor(p->cur_floor), fl, sizeof fl);
+    snprintf(title, sizeof title, "%s  -  %s",
+             person_kind_label(person_kind(p)), fl);
+    draw_win31_titlebar(d.x, d.y, d.w, title);
+    draw_win31_rect(d.x, d.y + WIN_TITLEBAR_H, d.w, d.h - WIN_TITLEBAR_H, 1);
+
+    /* Portrait: the person's own queue silhouette at 2x (the EXE blits an
+     * 8px portrait column stretched 2x; same idea, same identity). */
+    Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+    int tx = d.x + 14, ty = d.y + WIN_TITLEBAR_H + 10;
+    if (qs) {
+        int fig = (game.person_pid * 7) % 40;
+        SDL_Rect src = { fig * 16, 0, 16, 36 };
+        SDL_Rect dst = { tx, ty, 32, 72 };
+        SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+    }
+
+    SDL_Color ink = { 0, 0, 0, 255 };
+    int lx = tx + 44, ly = ty;
+    const char *nm = tower_person_name(&game.tower, p->home_tenant, p->member);
+    snprintf(line, sizeof line, "Name: %s", nm ? nm : "-");
+    draw_text(line, lx, ly, ink); ly += 18;
+    {
+        char hm[56];
+        person_home_line(p, hm, sizeof hm);
+        snprintf(line, sizeof line, "Home: %s", hm);
+        draw_text(line, lx, ly, ink); ly += 18;
+    }
+    {
+        char wh[56];
+        person_where_line(p, wh, sizeof wh);
+        snprintf(line, sizeof line, "Now: %s", wh);
+        draw_text(line, lx, ly, ink); ly += 18;
+    }
+    {
+        int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
+        int pct = (int)(100L * p->wait_accum / cap);
+        if (pct > 100) pct = 100;
+        snprintf(line, sizeof line, "Stress: %d%%", pct);
+        draw_text(line, lx, ly, ink);
+    }
+
+    draw_dlg_button(person_btn_name(d), "Name...", 1);
+    draw_dlg_button(person_btn_ok(d), "OK", 1);
+}
+
+static void open_person_name_editor(void);
+
+/* Returns 1 when the click was inside the popup (swallowed). */
+static int person_popup_click(int mx, int my)
+{
+    if (!game.person_open) return 0;
+    SDL_Rect d = person_popup_rect();
+    if (!point_in_rect(mx, my, d)) { game.person_open = 0; return 0; }
+    if (point_in_rect(mx, my, person_btn_ok(d)))        game.person_open = 0;
+    else if (point_in_rect(mx, my, person_btn_name(d))) open_person_name_editor();
+    return 1;
+}
+
 static void render_inspect_popup(void)
 {
     if (!game.inspect_open) return;
@@ -5274,7 +5558,8 @@ static void render_inspect_popup(void)
     draw_dlg_button((SDL_Rect){ wx + L.ok_btn.x, wy + L.ok_btn.y, L.ok_btn.w, L.ok_btn.h }, "OK", 1);
 }
 
-/* ---- Name-editor sub-dialog (res 0x2DC: EDIT + Rename/Delete/Cancel) ---- */
+/* ---- Name-editor sub-dialog (res 0x2DC: EDIT + Rename/Delete/Cancel) ----
+ * Shared between tenants and people (name_edit_person selects). */
 static void close_name_editor(void) { game.name_edit_open = 0; SDL_StopTextInput(); }
 static void open_name_editor(const Tenant *t)
 {
@@ -5282,11 +5567,32 @@ static void open_name_editor(const Tenant *t)
     snprintf(game.name_edit_buf, sizeof game.name_edit_buf, "%s", cur ? cur : "");
     game.name_edit_len = (int)strlen(game.name_edit_buf);
     game.name_edit_open = 1;
+    game.name_edit_person = 0;
+    SDL_StartTextInput();
+}
+static void open_person_name_editor(void)
+{
+    const Person *p = person_popup_person();
+    if (!p) return;
+    const char *cur = tower_person_name(&game.tower, p->home_tenant, p->member);
+    snprintf(game.name_edit_buf, sizeof game.name_edit_buf, "%s", cur ? cur : "");
+    game.name_edit_len = (int)strlen(game.name_edit_buf);
+    game.name_edit_open = 1;
+    game.name_edit_person = 1;
     SDL_StartTextInput();
 }
 static void commit_name(void)
 {
-    if (game.name_edit_len > 0) tenant_set_name(game.inspect_tid, game.name_edit_buf);
+    if (game.name_edit_len > 0) {
+        if (game.name_edit_person) {
+            const Person *p = person_popup_person();
+            if (p && tower_person_name_set(&game.tower, p->home_tenant,
+                                           p->member, game.name_edit_buf) < 0)
+                add_event_message("You may only name 20 people.");
+        } else {
+            tenant_set_name(game.inspect_tid, game.name_edit_buf);
+        }
+    }
     close_name_editor();
 }
 #define NAME_DLG_W 244
@@ -5332,7 +5638,17 @@ static void render_name_editor(void)
     SDL_RenderDrawLine(game.renderer, cx, e.y + 4, cx, e.y + e.h - 4);
 
     draw_dlg_button(name_dlg_ok(d), "Rename", 1);
-    draw_dlg_button(name_dlg_del(d), "Delete", tenant_custom_name(game.inspect_tid) != NULL);
+    {
+        int has_name;
+        if (game.name_edit_person) {
+            const Person *p = person_popup_person();
+            has_name = p && tower_person_name(&game.tower, p->home_tenant,
+                                              p->member) != NULL;
+        } else {
+            has_name = tenant_custom_name(game.inspect_tid) != NULL;
+        }
+        draw_dlg_button(name_dlg_del(d), "Delete", has_name);
+    }
     draw_dlg_button(name_dlg_cancel(d), "Cancel", 1);
 }
 static int name_editor_click(int mx, int my)
@@ -5340,7 +5656,16 @@ static int name_editor_click(int mx, int my)
     if (!game.name_edit_open) return 0;
     SDL_Rect d = name_dlg_rect();
     if (point_in_rect(mx, my, name_dlg_ok(d)))          commit_name();
-    else if (point_in_rect(mx, my, name_dlg_del(d)))    { tenant_clear_name(game.inspect_tid); close_name_editor(); }
+    else if (point_in_rect(mx, my, name_dlg_del(d))) {
+        if (game.name_edit_person) {
+            const Person *p = person_popup_person();
+            if (p) tower_person_name_clear(&game.tower, p->home_tenant,
+                                           p->member);
+        } else {
+            tenant_clear_name(game.inspect_tid);
+        }
+        close_name_editor();
+    }
     else if (point_in_rect(mx, my, name_dlg_cancel(d))) close_name_editor();
     return 1;   /* modal: swallow every click */
 }
@@ -5487,6 +5812,7 @@ static void render(void)
     render_elv_dialog();
     render_fin_dialog();
     render_inspect_popup();
+    render_person_popup();
     render_movie_chooser();   /* sub-dialogs draw on top of the info popup */
     render_name_editor();
     render_event_alert();
@@ -5599,6 +5925,20 @@ static void drag_place_units(void)
             /* Nothing new placed — the click/drag landed entirely on an existing
              * shaft, so add a car to it instead. */
             elev_add_car_at(x, game.drag_start_floor);
+        }
+        return;
+    }
+
+    /* The floor tool extends the deck over the exact dragged span, charged
+     * per newly-decked cell (a bare click goes through tower_place and
+     * stamps a default-width strip instead). */
+    if (game.build_type == ITEM_FLOOR) {
+        int lo = start < end ? start : end;
+        int hi = start < end ? end : start;
+        if (tower_extend_deck(&game.tower, floor, lo, hi + 1)) {
+            play_snd(SND_BUILD_PLACE);
+        } else if (tower_reject_reason()[0]) {
+            add_event_message(tower_reject_reason());
         }
         return;
     }
@@ -6461,6 +6801,8 @@ static void handle_event(SDL_Event *ev)
             if (fin_dialog_click(ev->button.x, ev->button.y)) break;
             /* Inspector info popup click (close button / swallow body clicks) */
             if (inspect_popup_click(ev->button.x, ev->button.y)) break;
+            /* Person info popup click */
+            if (person_popup_click(ev->button.x, ev->button.y)) break;
 
             /* Toolbox click (body, not title bar) */
             if (toolbox_click(ev->button.x, ev->button.y)) break;
@@ -6498,6 +6840,23 @@ static void handle_event(SDL_Event *ev)
             if (game.inspect_mode) {
                 if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
                     break;
+                /* Queue people rank above tenants in the EXE's inspect
+                 * chain (elevator -> escalator -> person -> tenant). */
+                {
+                    uint16_t pid = person_hit_test(ev->button.x, ev->button.y);
+                    if (pid) {
+                        game.person_open = 1;
+                        game.person_pid = pid;
+                        game.person_x = ev->button.x + 16;
+                        game.person_y = ev->button.y - 30;
+                        if (game.person_x + PINFO_W > game.screen_w)
+                            game.person_x = game.screen_w - PINFO_W - 8;
+                        if (game.person_y + PINFO_H > game.screen_h)
+                            game.person_y = game.screen_h - PINFO_H - 8;
+                        if (game.person_y < 0) game.person_y = 8;
+                        break;
+                    }
+                }
                 int fidx = floor_to_index(game.mouse_floor);
                 if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                     game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {

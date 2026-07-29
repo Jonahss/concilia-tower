@@ -281,6 +281,34 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
     return next_star;
 }
 
+/* ---- Person-name purges (NameT seg_1188) ----
+ * Hotel-guest names drop at 4PM, visitor names at the day boundary;
+ * a name whose tenant is gone always drops. */
+static int person_name_purge_day = -1;
+
+void game_purge_person_names(Tower *tower, int hotels, int visitors)
+{
+    for (int i = 0; i < 20; i++) {
+        struct PersonNameSlot *s = &tower->person_names[i];
+        if (!s->tenant_id) continue;
+        Tenant *t = tower_tenant(tower, s->tenant_id);
+        int drop = (!t || t->type == ITEM_NONE);
+        if (!drop && hotels && item_is_hotel_room(t->type)) drop = 1;
+        if (!drop && visitors) {
+            switch (t->type) {
+            case ITEM_RESTAURANT: case ITEM_FAST_FOOD: case ITEM_SHOP:
+            case ITEM_CINEMA: case ITEM_PARTY_HALL: case ITEM_METRO:
+                drop = 1; break;
+            default: break;
+            }
+        }
+        if (drop) {
+            memset(s, 0, sizeof *s);
+            if (tower->person_name_count > 0) tower->person_name_count--;
+        }
+    }
+}
+
 /* The parking-demand nag has no promotion gate behind it: at 3 stars the
  * office car quota is the mechanic, so nag when it's exhausted (which
  * includes having no usable spaces at all). Called at the day boundary. */
@@ -1376,6 +1404,13 @@ void game_update(GameSim *sim, Tower *tower)
         game_hotel_demand_pass(sim, tower);
     }
 
+    /* 4PM person-name purge (NameT: hotel-guest names drop at ft 1600 —
+     * today's guests check out, tomorrow's are strangers). */
+    if (sim->hour >= 16 && person_name_purge_day != tower->day) {
+        person_name_purge_day = tower->day;
+        game_purge_person_names(tower, 1, 0);
+    }
+
     /* People + elevators run every tick — cars and queues are the game.
      * Exception: an armed bomb freezes the normal simulation (the EXE
      * swaps the per-frame person dispatch for the guard loop, 1090:0140). */
@@ -1456,6 +1491,7 @@ void game_update(GameSim *sim, Tower *tower)
              * settlement, as in the EXE (eval then move-outs). */
             game_judge_daily(sim, tower);
             game_parking_nag_daily(sim, tower);
+            game_purge_person_names(tower, 0, 1);   /* visitor names expire */
 
             /* THE QUARTERLY SETTLEMENT (every 3rd day = the EXE quarter;
              * JudgeT MainLoop's day%3 gate + the TimeT maintenance row,
@@ -3415,7 +3451,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 11u  /* v11: parking (space_usable, car counters,
+#define SAVE_VERSION 12u  /* v12: person inspection (Person.member,
+                             Tower.person_names registry).
+                             v11: parking (space_usable, car counters,
                            * Person.parked_cat) */
                           /* v10: the occupancy lifecycle (shared demand
                            * bytes for office/condo/shop; tenure).
