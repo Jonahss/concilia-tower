@@ -173,6 +173,54 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         }
     }
 
+    /* Shaft clearance (CheckElevatorClearance 10a0:10e8 — seg44 drag trace
+     * 2026-07-28, correcting the earlier "no spacing rule" note): the
+     * candidate rect, inflated 8 CELLS horizontally and (-2,+1) floors
+     * vertically, must not touch ANOTHER shaft; stairs/escalators are
+     * checked against the un-inflated rect. The EXE runs this on the
+     * initial click AND on every drag extension (msg 0x16 "too close"). */
+    if (item_is_elevator(type)) {
+        for (int f = floor - 2; f <= floor + 1; f++) {
+            int fi2 = floor_to_index(f);
+            if (fi2 < 0 || fi2 >= TOWER_FLOOR_COUNT) continue;
+            for (int cx = x - 8; cx < x + width + 8; cx++) {
+                if (cx < 0 || cx >= TOWER_WIDTH) continue;
+                const TowerCell *c = &tower->grid[fi2][cx];
+                int inside = (cx >= x && cx < x + width);
+                if (item_is_elevator(c->type) &&
+                    (c->type != type || !inside)) {
+                    printf("  [reject] %s at F%d x%d: too close to another "
+                           "shaft (cell F%d,x%d)\n",
+                           tower_item_name(type), floor, x, f, cx);
+                    return 0;
+                }
+                if (inside && (c->flags & CELL_TRANSPORT_OVERLAY)) {
+                    printf("  [reject] %s at F%d x%d: a stair/escalator is "
+                           "in the way (F%d,x%d)\n",
+                           tower_item_name(type), floor, x, f, cx);
+                    return 0;
+                }
+            }
+        }
+
+        /* Standard/service shafts serve at most 30 floors (ExtendUp's
+         * 29-floor span clamp, msg 0x23 — express is exempt, its reach is
+         * bounded by the tower instead). Reject the segment that would
+         * stretch this column's contiguous run past the limit. */
+        if (type != ITEM_ELEVATOR_EXPRESS) {
+            int fi0 = floor_to_index(floor), run = 1;
+            for (int f = fi0 - 1; f >= 0 &&
+                 tower->grid[f][x].type == type; f--) run++;
+            for (int f = fi0 + 1; f < TOWER_FLOOR_COUNT &&
+                 tower->grid[f][x].type == type; f++) run++;
+            if (run > 30) {
+                printf("  [reject] %s at F%d x%d: a shaft serves at most "
+                       "30 floors\n", tower_item_name(type), floor, x);
+                return 0;
+            }
+        }
+    }
+
     /* Underground-only items must be below floor 0 */
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0) return 0;
     if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
@@ -308,29 +356,32 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             return 0;
         }
     } else if (floor > 0) {
-        /* Above ground: needs SOME support directly below (the floor-below has
-         * content somewhere under the footprint). Empty floorspace on a built
-         * floor stays freely buildable — Jonah's rule. */
-        int has_support = 0;
+        /* Above ground: the WHOLE footprint needs support directly below —
+         * a floor's extent can't overhang the one under it (the EXE's
+         * deck-extent gate, ValidatePlacementArea: a span must fit inside a
+         * built floor, and decks grow only over decks). Partial support let
+         * units cantilever off the tower edge — Jonah's overhang bug. */
         int below_idx = floor_to_index(floor - 1);
-        if (below_idx >= 0 && below_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = x; cx < x + width && !has_support; cx++) {
-                if (tower->grid[below_idx][cx].type != ITEM_NONE)
-                    has_support = 1;
+        if (below_idx < 0 || below_idx >= TOWER_FLOOR_COUNT) return 0;
+        for (int cx = x; cx < x + width; cx++) {
+            if (tower->grid[below_idx][cx].type == ITEM_NONE) {
+                printf("  [reject] %s at F%d x%d: overhangs the floor below "
+                       "(no deck under cell x%d)\n",
+                       tower_item_name(type), floor, x, cx);
+                return 0;
             }
         }
-        if (!has_support) return 0;
     } else {
-        /* Underground (floor < 0): must have support above */
-        int has_support = 0;
+        /* Underground (floor < 0): the whole footprint needs support above */
         int above_idx = floor_to_index(floor + height);
-        if (above_idx >= 0 && above_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = x; cx < x + width && !has_support; cx++) {
-                if (tower->grid[above_idx][cx].type != ITEM_NONE)
-                    has_support = 1;
+        if (above_idx < 0 || above_idx >= TOWER_FLOOR_COUNT) return 0;
+        for (int cx = x; cx < x + width; cx++) {
+            if (tower->grid[above_idx][cx].type == ITEM_NONE) {
+                printf("  [reject] %s at B%d x%d: no ceiling above cell x%d\n",
+                       tower_item_name(type), -floor, x, cx);
+                return 0;
             }
         }
-        if (!has_support) return 0;
     }
     
     return 1;
@@ -814,7 +865,14 @@ void tower_floor_extents(const Tower *tower, int16_t *left, int16_t *right)
     }
     for (int i = 0; i < tower->tenant_count; i++) {
         const Tenant *t = &tower->tenants[i];
-        if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+        if (t->type == ITEM_NONE) continue;
+        /* Stairs/escalators are overlays and never widen a floor. Elevators
+         * DO count: the EXE auto-builds floor deck exactly the shaft's
+         * footprint when a shaft grows past the built tower
+         * (EnsureFloorDeckUnderShaft 11f8:15f7, called by ExtendUp/Down and
+         * PlaceElevator — seg44 drag trace 2026-07-28), and that deck lives
+         * in the floor map that anchors overlays and the crane. */
+        if (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR) continue;
         for (int f = t->floor; f < t->floor + t->height; f++) {
             int fi = floor_to_index(f);
             if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;

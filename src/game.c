@@ -332,8 +332,20 @@ int game_check_promotion(GameSim *sim, Tower *tower, int target_star)
  *   Midday:  offices peak, restaurants active
  *   Evening: offices emptying, hotels filling (capacity descending/ascending)
  * Step size = 0x08, range = 0x00 (empty) to 0x40 (full) */
-static void update_capacity(Tenant *t, TimeOfDay tod, int reachable)
+static void update_capacity(GameSim *sim, Tenant *t, TimeOfDay tod,
+                            int reachable)
 {
+    /* Pace the byte on game time WITH A PER-TENANT PHASE: each unit steps
+     * at its own moments spread across the fill period, so the tower fills
+     * (and empties) staggered unit-by-unit through the morning/evening the
+     * way the original reads — not every office snapping full in lockstep.
+     * Same frame-rate-independent idiom as the construction countdown. */
+    {
+        int cdiv = sim->ticks_per_quarter / 12;
+        if (cdiv < 4) cdiv = 4;
+        if ((sim->tick + (int)t->id * 37) % cdiv >= 4) return;
+    }
+
     /* A venue nobody can reach has no patrons — its occupancy byte must drain
      * to empty, not follow the time-of-day fill curve. (Otherwise an isolated
      * restaurant would animate to "packed" at dinnertime despite zero pop —
@@ -475,6 +487,11 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         int is_active = (type_idx < ITEM_TYPE_COUNT) ?
                         TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day] : 0;
 
+        /* Offices are closed on weekends — no workers commute in, so the
+         * occupancy byte never fills (UniPeple's office spawn is weekday-
+         * gated in the EXE; weekend is the malls-and-hotels day). */
+        if (t->type == ITEM_OFFICE && game_is_weekend(tower)) is_active = 0;
+
         /* Commute gating: space nobody can reach from the entrance never
          * rents, and a dirty hotel room can't take guests until cleaned. */
         int is_hotel = (t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
@@ -520,7 +537,10 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             }
             if (t->construction <= 0) {
                 t->state = TENANT_MOVING_IN;
-                t->capacity = CAP_MIN;
+                /* Fresh units OPEN EMPTY — frame 0 is the vacant art (bare
+                 * office desks, the condo's For Sale sign) — and fill on the
+                 * staggered daily cycle as people actually show up. */
+                t->capacity = CAP_EMPTY;
                 t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
                 /* Build-complete jingle, random of two (referee row 21:
                  * (rand%2)+0x2714). Fires as a unit finishes construction. */
@@ -546,7 +566,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         case TENANT_OCCUPIED:
             if (is_active) {
                 /* Advance capacity animation (3-phase daily cycle) */
-                update_capacity(t, sim->time_of_day, reachable);
+                update_capacity(sim, t, sim->time_of_day, reachable);
                 
                 /* Per-tick income is now ONLY the parking approximation —
                  * every other income is event-driven: offices/shops bank
@@ -619,7 +639,7 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             
         case TENANT_VACANT:
             /* Even when vacant, capacity can animate (hotels emptying, etc.) */
-            update_capacity(t, sim->time_of_day, reachable);
+            update_capacity(sim, t, sim->time_of_day, reachable);
             if (is_active) {
                 t->state = TENANT_OCCUPIED;
             }
@@ -877,18 +897,28 @@ static void infest_room(Tenant *v)
  * EXE walk tests the range BEFORE stepping outward, so one record past
  * the strict cutoff still counts — replicated here as edge distance <= 20
  * against nearest edges. */
-static int has_noisy_neighbor(const Tower *tower, const Tenant *room)
+static ItemType noisy_neighbor_scan(const Tower *tower, const Tenant *room)
 {
+    /* Victim sensitivity range in cells (NoiseT @0179-0186: office 10 —
+     * least sensitive — hotel rooms 20, condos 30). */
+    int range = (room->type == ITEM_CONDO) ? 30
+              : item_is_hotel_room(room->type) ? 20 : 10;
     for (int i = 0; i < tower->tenant_count; i++) {
         const Tenant *n = &tower->tenants[i];
         if (n == room || n->floor != room->floor) continue;
         if (n->state == TENANT_ABANDONED) continue;
         switch (n->type) {
+        case ITEM_OFFICE:
+            /* NoiseT @0156/0232: an office is noisy to everyone EXCEPT
+             * another office — offices tolerate each other (else every
+             * office row would permanently gripe about its neighbors). */
+            if (room->type == ITEM_OFFICE) continue;
+            break;
         case ITEM_RESTAURANT: case ITEM_SHOP: case ITEM_FAST_FOOD:
-        case ITEM_OFFICE: case ITEM_CINEMA: case ITEM_PARTY_HALL:
+        case ITEM_CINEMA: case ITEM_PARTY_HALL:
             break;
         case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
-            /* NoiseT's one asymmetry: rooms only bother CONDOS */
+            /* NoiseT's other asymmetry: rooms only bother CONDOS */
             if (room->type == ITEM_CONDO) break;
             continue;
         default:
@@ -899,9 +929,14 @@ static int has_noisy_neighbor(const Tower *tower, const Tenant *room)
                     : (room->x >= n->x + n->width)
                         ? room->x - (n->x + n->width)
                         : 0;                       /* overlapping/abutting */
-        if (gap <= 20) return 1;
+        if (gap <= range) return n->type;
     }
-    return 0;
+    return ITEM_NONE;
+}
+
+static int has_noisy_neighbor(const Tower *tower, const Tenant *room)
+{
+    return noisy_neighbor_scan(tower, room) != ITEM_NONE;
 }
 
 void game_hotel_demand_pass(GameSim *sim, Tower *tower)
@@ -1657,27 +1692,7 @@ int game_tenant_eval_metric(GameSim *sim, Tower *tower, const Tenant *t)
  * neighbor so the caller can name it. Returns ITEM_NONE if none. */
 static ItemType noisy_neighbor_type(const Tower *tower, const Tenant *room)
 {
-    for (int i = 0; i < tower->tenant_count; i++) {
-        const Tenant *n = &tower->tenants[i];
-        if (n == room || n->floor != room->floor) continue;
-        if (n->state == TENANT_ABANDONED) continue;
-        switch (n->type) {
-        case ITEM_RESTAURANT: case ITEM_SHOP: case ITEM_FAST_FOOD:
-        case ITEM_OFFICE: case ITEM_CINEMA: case ITEM_PARTY_HALL:
-            break;
-        case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
-            if (room->type == ITEM_CONDO) break;
-            continue;
-        default:
-            continue;
-        }
-        int gap = (n->x >= room->x + room->width)
-                    ? n->x - (room->x + room->width)
-                    : (room->x >= n->x + n->width)
-                        ? room->x - (n->x + n->width) : 0;
-        if (gap <= 20) return n->type;
-    }
-    return ITEM_NONE;
+    return noisy_neighbor_scan(tower, room);
 }
 
 /* ---- Info-dialog diagnostic comment lines (seg_1108 DrawTenantComments) ----
@@ -2593,6 +2608,11 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
 
         if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
             continue;
+
+        /* A unit whose occupancy byte has drained to empty (unreachable,
+         * night-vacated, not yet moved in) shows the vacant art — nobody
+         * should be dancing over a For Sale sign. */
+        if (t->capacity <= CAP_EMPTY) continue;
 
         switch (t->type) {
         case ITEM_OFFICE:

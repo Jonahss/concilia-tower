@@ -39,6 +39,11 @@ static void fresh(void)
     tower_init(&tw);
     game_init(&sim);
     tw.money = 100000000L;  /* don't let costs interfere */
+    /* Widen the ground lobby: floors can't overhang the level below (the
+     * deck-extent rule), so a broad ground span keeps placement geometry
+     * out of the way of what each test is actually checking. */
+    tower_place(&tw, ITEM_LOBBY, 0, 100);
+    tower_place(&tw, ITEM_LOBBY, 0, 280);
 }
 
 /* Lobby sits at x=179..194; build above/beside it. */
@@ -82,8 +87,10 @@ static void test_elevators(void)
     fresh();
 
     /* Shafts self-support, starting beside the lobby on the ground floor */
-    for (int f = 0; f <= 10; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);    /* standard */
-    for (int f = 0; f <= 14; f++) place(ITEM_ELEVATOR_SERVICE, f, 202);  /* service  */
+    /* Columns spaced >= 8 cells apart — the EXE's shaft clearance rule
+     * (CheckElevatorClearance 10a0:10e8, seg44 drag trace 2026-07-28). */
+    for (int f = 0; f <= 10; f++) place(ITEM_ELEVATOR_SHAFT, f, 150);    /* standard */
+    for (int f = 0; f <= 14; f++) place(ITEM_ELEVATOR_SERVICE, f, 170);  /* service  */
     for (int f = 0; f <= 20; f++) place(ITEM_ELEVATOR_EXPRESS, f, 208);  /* express  */
     game_update_reachability(&sim, &tw);
 
@@ -100,9 +107,9 @@ static void test_elevators(void)
      * column is free. f7 atop the service column: supported, mid-tower,
      * not an extension -> refused. f15 same spot: sky lobby -> allowed.
      * f21 on the express column: extension -> allowed. */
-    CHECK(!tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 7, 196),
+    CHECK(!tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 7, 182),
           "new express shaft can't start mid-tower (f7)");
-    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 15, 202),
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 15, 182),
           "new express shaft CAN start at sky-lobby f15");
     CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 21, 208),
           "extending the existing express column past f20 is allowed");

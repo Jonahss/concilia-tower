@@ -1041,6 +1041,8 @@ static void draw_shaft_digits(int tx, int ty, int w, int wf, int hot)
  * right is EXCLUSIVE; right == 0 marks an empty floor. */
 static int16_t ovl_left[TOWER_FLOOR_COUNT], ovl_right[TOWER_FLOOR_COUNT];
 
+static void render_occupants(void);
+
 static void floor_map_extents(void)
 {
     tower_floor_extents(&game.tower, ovl_left, ovl_right);
@@ -1520,12 +1522,10 @@ static void render_tower(void)
                      * sheet at 32px and stretched it — the flashing
                      * half-workers bug.) */
                 } else if (tenant->state == TENANT_STRESSED) {
-                    /* Stressed: pulsing red (from MainteT stress cascade) */
-                    int pulse = 40 + (game.sim.frame % 30) * 2;
-                    if (pulse > 80) pulse = 120 - pulse;
-                    SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
-                    SDL_Rect overlay = { tx, draw_y, tw, draw_h };
-                    SDL_RenderFillRect(game.renderer, &overlay);
+                    /* No unit tint: the EXE shows stress on the WAITING
+                     * PEOPLE (queue silhouettes shade pink->red — drawn in
+                     * render_shaft) and in the eval views, never as a red
+                     * wash over the unit art. (The old pulse was invented.) */
                 } else if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
                     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 60);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
@@ -1545,6 +1545,12 @@ static void render_tower(void)
             }
         }
     }
+
+    /* In-tenant people draw with their units, BEFORE the shaft pass — in the
+     * EXE, AnimPeple composites inside the cell repaint while the elevator
+     * pass (ElvPeple, seg_1090 tick-swap) runs after, so a shaft passing
+     * through an office covers the workers, never the reverse. */
+    render_occupants();
 
     /* ====== PASS 2.3: Decorative overlays (awning, fire escape) ======
      * All of OverlayT (seg_11c0) anchors to the FLOOR MAP's per-floor
@@ -2857,13 +2863,32 @@ static void render_shaft(ElevatorShaft *s)
                 else
                     pid = st->down_ring[(st->down_head + k - st->up_count)
                                         % QUEUE_CAP];
+                if (!pid) continue;
                 int fig = (pid * 7) % 40;     /* 40 silhouettes of 16px */
                 SDL_Rect src = { fig * 16, 0, 16, 36 };
                 int px = rightward ? sx + shaft_w + k * 9
                                    : sx - 16 - k * 9;
                 SDL_Rect dst = { px, sy, 16, CELL_H };
+                /* The original's frustration display: the longer a person
+                 * waits, the pinker then redder their silhouette (wait_accum
+                 * against the wait cap — the eval-stress input). */
+                {
+                    const Person *qp = &game.sim.people.people[pid - 1];
+                    int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
+                    float wr = (float)qp->wait_accum / (float)cap;
+                    if (wr > 1.0f) wr = 1.0f;
+                    if (wr > 0.25f) {
+                        uint8_t sub = (uint8_t)(190.0f * (wr - 0.25f) / 0.75f);
+                        SDL_SetTextureColorMod(queue_spr->texture,
+                                               255, 255 - sub, 255 - sub);
+                    } else {
+                        SDL_SetTextureColorMod(queue_spr->texture,
+                                               255, 255, 255);
+                    }
+                }
                 SDL_RenderCopy(game.renderer, queue_spr->texture, &src, &dst);
             }
+            SDL_SetTextureColorMod(queue_spr->texture, 255, 255, 255);
         }
 
         /* Cars, with smooth travel between floors */
@@ -5217,8 +5242,7 @@ static void render(void)
     if (game.elv_edit_mode) {
         render_elv_edit_mode();   /* silhouette tower + isolated shaft */
     } else {
-        render_tower();
-        render_occupants();    /* interior people, under the hall/queue crowds */
+        render_tower();        /* includes in-tenant people, under the shafts */
         render_people();
         render_events();       /* fire/bomb effects ON TOP of the burning floors */
         render_fire_glow();    /* warm tint washed over the world while it burns */

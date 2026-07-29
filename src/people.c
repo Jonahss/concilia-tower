@@ -1198,7 +1198,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         /* Hotel guests spawn only for rooms the 5PM demand pass armed —
          * the EXE's +0x14 booking gate (UniPeple 1220:3032). This is what
          * keeps dirty and infested rooms guest-free: they can never arm. */
-        int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING) ||
+        int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING &&
+                       !game_is_weekend(tower)) ||
                       (item_is_hotel_room(t->type) && tod == TOD_EVENING &&
                        t->demand_armed);
 
