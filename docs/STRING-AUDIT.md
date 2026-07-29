@@ -356,11 +356,15 @@ decomp `output/pass3_coverage_2026-07-29.md` + the pass-2 commits.
   = view−16px; minimap click navigates via animated SmoothScroll; map
   window has a close box; overlay buttons are star-gated (4th at 2★).
 
-**Verdict of note — no game speed:** 0x783C is `current_tool` (0 bulldozer /
-1 finger / 2 inspect / ≥3 build item). The EXE has NO speed global at all —
-pause only ([0x783E] is_playing). The port's 1x/2x/3x is a modern extension
-with no original counterpart; keeping it is a deliberate divergence (flagged
-to Jonah 2026-07-29).
+**Verdict of note — game speed (corrected same day):** 0x783C is
+`current_tool` (0 bulldozer / 1 finger / 2 inspect / ≥3 build item), NOT
+game_speed — that part stands. But the original DOES have a speed control,
+which the first sweep missed and Jonah remembered: **Options → Fast Mode**
+(menu id 40007, menu resource 0x8001) toggles [0xDE34], read by the TimeT
+tick dispatcher (1200:01a5) — OFF throttles the sim to one tick per 6ms,
+ON runs unthrottled (the default). So the original's speed model is
+pause / throttled / unthrottled. The port's 1x/2x/3x Speed menu is the
+same idea with fixed tiers — kept, recorded in MOD-IDEAS.md.
 
 **Original's hidden debug menu** (trivia): menu commands 9000/9001/9002 =
 start event / apply star / start fire — items deleted at WM_CREATE but the
