@@ -3279,30 +3279,9 @@ void game_update_santa(GameSim *sim)
                            * v2: hotel condition/demand fields in Tenant,
                              hotel_pass_day in GameSim */
 
-/* Rotate path -> path.1 -> path.2 -> path.3 so a save can never destroy
- * the only copy (born of the 2026-07-28 lost-tower incident: an F5 sent
- * to the wrong of two running instances overwrote a whole evening).
- * rename() is atomic; a fresh save is also written to a temp file first
- * and renamed in, so a crash mid-write can't corrupt the primary. */
-static void save_rotate(const char *path)
-{
-    char a[512], b[512];
-    snprintf(a, sizeof a, "%s.3", path);
-    remove(a);
-    for (int i = 2; i >= 1; i--) {
-        snprintf(a, sizeof a, "%s.%d", path, i);
-        snprintf(b, sizeof b, "%s.%d", path, i + 1);
-        rename(a, b);
-    }
-    snprintf(a, sizeof a, "%s.1", path);
-    rename(path, a);
-}
-
 int game_save(const GameSim *sim, const Tower *tower, const char *path)
 {
-    char tmp[512];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
+    FILE *f = fopen(path, "wb");
     if (!f) return -1;
     uint32_t hdr[5] = { SAVE_MAGIC, SAVE_VERSION,
                         (uint32_t)sizeof(Tower), (uint32_t)sizeof(GameSim),
@@ -3311,11 +3290,8 @@ int game_save(const GameSim *sim, const Tower *tower, const char *path)
              fwrite(tower, sizeof(*tower), 1, f) == 1 &&
              fwrite(sim, sizeof(*sim), 1, f) == 1 &&
              fwrite(&TUNING, sizeof(TUNING), 1, f) == 1;
-    if (fclose(f) != 0) ok = 0;
-    if (!ok) { remove(tmp); return -1; }
-    save_rotate(path);
-    if (rename(tmp, path) != 0) return -1;
-    return 0;
+    fclose(f);
+    return ok ? 0 : -1;
 }
 
 int game_load(GameSim *sim, Tower *tower, const char *path)

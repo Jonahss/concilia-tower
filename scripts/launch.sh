@@ -9,17 +9,6 @@ set -e
 cd "$(dirname "$0")/.."
 PROJECT_DIR="$(pwd)"
 
-# GUARD (2026-07-28 lost-tower incident): the concilliatower-vnc systemd
-# service also launches simtower on :99 with Restart=always — running this
-# script alongside it produces two instances fighting over one display,
-# and keystrokes (like F5-save) land on whichever has focus. Refuse.
-if systemctl is-active --quiet concilliatower-vnc 2>/dev/null; then
-    echo "❌ concilliatower-vnc.service is ACTIVE — it owns simtower on :99."
-    echo "   Use: sudo systemctl restart concilliatower-vnc   (service path)"
-    echo "   Or:  sudo systemctl stop concilliatower-vnc      then re-run this."
-    exit 1
-fi
-
 # Locate SIMTOWER.EXE (assets). Override with $SIMTOWER_EXE, else try known paths.
 find_exe() {
     local c
