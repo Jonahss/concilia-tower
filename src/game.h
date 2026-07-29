@@ -795,6 +795,14 @@ int game_tenant_eval_metric(GameSim *sim, Tower *tower, const Tenant *t);
 int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                          char lines[][48], int max);
 
+/* Route-loss guardrail (res 0x3ed; TransferT 11b0:0b8b / 11b0:0cfe).
+ * Stop-toggle: returns the confirm-string number (1 key route / 2
+ * housekeeping / 3 lobby route) or 0 for a silent toggle. Removal:
+ * returns 1 when demolishing this shaft's segment at fidx would strand
+ * the floor (confirm with string #5). */
+int game_stop_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx);
+int game_remove_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx);
+
 /* Parking usability (ParkingT CheckAllParking): mark each space usable
  * iff its floor's ramp chains from B1 (vertical same-x stack) and no
  * >=4-cell bare gap cuts the floor. Runs daily at 7AM + on build/

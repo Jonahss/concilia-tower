@@ -417,12 +417,28 @@ typedef struct {
     int             cert_star;            /* star level being celebrated (2..6) */
     int             cert_timer;           /* frames left before auto-dismiss */
 
+    /* Route-loss confirmation (res 0x3ed): a Yes/No modal shown before a
+     * stop-toggle or shaft-segment demolition severs a floor's only route.
+     * Pauses the sim while open, like the EXE's system-modal MessageBox. */
+    int             route_confirm;        /* 0 = closed, else 1 */
+    const char     *route_confirm_text;   /* one of the res-0x3ed strings */
+    int             route_confirm_kind;   /* 1 = toggle stop, 2 = remove tenant */
+    int             route_confirm_shaft;
+    int             route_confirm_fidx;
+    uint16_t        route_confirm_tid;
+    GameSpeed       route_saved_speed;
+
     /* Mouse cursors: arrow normally, crosshair while bulldozing. */
     SDL_Cursor     *cursor_arrow;
     SDL_Cursor     *cursor_demolish;
 } Game;
 
 static Game game;
+
+/* Route-loss confirmation (defined with the other modals below; the
+ * stop-toggle and demolish paths above them need the entry points). */
+static void request_stop_toggle(int si, int fidx);
+static int  request_remove_tenant(uint16_t tid, ItemType ty);
 
 /* Palette-cycle animation variants (the EXE's AnimeT cycles color-table
  * entries continuously; the security radar and cinema marquee live on
@@ -2201,7 +2217,7 @@ static int elv_edit_toggle_at(int mx, int my)
     if (fidx >= s->lo && fidx <= s->hi &&
         cell >= s->x && cell < s->x + w &&
         elv_structural_stop(s, fidx)) {
-        people_set_serviced(&game.sim.people, si, fidx, !s->serviced[fidx]);
+        request_stop_toggle(si, fidx);
         return 1;
     }
     return 0;
@@ -2672,7 +2688,7 @@ static int elv_dialog_click_faithful(int mx, int my)
         if (r >= 0 && r < 15 && f >= s->lo && f <= s->hi) {
             if (col == -1) {
                 if (elv_structural_stop(s, f))
-                    people_set_serviced(ps, si, f, !s->serviced[f]);
+                    request_stop_toggle(si, f);
             } else if (col >= 0 && col < s->num_cars) {
                 people_set_home(ps, si, col, f);
             }
@@ -4570,6 +4586,173 @@ static void disaster_modal_key(SDL_Keycode k)
         disaster_do_ransom();
 }
 
+/* ---- Route-loss confirmations (res 0x3ed, text verbatim) ----
+ * The original pops a system-modal Yes/No MessageBox before a stop-toggle
+ * or an elevator demolition severs a floor's route (TransferT detectors,
+ * traced 2026-07-29). Yes proceeds, No aborts with nothing changed. */
+static const char *ROUTE_MSGS[4] = {
+    /* detector result 1 */
+    "If you change this setting, you will lose a key route to this floor.  "
+    "Are you sure you want to change this setting?",
+    /* 2 */
+    "If the service elevator doesn't stop on this floor, housekeeping "
+    "cannot reach it.  Are you sure you want to change this?",
+    /* 3 */
+    "This floor is part of the route to the Lobby.  Are you sure you want "
+    "to change this setting?",
+    /* removal (#5) */
+    "If you remove this item, you will lose a key route to this floor.  "
+    "Are you sure you want to change this setting?",
+};
+
+#define RCONF_W 380
+#define RCONF_H 168
+
+static SDL_Rect route_btn_rect(int idx)
+{
+    int wx = (game.screen_w - RCONF_W) / 2;
+    int wy = (game.screen_h - RCONF_H) / 2;
+    int bw = 90, bh = 26;
+    SDL_Rect r = { wx + RCONF_W / 2 + (idx == 0 ? -bw - 12 : 12),
+                   wy + RCONF_H - bh - 12, bw, bh };
+    return r;
+}
+
+static void route_confirm_open(const char *text, int kind,
+                               int shaft, int fidx, uint16_t tid)
+{
+    game.route_confirm = 1;
+    game.route_confirm_text = text;
+    game.route_confirm_kind = kind;
+    game.route_confirm_shaft = shaft;
+    game.route_confirm_fidx = fidx;
+    game.route_confirm_tid = tid;
+    game.route_saved_speed = game.sim.speed;
+    game.sim.speed = SPEED_PAUSED;
+}
+
+static void route_confirm_close(void)
+{
+    game.route_confirm = 0;
+    game.sim.speed = game.route_saved_speed;
+}
+
+static void route_confirm_yes(void)
+{
+    if (game.route_confirm_kind == 1) {
+        people_set_serviced(&game.sim.people, game.route_confirm_shaft,
+                            game.route_confirm_fidx, 0);
+    } else if (tower_remove(&game.tower, game.route_confirm_tid)) {
+        play_snd(SND_DELETE);
+    }
+    route_confirm_close();
+}
+
+static void render_route_confirm(void)
+{
+    if (!game.route_confirm) return;
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 120);
+    SDL_Rect full = { 0, 0, game.screen_w, game.screen_h };
+    SDL_RenderFillRect(game.renderer, &full);
+    SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+
+    int wx = (game.screen_w - RCONF_W) / 2;
+    int wy = (game.screen_h - RCONF_H) / 2;
+    draw_win31_titlebar(wx, wy, RCONF_W, "SimTower");
+    int body_y = wy + WIN_TITLEBAR_H;
+    draw_win31_rect(wx, body_y, RCONF_W, RCONF_H - WIN_TITLEBAR_H, 1);
+
+    /* Word-wrap the message at the dialog width. */
+    SDL_Color black = { 0, 0, 0, 255 };
+    const char *p = game.route_confirm_text;
+    int ty = body_y + 14;
+    char line[64];
+    while (*p) {
+        int len = (int)strlen(p), take = len;
+        if (take > 52) {
+            take = 52;
+            while (take > 0 && p[take] != ' ') take--;
+            if (take == 0) take = 52;
+        }
+        snprintf(line, sizeof line, "%.*s", take, p);
+        draw_text(line, wx + 16, ty, black);
+        ty += 18;
+        p += take;
+        while (*p == ' ') p++;
+    }
+
+    draw_modal_button(route_btn_rect(0), "Yes");
+    draw_modal_button(route_btn_rect(1), "No");
+}
+
+/* Returns 1 while the modal is up (caller swallows the click). */
+static int route_confirm_click(int mx, int my)
+{
+    if (!game.route_confirm) return 0;
+    if (point_in_rect(mx, my, route_btn_rect(0)))      route_confirm_yes();
+    else if (point_in_rect(mx, my, route_btn_rect(1))) route_confirm_close();
+    return 1;
+}
+
+static void route_confirm_key(SDL_Keycode k)
+{
+    if (k == SDLK_y || k == SDLK_RETURN || k == SDLK_KP_ENTER)
+        route_confirm_yes();
+    else if (k == SDLK_n || k == SDLK_ESCAPE)
+        route_confirm_close();
+}
+
+/* Toggle a stop, warning first when the EXE would (turning OFF a floor's
+ * only route). All stop-toggle UI paths come through here. */
+static void request_stop_toggle(int si, int fidx)
+{
+    PeopleSim *ps = &game.sim.people;
+    if (si < 0 || si >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[si];
+    if (s->serviced[fidx]) {
+        int r = game_stop_route_loss(&game.sim, &game.tower, si, fidx);
+        if (r) {
+            route_confirm_open(ROUTE_MSGS[r - 1], 1, si, fidx, 0);
+            return;
+        }
+    }
+    people_set_serviced(ps, si, fidx, !s->serviced[fidx]);
+}
+
+/* Demolish a tenant, warning first for an elevator segment whose floor
+ * would lose its only same-network stop. Returns 1 if handled (removed,
+ * refused with a message, or pending confirmation). */
+static int request_remove_tenant(uint16_t tid, ItemType ty)
+{
+    if (item_is_elevator(ty)) {
+        Tenant *t = tower_tenant(&game.tower, tid);
+        if (t) {
+            PeopleSim *ps = &game.sim.people;
+            int fidx = floor_to_index(t->floor);
+            for (int si = 0; si < ps->shaft_count; si++) {
+                ElevatorShaft *s = &ps->shafts[si];
+                if (!s->active || s->type != ty || s->x != t->x) continue;
+                if (fidx < s->lo || fidx > s->hi) continue;
+                if (game_remove_route_loss(&game.sim, &game.tower, si, fidx)) {
+                    route_confirm_open(ROUTE_MSGS[3], 2, si, fidx, tid);
+                    return 1;
+                }
+                break;
+            }
+        }
+    }
+    if (tower_remove(&game.tower, tid)) {
+        play_snd(SND_DELETE);   /* referee row 22 */
+        printf("Demolish: %s\n", tower_item_name(ty));
+    } else {
+        printf("Can't demolish %s\n", tower_item_name(ty));
+        if (tower_reject_reason()[0])
+            add_event_message(tower_reject_reason());
+    }
+    return 1;
+}
+
 /* Draw text horizontally centered on cx. */
 static void draw_text_centered(const char *text, int cx, int y, SDL_Color color)
 {
@@ -5270,6 +5453,7 @@ static void render(void)
     render_menu_bar();         /* Win3.1 top bar + its open dropdown */
     render_dropdown();
     render_disaster_modal();   /* on top of everything — it's modal */
+    render_route_confirm();    /* likewise */
     render_certificate();      /* star-promotion celebration card */
 
     SDL_RenderPresent(game.renderer);
@@ -5808,6 +5992,27 @@ static int try_cap_drag(void)
 /* ---------- Input handling ---------- */
 static void handle_event(SDL_Event *ev)
 {
+    /* The route-loss confirm is fully modal, like the EXE's MessageBox. */
+    if (game.route_confirm) {
+        switch (ev->type) {
+        case SDL_QUIT:
+            game.running = 0;
+            break;
+        case SDL_MOUSEMOTION:
+            game.mouse_x = ev->motion.x;
+            game.mouse_y = ev->motion.y;
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (ev->button.button == SDL_BUTTON_LEFT)
+                route_confirm_click(ev->button.x, ev->button.y);
+            break;
+        case SDL_KEYDOWN:
+            route_confirm_key(ev->key.keysym.sym);
+            break;
+        }
+        return;
+    }
+
     /* The disaster modal is fully modal: it eats all input until dismissed
      * (only window-close still works). */
     if (game.disaster_modal) {
@@ -6219,14 +6424,7 @@ static void handle_event(SDL_Event *ev)
                     uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
                     if (tid) {
                         ItemType ty = game.tower.grid[fidx][game.mouse_cell].type;
-                        if (tower_remove(&game.tower, tid)) {
-                            play_snd(SND_DELETE);   /* referee row 22 */
-                            printf("Demolish: %s\n", tower_item_name(ty));
-                        } else {
-                            printf("Can't demolish %s\n", tower_item_name(ty));
-                            if (tower_reject_reason()[0])
-                                add_event_message(tower_reject_reason());
-                        }
+                        request_remove_tenant(tid, ty);
                     }
                 }
                 break;

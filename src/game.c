@@ -707,6 +707,84 @@ static int elevator_stops_at(ItemType ty, int fidx)
     return wf <= 0 || (wf % 15) == 0;   /* basements, ground, sky lobbies */
 }
 
+/* ---- Route-loss guardrail (res 0x3ed; TransferT detectors 11b0:0b8b and
+ * 11b0:0cfe, traced 2026-07-29). The EXE does NOT recompute reachability
+ * for these warnings — it runs cheap local heuristics, false negatives and
+ * all (an adjacent stair suppresses the warning even if that stair leads
+ * nowhere). Faithful means keeping the heuristics. ---- */
+
+/* Any stairs/escalator touching this floor (the EXE walkmap test:
+ * walkmap[floor] or walkmap[floor-1]). */
+static int walk_touches_fidx(const Tower *tower, int fidx)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
+        int lf = floor_to_index(t->floor);
+        if (lf == fidx || lf + 1 == fidx) return 1;
+    }
+    return 0;
+}
+
+/* Detector for turning a stop OFF (11b0:0b8b). Returns the res-0x3ed
+ * string number to confirm with, or 0 for a silent toggle:
+ *   1 = key route (public), 2 = housekeeping (service), 3 = lobby route.
+ * Order matters: the stairs exemption only applies to non-service shafts
+ * (staff never get excused by stairs); the lobby-slot case (#3) wins over
+ * the redundant-stop exemption. */
+int game_stop_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx)
+{
+    PeopleSim *ps = &sim->people;
+    if (shaft < 0 || shaft >= ps->shaft_count) return 0;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (fidx < s->lo || fidx > s->hi || !s->serviced[fidx]) return 0;
+
+    int is_service = (s->type == ITEM_ELEVATOR_SERVICE);
+    if (!is_service && walk_touches_fidx(tower, fidx)) return 0;
+
+    int other_same_type = 0;
+    for (int j = 0; j < ps->shaft_count; j++) {
+        if (j == shaft) continue;
+        const ElevatorShaft *o = &ps->shafts[j];
+        if (!o->active || o->type != s->type) continue;
+        if (fidx >= o->lo && fidx <= o->hi && o->serviced[fidx])
+            other_same_type = 1;
+    }
+
+    /* Lobby transfer slot shared with another live same-type group: the
+     * port has no explicit routing-slot table, so slot membership is
+     * "this is a lobby floor we stop at" — the floors BuildRoutingSlots
+     * stores. */
+    int wf = index_to_floor(fidx);
+    if (wf >= 0 && wf % 15 == 0 && other_same_type) return 3;
+    if (other_same_type) return 0;
+    return is_service ? 2 : 1;
+}
+
+/* Detector for removing a shaft segment (11b0:0cfe, inverted): 1 = the
+ * floor would lose its route (warn with string #5). Here express and
+ * standard are interchangeable — the check is by network class, the
+ * EXE's only two-network statement in this guardrail. */
+int game_remove_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx)
+{
+    PeopleSim *ps = &sim->people;
+    if (shaft < 0 || shaft >= ps->shaft_count) return 0;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (fidx < s->lo || fidx > s->hi || !s->serviced[fidx]) return 0;
+
+    int is_service = (s->type == ITEM_ELEVATOR_SERVICE);
+    if (!is_service && walk_touches_fidx(tower, fidx)) return 0;
+
+    for (int j = 0; j < ps->shaft_count; j++) {
+        if (j == shaft) continue;
+        const ElevatorShaft *o = &ps->shafts[j];
+        if (!o->active) continue;
+        if ((o->type == ITEM_ELEVATOR_SERVICE) != is_service) continue;
+        if (fidx >= o->lo && fidx <= o->hi && o->serviced[fidx]) return 0;
+    }
+    return 1;
+}
+
 #define MAX_TRANSPORT_LINKS 1024
 
 void game_update_reachability(GameSim *sim, Tower *tower)

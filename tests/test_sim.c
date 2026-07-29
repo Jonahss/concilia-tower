@@ -2243,6 +2243,51 @@ static void test_build_caps(void)
           "stair 2 cells over collides half-tile");
 }
 
+static void test_route_loss(void)
+{
+    printf("\n-- route-loss confirmations (res 0x3ed detectors) --\n");
+    fresh();
+    for (int f = 1; f <= 3; f++) place(ITEM_FLOOR, f, BX);
+    place(ITEM_OFFICE, 3, BX + 6);
+    for (int f = 0; f <= 3; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    int f3 = floor_to_index(3);
+    CHECK(sim.people.shaft_count == 1, "one shaft collected");
+    CHECK(game_stop_route_loss(&sim, &tw, 0, f3) == 1,
+          "only stop on floor 3 -> key-route warning (#1)");
+    CHECK(game_remove_route_loss(&sim, &tw, 0, f3) == 1,
+          "removing the segment strands floor 3 (#5)");
+
+    /* Stairs touching the floor silence both (the EXE walkmap exemption —
+     * it never asks where the stairs lead). Clear of the shaft's columns. */
+    place(ITEM_STAIRS, 2, BX + 30);
+    CHECK(game_stop_route_loss(&sim, &tw, 0, f3) == 0,
+          "adjacent stairs silence the stop warning");
+    CHECK(game_remove_route_loss(&sim, &tw, 0, f3) == 0,
+          "adjacent stairs silence the removal warning");
+
+    /* A second same-type shaft: redundant stop on a plain floor is silent;
+     * on a lobby floor it's the shared-transfer-slot warning (#3). */
+    for (int f = 0; f <= 3; f++) place(ITEM_ELEVATOR_SHAFT, f, 220);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.shaft_count == 2, "two shafts collected");
+    int f1 = floor_to_index(1), f0 = floor_to_index(0);
+    CHECK(game_stop_route_loss(&sim, &tw, 0, f1) == 0,
+          "another same-type stop makes the toggle silent");
+    CHECK(game_stop_route_loss(&sim, &tw, 0, f0) == 3,
+          "shared lobby stop warns about the Lobby route (#3)");
+
+    /* Service elevators: stairs never excuse them, and the two networks
+     * don't cover for each other. */
+    for (int f = 0; f <= 3; f++) place(ITEM_ELEVATOR_SERVICE, f, 244);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.shaft_count == 3, "service shaft collected");
+    CHECK(game_stop_route_loss(&sim, &tw, 2, f3) == 2,
+          "service stop warns housekeeping (#2) despite stairs");
+    CHECK(game_remove_route_loss(&sim, &tw, 2, f3) == 1,
+          "public shafts don't cover the service network");
+}
+
 int main(void)
 {
     test_stairs();
@@ -2250,6 +2295,7 @@ int main(void)
     test_floor_fill();
     test_bulldozer();
     test_build_caps();
+    test_route_loss();
     test_unreachable_empty();
     test_elevators();
     test_housekeeping();
