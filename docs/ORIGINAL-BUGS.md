@@ -200,3 +200,34 @@ works. Kept so we don't keep asking.
   closed frame 0x22 (and for-rent 0x21); restaurants/FF draw `variant*4+3`.
   The port already does this for restaurants/FF (`retail_open`); **shops still
   need the shared closed/for-rent frames** — logged as a fix in UI_TODO.md.
+
+---
+
+## Part 3 — Buried things of interest (2026-07-29 pass-3 finds)
+
+Not bugs, not mechanics — things the EXE ships but hides.
+
+- **The hidden debug menu.** The menu resource (0x8001) ends with three
+  items past Help: **9000 "Terrorist"** (force the bomb event),
+  **9001 "Treasure"** (the star/level apply path), **9002 "Fire"**
+  (start a fire). WM_CREATE (1158:0062) deletes all three from the menu
+  at startup via USER.#413 — but the WM_COMMAND handlers stay live in
+  the shipped binary. Anything that can post those command ids to the
+  main window gets Maxis's own debug triggers. A fourth survivor, 9003,
+  is a debug full-redraw and isn't even deleted. Confidence HIGH
+  (menu resource dumped + dispatcher table traced).
+
+- **Fast Mode is a tick-throttle bypass.** Options → Fast Mode (menu id
+  40007) toggles word [0xDE34], whose only reader is the TimeT tick
+  dispatcher (1200:01a5): with Fast Mode OFF the sim advances at most
+  one tick per 6ms of real time; ON removes the throttle entirely — the
+  sim runs as fast as the machine can draw. Init defaults it ON, so on
+  1994 hardware "normal" speed was just "your computer's best effort."
+  An earlier annotation called the throttle dead code because of the
+  default; the menu handler makes it live. Confidence HIGH.
+
+- **Menu trivia.** The Animation submenu (People / Effects) gates the
+  crowd and effect animation passes ([0xDE30]/[0xDE32], read by
+  AnimPeple/AnimeT every frame) — the 1994 "performance settings."
+  "Call Fire Rescue" (40008) is greyed into the Options menu and only
+  enabled during a fire.
