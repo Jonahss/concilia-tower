@@ -487,6 +487,7 @@ typedef struct {
 #define ACT_EXPORT_TDT    14
 #define ACT_STATS         15
 #define ACT_TUNING        16
+#define ACT_NEW_TOWER     17
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -557,6 +558,8 @@ static const MenuItem menu_view[] = {
 /* Game menu — save/load, mode (radio), quit. Every keyboard command has a
  * menu home (VNC clients often can't send function keys). */
 static const MenuItem menu_file[] = {
+    { "New Tower",         ITEM_NONE,  ACT_NEW_TOWER },
+    { NULL, ITEM_NONE, ACT_NONE },     /* separator */
     { "Save\tF5",          ITEM_NONE,  ACT_SAVE },
     { "Load\tF9",          ITEM_NONE,  ACT_LOAD },
     { "Export .TDT\tF6",   ITEM_NONE,  ACT_EXPORT_TDT },
@@ -566,7 +569,7 @@ static const MenuItem menu_file[] = {
     { NULL, ITEM_NONE, ACT_NONE },     /* separator */
     { "Quit\tQ",           ITEM_NONE,  ACT_QUIT },
 };
-#define MENU_FILE_COUNT 8
+#define MENU_FILE_COUNT 10
 
 /* Top-level menus */
 typedef struct {
@@ -4922,11 +4925,42 @@ static int inspect_is_cinema(const Tenant *t)
     return t && t->type == ITEM_CINEMA && t->width >= 20;
 }
 
-/* Header line: custom name if set, else the type name, with a floor suffix. */
+/* Retail variant names (res 0x2ca/0x2cb/0x2cc — the EXE titles the info
+ * dialog with the unit's named variant, not the generic type). Indexed by
+ * the same stable variant the renderer uses. */
+static const char *RESTAURANT_NAMES[5] = {
+    "English Pub", "French Restaurant", "Chinese Restaurant",
+    "Sushi Bar", "Steak House",
+};
+static const char *FASTFOOD_NAMES[5] = {
+    "Japanese Soba", "Chinese Cafe", "Hamburger Stand",
+    "Ice Cream", "Coffee Shop",
+};
+static const char *SHOP_NAMES[11] = {
+    "Men's Clothing", "Pet Store", "Flower Shop", "Book Store",
+    "Drug Store", "Boutique", "Electronics", "Bank", "Hair Salon",
+    "Post Office", "Sports Gear",
+};
+
+static const char *retail_variant_name(const Tenant *t)
+{
+    int v = twr_tenant_variant(&game.tower, t);
+    if (v < 0) v = 0;
+    switch (t->type) {
+    case ITEM_RESTAURANT: return RESTAURANT_NAMES[v % 5];
+    case ITEM_FAST_FOOD:  return FASTFOOD_NAMES[v % 5];
+    case ITEM_SHOP:       return SHOP_NAMES[v % 11];
+    default:              return NULL;
+    }
+}
+
+/* Header line: custom name if set, else the variant/type name, with a
+ * floor suffix. */
 static void inspect_title(const Tenant *t, char *buf, int n)
 {
     const char *custom = tenant_custom_name(t->id);
-    const char *base = custom ? custom : tower_item_name(t->type);
+    const char *base = custom ? custom : retail_variant_name(t);
+    if (!base) base = tower_item_name(t->type);
     if (t->floor == 0)     snprintf(buf, n, "%s  -  Lobby", base);
     else if (t->floor < 0) snprintf(buf, n, "%s  -  B%d", base, -t->floor);
     else                   snprintf(buf, n, "%s  -  %dF", base, t->floor);
@@ -4983,10 +5017,12 @@ static void ti_build(const Tenant *t, TiLayout *L)
         inspect_length_str(t, f[nf].value, 40); nf++;
         f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, ty == ITEM_CONDO ? "Price" : "Rent");
         L->price_field = nf; nf++;
-        if (ty == ITEM_CONDO) {
-            f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
-            snprintf(f[nf].value, 40, "%s", t->state == TENANT_OCCUPIED ? "Occupied" : "For Sale"); nf++;
-        }
+        /* Status word (res 0x2c8): condos sell, offices rent. */
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
+        snprintf(f[nf].value, 40, "%s",
+                 t->state == TENANT_OCCUPIED ? "Occupied"
+               : ty == ITEM_CONDO            ? "For Sale" : "For Rent");
+        nf++;
     } else if (item_is_hotel_room(ty)) {
         f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
         f[nf].ival = game_tenant_eval_metric(&game.sim, &game.tower, t);
@@ -5002,6 +5038,10 @@ static void ti_build(const Tenant *t, TiLayout *L)
         f[nf].ival = t->customers_today; f[nf].imax = 30; nf++;
         f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, "Rent");
         L->price_field = nf; nf++;
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
+        snprintf(f[nf].value, 40, "%s",
+                 t->state == TENANT_OCCUPIED ? "Occupied" : "For Rent");
+        nf++;
     } else if (inspect_is_cinema(t)) {
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Playing");
         snprintf(f[nf].value, 40, "%s", t->movie_id < 14 ? MOVIE_TITLES[t->movie_id] : "-"); nf++;
@@ -5899,9 +5939,21 @@ static void do_export_tdt(void)
 {
     char terr[128];
     if (twr_export("ct_export.tdt", &game.tower, &game.sim,
-                   terr, sizeof terr) == 0)
+                   terr, sizeof terr) == 0) {
         add_event_message("Exported ct_export.tdt (original format).");
-    else {
+        /* The original's file format carries at most 20 tenant names
+         * (the port lets you name every tenant — a deliberate
+         * divergence); warn when an export can't keep them all. */
+        int named = 0;
+        for (int i = 0; i < game.tower.tenant_count; i++)
+            if (game.tower.tenants[i].name[0]) named++;
+        if (named > 20) {
+            char buf[64];
+            snprintf(buf, sizeof buf,
+                     "Note: .TDT keeps 20 of your %d tenant names.", named);
+            add_event_message(buf);
+        }
+    } else {
         add_event_message("TDT export FAILED!");
         printf("TDT export: %s\n", terr);
     }
@@ -5939,6 +5991,16 @@ static void execute_menu_item(const MenuItem *item)
         break;
     }
     case ACT_QUIT: game.running = 0; break;
+    case ACT_NEW_TOWER:
+        /* Start over (the original's New Tower command). The current game
+         * is NOT auto-saved — same as the EXE, which only asks on quit. */
+        elv_edit_exit();
+        game.elv_open = 0;
+        game.inspect_tid = 0;
+        tower_init(&game.tower);
+        game_init(&game.sim);
+        add_event_message("New tower started.");
+        break;
     case ACT_FINANCE: toggle_fin_dialog(); break;
     case ACT_SAVE:       do_save_game();  break;
     case ACT_LOAD:       do_load_game();  break;
@@ -7580,6 +7642,20 @@ int main(int argc, char *argv[])
                 game.sim.vip_notice = 0;
             }
 
+            /* Star-requirement nags (res 0x3f2, verbatim; once a day). */
+            {
+                static const char *NAGS[5] = {
+                    "Your tower needs Security",
+                    "Your tower needs Hotel Suites",
+                    "Your tower needs a Recycling Center",
+                    "Recycling Centers are full!",
+                    "Office workers demand Parking",
+                };
+                int nag = game_take_star_nag();
+                if (nag >= 1 && nag <= 5)
+                    add_event_message(NAGS[nag - 1]);
+            }
+
             /* Santa holiday flyby — announce on the rising edge. */
             {
                 static int prev_santa = 0;
@@ -7623,12 +7699,32 @@ int main(int argc, char *argv[])
             if (game.cert_active && --game.cert_timer <= 0)
                 game.cert_active = 0;
 
-            /* Commute feedback: units cut off from the entrance */
+            /* Commute feedback: units cut off from the entrance. Names the
+             * lowest dark floor with the res-0x2cd floor-pair phrasing —
+             * the actionable half of the warning. */
             if (game.sim.unreachable_tenants > prev_unreach) {
-                char buf[48];
-                snprintf(buf, sizeof(buf), "%d unit%s cannot be reached!",
-                         game.sim.unreachable_tenants,
-                         game.sim.unreachable_tenants == 1 ? "" : "s");
+                int dark = TOWER_MAX_FLOOR + 1;
+                for (int i = 0; i < game.tower.tenant_count; i++) {
+                    const Tenant *t = &game.tower.tenants[i];
+                    if (t->type == ITEM_NONE || t->type == ITEM_FLOOR ||
+                        item_is_transport(t->type)) continue;
+                    int fi = floor_to_index(t->floor);
+                    if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
+                    if (!game.sim.reach_public[fi] && t->floor < dark)
+                        dark = t->floor;
+                }
+                char buf[64];
+                if (dark <= TOWER_MAX_FLOOR) {
+                    char fl[16];
+                    if (dark < 0) snprintf(fl, sizeof fl, "B%d", -dark);
+                    else          snprintf(fl, sizeof fl, "%d", dark);
+                    snprintf(buf, sizeof buf,
+                             "People on Floor 1 need path to Floor %s", fl);
+                } else {
+                    snprintf(buf, sizeof buf, "%d unit%s cannot be reached!",
+                             game.sim.unreachable_tenants,
+                             game.sim.unreachable_tenants == 1 ? "" : "s");
+                }
                 add_event_message(buf);
             } else if (prev_unreach > 0 && game.sim.unreachable_tenants == 0) {
                 add_event_message("All units connected.");

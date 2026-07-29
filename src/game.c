@@ -214,6 +214,41 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
  * Ported from seg_1140 FUN_1140_0411
  * Goes up one star at a time per check (original behavior). */
 
+/* ---- Star-requirement nags (res 0x3f2) ----
+ * The gates themselves are byte-verified; the EXE also TELLS a stuck
+ * player what's missing. One nag a day, first unmet requirement wins.
+ * Module-static (not saved): losing a nag throttle on load is harmless. */
+static int star_nag_code;   /* 1 security / 2 suites / 3 recycling /
+                               4 recycling full / 5 parking */
+static int star_nag_day = -1;
+
+int game_take_star_nag(void)
+{
+    int c = star_nag_code;
+    star_nag_code = 0;
+    return c;
+}
+
+static void star_nag(GameSim *sim, Tower *tower, int next_star)
+{
+    if (star_nag_code || tower->day == star_nag_day) return;
+    int code = 0;
+    if (next_star == 3 && !sim->promo.has_security) {
+        code = 1;
+    } else if (next_star == 4 && !sim->promo.has_suite) {
+        code = 2;
+    } else if ((next_star == 4 || next_star == 5) &&
+               !sim->promo.recycling_adequate) {
+        int any = 0;
+        for (int i = 0; i < tower->tenant_count; i++)
+            if (tower->tenants[i].type == ITEM_RECYCLING) any = 1;
+        code = any ? 4 : 3;
+    }
+    if (!code) return;
+    star_nag_code = code;
+    star_nag_day = tower->day;
+}
+
 int game_check_star_rating(GameSim *sim, Tower *tower)
 {
     int current = tower->star_rating;
@@ -236,10 +271,27 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
      * From seg_1148 FUN_1148_01a8 */
     if (sim->tower_width <= current * 25) return current;
     
-    /* Promotion requirements check */
-    if (!game_check_promotion(sim, tower, next_star)) return current;
-    
+    /* Promotion requirements check — a population-qualified tower that
+     * fails a gate gets told what it's missing (res 0x3f2). */
+    if (!game_check_promotion(sim, tower, next_star)) {
+        star_nag(sim, tower, next_star);
+        return current;
+    }
+
     return next_star;
+}
+
+/* The parking-demand nag has no promotion gate behind it: at 3 stars the
+ * office car quota is the mechanic, so nag when it's exhausted (which
+ * includes having no usable spaces at all). Called at the day boundary. */
+void game_parking_nag_daily(GameSim *sim, Tower *tower)
+{
+    (void)sim;
+    if (star_nag_code || tower->day == star_nag_day) return;
+    if (tower->star_rating < 3) return;
+    if (tower->cars_office < 2 * tower->usable_spaces) return;
+    star_nag_code = 5;
+    star_nag_day = tower->day;
 }
 
 /* --- Promotion requirements ---
@@ -1403,6 +1455,7 @@ void game_update(GameSim *sim, Tower *tower)
              * market (2026-07-11 vacancy referee). Runs BEFORE the
              * settlement, as in the EXE (eval then move-outs). */
             game_judge_daily(sim, tower);
+            game_parking_nag_daily(sim, tower);
 
             /* THE QUARTERLY SETTLEMENT (every 3rd day = the EXE quarter;
              * JudgeT MainLoop's day%3 gate + the TimeT maintenance row,
@@ -1835,9 +1888,10 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (is_hotel && t->condition == ROOM_INFESTED && n < max)
         PUSH("Room is too dirty");
 
-    /* 2b. Housekeeping needed (#3) — a checked-out room waiting on a maid. */
-    if (is_hotel && t->condition == ROOM_DIRTY && n < max)
-        PUSH("Housekeeping needed");
+    /* [#2 "Neighbors are too noisy", #3 "Housekeeping needed", #19 "Office
+     * worker needs parking", #25 "Transportation access is good" are DEAD
+     * strings — seg_1108 byte-scan 2026-07-04: no producer in any segment
+     * draws them. Deliberately not implemented.] */
 
     /* 3. Transport distance (#1 / #12-17) — how far the unit is from a route
      * to the ground lobby (seg_1108:014b): reuse the sim's own router, then a
@@ -1856,9 +1910,6 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                                                  : "Stairs are far away");
             else                PUSH(dist >= 125 ? "Escalator is very far away"
                                                  : "Escalator is far away");
-        } else {
-            /* The positive line (#2) — same scan, under the 80 threshold. */
-            PUSH("Transportation access is good");
         }
     }
 
@@ -1921,7 +1972,17 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
         }
     }
 
-    /* [8. Lobby-zone #21 — DEFERRED: port's floor_to_zone never returns <0.] */
+    /* 8. Too far from Lobby or Skylobby (#21, LobbyZoneLine 1108:0520) —
+     * shop/food outside any commercial zone. The EXE's FloorToZone
+     * (JudgeT seg54:166b): internal (floor-5)/15 with remainder <= 9,
+     * else no zone — so each lobby at 15k anchors a 10-floor band from
+     * 5 below it to 4 above; a shop outside every band gets this line
+     * explaining the dead business. */
+    if ((is_shop || is_food) && n < max) {
+        int in = t->floor + 10 - 5;   /* internal floor (ground=10) - 5 */
+        if (in < 0 || in % 15 > 9)
+            PUSH("Too far from Lobby or Skylobby");
+    }
 
     /* 9. Opens tomorrow (#24) — restaurant/fast food still under construction. */
     if (is_food && t->state == TENANT_CONSTRUCTION && n < max)
@@ -1938,19 +1999,15 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (t->type == ITEM_RECYCLING && !sim->promo.recycling_adequate && n < max)
         PUSH("Full of Garbage");
 
-    /* 12. Metro trains (#30-32) — keyed to the 10AM-5PM service window the
-     * sim already runs (train toggle above at game.c ITEM_METRO block;
-     * visitor spawns people.c). Crowded = this phase's visitor quota is
-     * saturated while trains run. */
+    /* 12. Metro trains (#30-32, MetroTrainsLine 1108:07fe): before 10AM
+     * the first train isn't coming; from 9PM the last one is gone; in
+     * between, "Crowded with passengers" fires exactly while a train is
+     * AT THE PLATFORM (the EXE reads the same train-presence state our
+     * venue_state toggle models — not a crowding metric). */
     if (t->type == ITEM_METRO && n < max) {
         if (sim->hour < 10)       PUSH("First train is not coming");
-        else if (sim->hour >= 17) PUSH("Last train is gone");
-        else {
-            int ti = (int)(t - tower->tenants);
-            if (ti >= 0 && ti < tower->tenant_count &&
-                sim->people.spawned[ti] >= METRO_VISITORS_PER_PHASE)
-                PUSH("Crowded with passengers");
-        }
+        else if (sim->hour >= 21) PUSH("Last train is gone");
+        else if (t->venue_state)  PUSH("Crowded with passengers");
     }
 
     /* 13. Noisy neighbor (#35+#36) — names the offending neighbor's type. */

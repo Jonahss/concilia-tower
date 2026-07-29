@@ -803,6 +803,13 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
 int game_stop_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx);
 int game_remove_route_loss(GameSim *sim, Tower *tower, int shaft, int fidx);
 
+/* Star-requirement nags (res 0x3f2): one-shot code for the UI feed —
+ * 1 security, 2 suites, 3 recycling center, 4 recycling full, 5 parking.
+ * Emitted at most once a day, from the hourly star eval (gate misses)
+ * and the daily parking-quota check. */
+int game_take_star_nag(void);
+void game_parking_nag_daily(GameSim *sim, Tower *tower);
+
 /* Parking usability (ParkingT CheckAllParking): mark each space usable
  * iff its floor's ramp chains from B1 (vertical same-x stack) and no
  * >=4-cell bare gap cuts the floor. Runs daily at 7AM + on build/

@@ -127,10 +127,14 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                                                      : TOWER_MAX_FLOOR))
         REJECT("Maximum height has been reached");
 
-    /* Cathedral placement is pinned to a base at exactly F100 (11f8:308f:
-     * hardcoded floor compare, msg "Cathedral is available only on 100th
-     * floor"). The 5-star unlock stays on the toolbar layer. */
-    if (type == ITEM_CATHEDRAL && floor != 100)
+    /* Cathedral placement is pinned to a base at the build ceiling
+     * (11f8:308f: hardcoded compare — base lands on the original's top
+     * buildable floor, spire rising above the ceiling). The port's
+     * ceiling is its floor 100, so the gate is floor == 100 here; note
+     * .TDT imports land one lower (file 109 = port 99) because the
+     * port numbers ground as 0 where the original displays 1F. The
+     * 5-star unlock stays on the toolbar layer. */
+    if (type == ITEM_CATHEDRAL && floor != TOWER_MAX_FLOOR)
         REJECT("Cathedral is available only on 100th floor");
 
     /* Check funds */
