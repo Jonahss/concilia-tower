@@ -325,3 +325,43 @@ missing; **[STRING]** = cosmetic/display only. One-line sketch each.
 **Totals (rule-bearing strings/groups classified):** IMPLEMENTED 58 ·
 PARTIAL 14 · MISSING 23 · N/A 12 · DELIBERATE 2 (Santa cadence, unlimited
 tenant naming).
+
+---
+
+## Pass 2/3 outcomes (2026-07-29, post-gap-list)
+
+Two decomp agents re-verified suspect labels (pass 2) and traced every
+previously-dark dispatch handler (pass 3). Full traces:
+decomp `output/pass3_coverage_2026-07-29.md` + the pass-2 commits.
+
+**Implemented in the port (398ba81):**
+- Construction queue: 10 jobs; 11th placement force-completes the oldest
+  instantly (ConstructQ 11f0:004b).
+- Caps: restaurants+shops+fast food share one 512-record table ([0xB3F8]);
+  medical 10; security 10; recycling verified uncapped.
+- Parking ramps: one vertical stack — first ramp B1-only, later ramps same
+  column ([0xB3EE]); the EXE's exact error strings.
+- Fire/bomb lockout: world clicks dead during an emergency (1058:0000,
+  [0xB406]&9); menus/dialogs stay live.
+
+**Verified, deferred (needs art/UI work, not rules):**
+- Style-variant round-robin: hotel s/t/suite, office, condo, medical cycle
+  persistent per-type counters (mod 2/4/2/6/3/3) for their ART variant at
+  placement. The port has no per-style art for these types yet; when it
+  does, add the counters (save bump) — do NOT randomize.
+- Grand-lobby stairs: with a 2/3-story ground lobby, stairs/escalators in
+  the lobby span become multi-floor variants snapped to the lobby top.
+  Port can only get a tall lobby via .TDT import today.
+- Scroll/minimap polish: line scroll is 16px both axes (not a floor), page
+  = view−16px; minimap click navigates via animated SmoothScroll; map
+  window has a close box; overlay buttons are star-gated (4th at 2★).
+
+**Verdict of note — no game speed:** 0x783C is `current_tool` (0 bulldozer /
+1 finger / 2 inspect / ≥3 build item). The EXE has NO speed global at all —
+pause only ([0x783E] is_playing). The port's 1x/2x/3x is a modern extension
+with no original counterpart; keeping it is a deliberate divergence (flagged
+to Jonah 2026-07-29).
+
+**Original's hidden debug menu** (trivia): menu commands 9000/9001/9002 =
+start event / apply star / start fire — items deleted at WM_CREATE but the
+handlers stay live in the EXE.
