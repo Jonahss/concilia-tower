@@ -3070,6 +3070,15 @@ static int build_origin_cell(int mouse_cell)
     return c;
 }
 
+/* Stairs/escalators anchor on the clicked floor as their UPPER landing
+ * (StairsT driver 11f8:1452: the record stores clicked-1 as the lower
+ * floor); everything else builds on the clicked floor itself. */
+static int build_origin_floor(ItemType ty, int mouse_floor)
+{
+    return (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) ? mouse_floor - 1
+                                                       : mouse_floor;
+}
+
 static void render_build_ghost(void)
 {
     if (game.demolish_mode || game.build_type == ITEM_NONE) return;
@@ -3102,7 +3111,7 @@ static void render_build_ghost(void)
         /* Drag placement: show ghost row of units from start to current cell */
         int start = game.drag_start_cell;
         int end = game.mouse_cell;
-        int floor = game.drag_start_floor;
+        int floor = build_origin_floor(game.build_type, game.drag_start_floor);
         
         /* Determine direction and iterate */
         if (end < start) { int tmp = start; start = end; end = tmp; }
@@ -3163,11 +3172,11 @@ static void render_build_ghost(void)
     } else {
         /* Single-unit ghost, centered on the cursor */
         int oc = build_origin_cell(game.mouse_cell);
+        int of = build_origin_floor(game.build_type, game.mouse_floor);
         int gx, gy;
-        grid_to_screen(game.mouse_floor, oc, &gx, &gy);
+        grid_to_screen(of, oc, &gx, &gy);
 
-        int can = tower_can_place(&game.tower, game.build_type,
-                                   game.mouse_floor, oc);
+        int can = tower_can_place(&game.tower, game.build_type, of, oc);
         
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
         if (can) {
@@ -5337,11 +5346,11 @@ static int elev_add_car_at(int x, int floor)
 
 static void drag_place_units(void)
 {
-    if (game.build_type == ITEM_NONE) return;
+    if (game.build_type <= ITEM_NONE || game.build_type >= ITEM_TYPE_COUNT) return;
     if (!item_unlocked(game.build_type)) return;   /* locked in Campaign */
 
     int width = ITEM_WIDTH[game.build_type];
-    int floor = game.drag_start_floor;
+    int floor = build_origin_floor(game.build_type, game.drag_start_floor);
     int start = game.drag_start_cell;
     int end = game.mouse_cell;
     int step_dir = (end >= start) ? 1 : -1;
@@ -6330,8 +6339,9 @@ static void handle_event(SDL_Event *ev)
                     if (item_unlocked(game.build_type) &&
                         !(item_is_elevator(game.build_type) &&
                           elev_add_car_at(px, game.drag_start_floor))) {
-                        if (!tower_place(&game.tower, game.build_type,
-                                         game.drag_start_floor, px) &&
+                        int pf = build_origin_floor(game.build_type,
+                                                    game.drag_start_floor);
+                        if (!tower_place(&game.tower, game.build_type, pf, px) &&
                             tower_reject_reason()[0])
                             add_event_message(tower_reject_reason());
                     }

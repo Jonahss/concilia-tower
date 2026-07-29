@@ -501,12 +501,12 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x);
 const char *tower_reject_reason(void);
 
 /* The EXE's fixed tables: 24 elevator groups (seg_11f8 new-shaft slot scan),
- * 64 stairs + 64 escalators (StairsT seg_10c0 stairs_data[64]), 16 venues
- * (cinemas + party halls, [0xB400]). */
-#define TOWER_MAX_SHAFT_GROUPS 24
-#define TOWER_MAX_STAIRS       64
-#define TOWER_MAX_ESCALATORS   64
-#define TOWER_MAX_VENUES       16
+ * 64 stairs + escalators COMBINED (one shared 64-record array at 0xBD70 —
+ * StairsT trace 2026-07-29; the reject message differs by type but the
+ * table is one), 16 venues (cinemas + party halls, [0xB400]). */
+#define TOWER_MAX_SHAFT_GROUPS   24
+#define TOWER_MAX_WALK_TRANSPORTS 64
+#define TOWER_MAX_VENUES         16
 
 /* One group per contiguous same-type vertical shaft run (matches the
  * people-sim collector's grouping). */

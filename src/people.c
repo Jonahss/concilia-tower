@@ -1128,13 +1128,8 @@ static void release_car(Tower *tower, Person *p)
     p->parked_cat = 0;
 }
 
-/* How many visitors one metro pumps into the tower per time-of-day phase.
- * The EXE pool is 240 persons per station at ~1-in-36 dice per 16-frame
- * sim visit over the 10AM-5PM window (1220:51dc, byte-verified 2026-07-11)
- * — roughly 300 visitor trips a day. The port's per-tick pacing roll
- * yields ~70 per phase against this cap, landing in the right range
- * (the old cap of 8 starved every ground-zone shop into eviction). */
-#define METRO_VISITORS_PER_PHASE 80
+/* METRO_VISITORS_PER_PHASE lives in people.h now — the metro's "Crowded
+ * with passengers" comment (game.c) reads the same cap. */
 
 /* Phase transitions drive trips:
  *   MORNING: office workers arrive       EVENING: they go home

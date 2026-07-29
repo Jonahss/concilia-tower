@@ -1757,6 +1757,10 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (is_hotel && t->condition == ROOM_INFESTED && n < max)
         PUSH("Room is too dirty");
 
+    /* 2b. Housekeeping needed (#3) — a checked-out room waiting on a maid. */
+    if (is_hotel && t->condition == ROOM_DIRTY && n < max)
+        PUSH("Housekeeping needed");
+
     /* 3. Transport distance (#1 / #12-17) — how far the unit is from a route
      * to the ground lobby (seg_1108:014b): reuse the sim's own router, then a
      * plain |Δx| to the chosen transport vs the 80 / 125 thresholds. */
@@ -1774,6 +1778,9 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                                                  : "Stairs are far away");
             else                PUSH(dist >= 125 ? "Escalator is very far away"
                                                  : "Escalator is far away");
+        } else {
+            /* The positive line (#2) — same scan, under the 80 threshold. */
+            PUSH("Transportation access is good");
         }
     }
 
@@ -1853,7 +1860,20 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (t->type == ITEM_RECYCLING && !sim->promo.recycling_adequate && n < max)
         PUSH("Full of Garbage");
 
-    /* [12. Metro trains #30-32 — already surfaced via the event feed.] */
+    /* 12. Metro trains (#30-32) — keyed to the 10AM-5PM service window the
+     * sim already runs (train toggle above at game.c ITEM_METRO block;
+     * visitor spawns people.c). Crowded = this phase's visitor quota is
+     * saturated while trains run. */
+    if (t->type == ITEM_METRO && n < max) {
+        if (sim->hour < 10)       PUSH("First train is not coming");
+        else if (sim->hour >= 17) PUSH("Last train is gone");
+        else {
+            int ti = (int)(t - tower->tenants);
+            if (ti >= 0 && ti < tower->tenant_count &&
+                sim->people.spawned[ti] >= METRO_VISITORS_PER_PHASE)
+                PUSH("Crowded with passengers");
+        }
+    }
 
     /* 13. Noisy neighbor (#35+#36) — names the offending neighbor's type. */
     if ((is_office || is_condo || is_hotel) && n < max) {

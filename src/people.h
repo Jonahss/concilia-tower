@@ -16,6 +16,14 @@
 
 #define MAX_PEOPLE     4096
 #define MAX_SHAFTS     24          /* original: 24 elevator groups */
+
+/* How many visitors one metro pumps into the tower per time-of-day phase.
+ * The EXE pool is 240 persons per station at ~1-in-36 dice per 16-frame
+ * sim visit over the 10AM-5PM window (1220:51dc, byte-verified 2026-07-11)
+ * — roughly 300 visitor trips a day. The port's per-tick pacing roll
+ * yields ~70 per phase against this cap, landing in the right range
+ * (the old cap of 8 starved every ground-zone shop into eviction). */
+#define METRO_VISITORS_PER_PHASE 80
 #define CARS_PER_SHAFT 8           /* original: 8 cars per group */
 #define QUEUE_CAP      40          /* people per direction per floor stop */
 #define CAR_SLOTS      42          /* passenger slots per car (= standard capacity) */

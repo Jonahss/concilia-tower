@@ -266,18 +266,20 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     /* Singletons and fixed-table caps (placement dispatcher seg_11f8 +
      * StairsT seg_10c0): one metro ([0xB3E8], msg "Only one Metro Station
      * allowed"), one cathedral ([0xB3EC]), 16 venue records (cinemas +
-     * party halls, [0xB400]), 64-record stairs and escalator tables. */
+     * party halls, [0xB400]), and ONE shared 64-record table for stairs
+     * and escalators together (0xBD70 — the reject message differs by
+     * type, the table doesn't). */
     if (type == ITEM_METRO || type == ITEM_CATHEDRAL || type == ITEM_CINEMA ||
         type == ITEM_PARTY_HALL || type == ITEM_STAIRS || type == ITEM_ESCALATOR) {
-        int metros = 0, cathedrals = 0, venues = 0, stairs = 0, escalators = 0;
+        int metros = 0, cathedrals = 0, venues = 0, walks = 0;
         for (int i = 0; i < tower->tenant_count; i++) {
             switch (tower->tenants[i].type) {
-            case ITEM_METRO:      metros++;               break;
-            case ITEM_CATHEDRAL:  cathedrals++;           break;
+            case ITEM_METRO:      metros++;     break;
+            case ITEM_CATHEDRAL:  cathedrals++; break;
             case ITEM_CINEMA:
-            case ITEM_PARTY_HALL: venues++;               break;
-            case ITEM_STAIRS:     stairs++;               break;
-            case ITEM_ESCALATOR:  escalators++;           break;
+            case ITEM_PARTY_HALL: venues++;     break;
+            case ITEM_STAIRS:
+            case ITEM_ESCALATOR:  walks++;      break;
             default: break;
             }
         }
@@ -288,10 +290,10 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if ((type == ITEM_CINEMA || type == ITEM_PARTY_HALL) &&
             venues >= TOWER_MAX_VENUES)
             REJECT("Item no longer available");
-        if (type == ITEM_STAIRS && stairs >= TOWER_MAX_STAIRS)
-            REJECT("No more stairs available");
-        if (type == ITEM_ESCALATOR && escalators >= TOWER_MAX_ESCALATORS)
-            REJECT("No more escalators available");
+        if ((type == ITEM_STAIRS || type == ITEM_ESCALATOR) &&
+            walks >= TOWER_MAX_WALK_TRANSPORTS)
+            REJECT(type == ITEM_STAIRS ? "No more stairs available"
+                                       : "No more escalators available");
     }
 
     /* Parking (ParkingT, byte-verified 2026-07-11 referee):
@@ -348,21 +350,92 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             }
         }
     } else {
-        /* Stairs/escalators overlay a floor, so two of them can SHARE a single
-         * landing floor to form a chain — but they must not FULLY overlap
-         * another transport (share both of their floors). Reject only when both
-         * the lower and upper floors already carry a transport overlay. */
+        /* Stairs/escalators — the traced StairsT model (2026-07-29;
+         * validators 10c0:0775/087d, overlap 10c0:0983, driver 11f8:1452).
+         * `floor` is the LOWER landing (the UI translates the click, which
+         * the original treats as the UPPER landing). */
         int lf = floor_to_index(floor);
-        int uf = floor_to_index(floor + height - 1);
-        int ov_lower = 0, ov_upper = 0;
-        if (lf >= 0 && lf < TOWER_FLOOR_COUNT)
+        int uf = floor_to_index(floor + 1);
+        if (lf < 0 || uf < 0 || uf >= TOWER_FLOOR_COUNT)
+            REJECT("Cannot place stairs here");
+
+        if (type == ITEM_STAIRS) {
+            /* Stairs test ONLY deck extents — no content requirement, no
+             * commercial rule (players were right): lower deck must cover
+             * x..x+7, upper deck x..x+8 (one cell past the exit, the
+             * EXE's strict rightEdge > x+8). */
             for (int cx = x; cx < x + width; cx++)
-                if (cell_has_transport_overlay(&tower->grid[lf][cx])) ov_lower = 1;
-        if (uf >= 0 && uf < TOWER_FLOOR_COUNT)
+                if (tower->grid[lf][cx].type == ITEM_NONE)
+                    REJECT("Cannot place stairs here");
+            for (int cx = x; cx < x + width + 1; cx++)
+                if (cx >= TOWER_WIDTH || tower->grid[uf][cx].type == ITEM_NONE)
+                    REJECT("Cannot place stairs here");
+        } else {
+            /* Escalators check the two LANDING cells only — entry (lower
+             * floor, x) and exit (upper floor, x+7) — against a whitelist:
+             * bare floor deck, restaurant, shop, fast food, cinema, lobby,
+             * party hall, metro (cs:0855). So "commercial spaces" really
+             * means "landings may not sit inside a non-commercial tenant";
+             * two empty built floors are legal. Under-construction fails.
+             * An unbuilt landing fails with the same message (the EXE finds
+             * no record and emits 0x1c). Shaft-stamped cells pass here —
+             * the elevator overlap check right after rejects them. */
+            const struct { int f; int cx; } land[2] =
+                { { lf, x }, { uf, x + width - 1 } };
+            for (int i = 0; i < 2; i++) {
+                const TowerCell *c = &tower->grid[land[i].f][land[i].cx];
+                if (item_is_elevator(c->type)) continue;
+                int ok;
+                switch (c->type) {
+                case ITEM_FLOOR: case ITEM_RESTAURANT: case ITEM_SHOP:
+                case ITEM_FAST_FOOD: case ITEM_CINEMA: case ITEM_LOBBY:
+                case ITEM_PARTY_HALL: case ITEM_METRO:
+                    ok = 1; break;
+                default:
+                    ok = 0; break;
+                }
+                if (ok && c->tenant_id) {
+                    const Tenant *lt = tower_tenant(tower, c->tenant_id);
+                    if (lt && lt->state == TENANT_CONSTRUCTION) ok = 0;
+                }
+                if (!ok)
+                    REJECT("Escalators available only at commercial spaces");
+            }
+        }
+
+        /* Overlap (err 0x17). Elevator shafts block their pit/motor margin
+         * too: any shaft cell on floors [lower-1, upper+2] in the
+         * footprint's columns collides (candidate rect vs shaft rect
+         * padded bottom-2 / top+1). */
+        for (int f = floor - 1; f <= floor + 3; f++) {
+            int fi = floor_to_index(f);
+            if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
             for (int cx = x; cx < x + width; cx++)
-                if (cell_has_transport_overlay(&tower->grid[uf][cx])) ov_upper = 1;
-        if (ov_lower && ov_upper)
-            REJECT("Cannot place over other transportation items");
+                if (item_is_elevator(tower->grid[fi][cx].type))
+                    REJECT("Cannot place over other transportation items");
+        }
+
+        /* Other stairs/escalators: HALF-TILE model — a unit is a lower-left
+         * 4-cell half on its lower floor and an upper-right half on its
+         * upper floor; only half-vs-half collisions on the same floor band
+         * reject. Two units may share a floor pair 4 cells apart, and
+         * same-column zigzag chains are legal. */
+        int half = width / 2;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            const Tenant *o = &tower->tenants[i];
+            if (o->type != ITEM_STAIRS && o->type != ITEM_ESCALATOR) continue;
+            /* candidate halves: (floor, [x,x+4)) and (floor+1, [x+4,x+8)) */
+            const struct { int f; int x0; } mine[2] =
+                { { floor, x }, { floor + 1, x + half } };
+            const struct { int f; int x0; } theirs[2] =
+                { { o->floor, o->x }, { o->floor + 1, o->x + half } };
+            for (int a = 0; a < 2; a++)
+                for (int b = 0; b < 2; b++)
+                    if (mine[a].f == theirs[b].f &&
+                        mine[a].x0 < theirs[b].x0 + half &&
+                        theirs[b].x0 < mine[a].x0 + half)
+                        REJECT("Cannot place over other transportation items");
+        }
     }
 
     /* Support check:
@@ -377,36 +450,9 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (item_is_elevator(type) || floor == 0) {
         /* Elevator shafts and the ground floor are always placeable */
     } else if (is_transport) {
-        /* Transport (stairs/escalators) connect two floors — need content on BOTH.
-         * Stairs/escalators span 2 floors (floor and floor+1).
-         * Both floors must have existing content (lobby, office, etc.)
-         * for the stairs to be useful. */
-        int has_lower = 0, has_upper = 0;
-        int lower_idx = floor_to_index(floor);
-        int upper_idx = floor_to_index(floor + height - 1);
-        
-        /* Both connected floors must actually be BUILT (have content on the
-         * floor itself). The old code also accepted a floor one level
-         * below/above as a fallback — which let you drop a stair/escalator
-         * onto an empty dirt floor as long as some neighbouring level was
-         * built. That's the "escalator into dirt" bug; require real content
-         * on the two floors the transport connects. */
-        if (lower_idx >= 0 && lower_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = 0; cx < TOWER_WIDTH && !has_lower; cx++) {
-                if (tower->grid[lower_idx][cx].type != ITEM_NONE)
-                    has_lower = 1;
-            }
-        }
-        if (upper_idx >= 0 && upper_idx < TOWER_FLOOR_COUNT) {
-            for (int cx = 0; cx < TOWER_WIDTH && !has_upper; cx++) {
-                if (tower->grid[upper_idx][cx].type != ITEM_NONE)
-                    has_upper = 1;
-            }
-        }
-
-        if (!has_lower || !has_upper)
-            REJECT(type == ITEM_ESCALATOR ? "Cannot place item there"
-                                          : "Cannot place stairs here");
+        /* Stairs/escalators already ran their deck-extent (and escalator
+         * landing) gates in the overlap section above — the EXE has no
+         * further support rule for them. */
     } else if (floor > 0) {
         /* Above ground: the WHOLE footprint needs support directly below —
          * a floor's extent can't overhang the one under it (the EXE's

@@ -55,6 +55,7 @@ static void test_stairs(void)
     fresh();
     place(ITEM_FLOOR, 1, BX);
     place(ITEM_FLOOR, 2, BX);
+    place(ITEM_FLOOR, 3, BX);   /* stairs land on deck, not thin air */
     uint16_t office = place(ITEM_OFFICE, 3, BX + 6);  /* on top of the slab stack */
     game_update_reachability(&sim, &tw);
     CHECK(sim.reach_public[floor_to_index(0)], "ground reachable");
@@ -501,8 +502,9 @@ static void test_walk_rules(void)
 {
     printf("walk budget (6 escalator / 3 with stairs):\n");
     fresh();
-    /* escalators up 5 floors, no elevator: walkable (all-escalator <= 6) */
-    for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
+    /* escalators up 5 floors, no elevator: walkable (all-escalator <= 6).
+     * Deck on every floor: landings must sit on built deck (StairsT). */
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
     uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
     for (int f = 0; f <= 4; f++) place(ITEM_ESCALATOR, f, BX + 20);
     force_occupied(office);
@@ -520,7 +522,7 @@ static void test_walk_rules(void)
 
     /* 5 floors of STAIRS only: beyond the 3-floor stair budget -> no route */
     fresh();
-    for (int f = 1; f <= 4; f++) place(ITEM_FLOOR, f, BX);
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
     office = place(ITEM_OFFICE, 5, BX + 6);
     for (int f = 0; f <= 4; f++) place(ITEM_STAIRS, f, BX + 20);
     force_occupied(office);
@@ -630,7 +632,7 @@ static void test_patrons_and_staff(void)
 {
     printf("patrons & staff trips:\n");
     fresh();
-    for (int f = 1; f <= 1; f++) place(ITEM_FLOOR, f, BX);
+    for (int f = 1; f <= 2; f++) place(ITEM_FLOOR, f, BX);
     uint16_t ff = place(ITEM_FAST_FOOD, 2, BX + 6);
     for (int f = 0; f <= 1; f++) place(ITEM_STAIRS, f, BX + 30);
     CHECK(ff != 0, "fast food placed");
@@ -699,7 +701,8 @@ static void test_money(void)
      * No occupiable tenants -> no rent flows to muddy the delta. */
     fresh();
     for (int f = 0; f <= 2; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
-    place(ITEM_ESCALATOR, 0, BX + 20);
+    place(ITEM_FLOOR, 1, BX);          /* upper landing needs deck */
+    place(ITEM_ESCALATOR, 0, BX + 30); /* clear of the shaft's blocked columns */
     game_update_reachability(&sim, &tw);
     people_rebuild_transport(&sim.people, &tw);
     if (sim.people.shaft_count >= 1)
@@ -2180,22 +2183,24 @@ static void test_build_caps(void)
     CHECK(strcmp(tower_reject_reason(), "Only one Cathedral allowed") == 0,
           "cathedral singleton reason");
 
-    /* Fixed tables: 64 stairs, 64 escalators, 16 venue records. Inject
-     * counter fodder directly — the cap check only counts tenant types. */
+    /* Fixed table: 64 stairs + escalators COMBINED (StairsT trace: one
+     * shared record array). Inject counter fodder directly — the cap
+     * check only counts tenant types. */
     fresh();
     for (int i = 0; i < 64; i++) {
         Tenant *t = &tw.tenants[tw.tenant_count++];
         memset(t, 0, sizeof *t);
         t->id = tw.next_tenant_id++;
-        t->type = ITEM_STAIRS;
+        t->type = (i < 40) ? ITEM_STAIRS : ITEM_ESCALATOR;
     }
     CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX) == 0,
-          "65th stairs rejected");
+          "65th walk transport rejected (stairs)");
     CHECK(strcmp(tower_reject_reason(), "No more stairs available") == 0,
           "stairs cap reason");
-    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX) != 0 ||
-          strcmp(tower_reject_reason(), "No more escalators available") != 0,
-          "stairs cap does not bleed into escalators");
+    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX) == 0,
+          "escalators share the same 64-record table");
+    CHECK(strcmp(tower_reject_reason(), "No more escalators available") == 0,
+          "escalator cap reason");
 
     fresh();
     for (int i = 0; i < 16; i++) {
@@ -2209,6 +2214,33 @@ static void test_build_caps(void)
           "17th venue rejected");
     CHECK(tower_can_place(&tw, ITEM_PARTY_HALL, 1, 105) == 0,
           "party hall counts against the same 16-record table");
+
+    /* Escalator landing whitelist (StairsT validators 10c0:0775/087d):
+     * bare deck is legal ("commercial floors" was never floor zoning);
+     * a landing inside a condo is not; inside a shop it is. */
+    fresh();
+    place(ITEM_FLOOR, 1, BX);
+    place(ITEM_FLOOR, 2, BX);
+    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX + 20) == 1,
+          "escalator between two bare built floors is legal");
+    place(ITEM_CONDO, 2, BX + 20);
+    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX + 20) == 0,
+          "escalator exit inside a condo rejected");
+    CHECK(strcmp(tower_reject_reason(),
+                 "Escalators available only at commercial spaces") == 0,
+          "escalator whitelist reason");
+    uint16_t shop = place(ITEM_SHOP, 2, BX + 40);
+    force_occupied(shop);
+    CHECK(tower_can_place(&tw, ITEM_ESCALATOR, 1, BX + 40) == 1,
+          "escalator exit inside a shop is legal");
+
+    /* Half-tile overlap: same floor pair 4 cells apart is legal; 2 cells
+     * apart collides (10c0:0983). */
+    place(ITEM_STAIRS, 1, BX);
+    CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX + 4) == 1,
+          "second stair 4 cells over on the same floors is legal");
+    CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX + 2) == 0,
+          "stair 2 cells over collides half-tile");
 }
 
 int main(void)
