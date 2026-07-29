@@ -466,6 +466,11 @@ typedef struct {
 #define ACT_MODE_CAMPAIGN 9
 #define ACT_MODE_SANDBOX  10
 #define ACT_FINANCE       11
+#define ACT_SAVE          12
+#define ACT_LOAD          13
+#define ACT_EXPORT_TDT    14
+#define ACT_STATS         15
+#define ACT_TUNING        16
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -523,22 +528,29 @@ static const MenuItem menu_speed[] = {
 /* View menu */
 static const MenuItem menu_view[] = {
     { "Financial Statement\tF7", ITEM_NONE, ACT_FINANCE },
+    { "Analytics Graphs\tF3",    ITEM_NONE, ACT_STATS },
+    { "Tuning / Modding\tF4",    ITEM_NONE, ACT_TUNING },
     { NULL, ITEM_NONE, ACT_NONE },
     { "Debug Labels\t`",   ITEM_NONE,  ACT_DEBUG_TOGGLE },
     { "Screenshot\tF12",   ITEM_NONE,  ACT_SCREENSHOT },
     { NULL, ITEM_NONE, ACT_NONE },
     { "Santa!\tF2",        ITEM_NONE,  ACT_SANTA },
 };
-#define MENU_VIEW_COUNT 6
+#define MENU_VIEW_COUNT 8
 
-/* Game menu — mode (radio) + quit */
+/* Game menu — save/load, mode (radio), quit. Every keyboard command has a
+ * menu home (VNC clients often can't send function keys). */
 static const MenuItem menu_file[] = {
-    { "Campaign Mode",     ITEM_NONE,  ACT_MODE_CAMPAIGN },
-    { "Sandbox Mode",      ITEM_NONE,  ACT_MODE_SANDBOX },
+    { "Save\tF5",          ITEM_NONE,  ACT_SAVE },
+    { "Load\tF9",          ITEM_NONE,  ACT_LOAD },
+    { "Export .TDT\tF6",   ITEM_NONE,  ACT_EXPORT_TDT },
+    { NULL, ITEM_NONE, ACT_NONE },     /* separator */
+    { "Campaign Mode\tF8", ITEM_NONE,  ACT_MODE_CAMPAIGN },
+    { "Sandbox Mode\tF8",  ITEM_NONE,  ACT_MODE_SANDBOX },
     { NULL, ITEM_NONE, ACT_NONE },     /* separator */
     { "Quit\tQ",           ITEM_NONE,  ACT_QUIT },
 };
-#define MENU_FILE_COUNT 4
+#define MENU_FILE_COUNT 8
 
 /* Top-level menus */
 typedef struct {
@@ -5641,6 +5653,38 @@ static int dropdown_hit_test(int mx, int my)
     return -1;
 }
 
+/* Save/load/export bodies shared by the F-keys and the Game menu. */
+static void do_save_game(void)
+{
+    if (game_save(&game.sim, &game.tower, save_path()) == 0)
+        add_event_message("Game saved.");
+    else
+        add_event_message("Save FAILED!");
+}
+
+static void do_load_game(void)
+{
+    if (game_load(&game.sim, &game.tower, save_path()) == 0) {
+        elv_edit_exit();
+        game.elv_open = 0;          /* dialog target may be gone */
+        add_event_message("Game loaded.");
+    } else {
+        add_event_message("Load failed (no/old save).");
+    }
+}
+
+static void do_export_tdt(void)
+{
+    char terr[128];
+    if (twr_export("ct_export.tdt", &game.tower, &game.sim,
+                   terr, sizeof terr) == 0)
+        add_event_message("Exported ct_export.tdt (original format).");
+    else {
+        add_event_message("TDT export FAILED!");
+        printf("TDT export: %s\n", terr);
+    }
+}
+
 static void execute_menu_item(const MenuItem *item)
 {
     if (item->build_type != ITEM_NONE) {
@@ -5674,6 +5718,11 @@ static void execute_menu_item(const MenuItem *item)
     }
     case ACT_QUIT: game.running = 0; break;
     case ACT_FINANCE: toggle_fin_dialog(); break;
+    case ACT_SAVE:       do_save_game();  break;
+    case ACT_LOAD:       do_load_game();  break;
+    case ACT_EXPORT_TDT: do_export_tdt(); break;
+    case ACT_STATS:  game.show_stats  = !game.show_stats;  break;
+    case ACT_TUNING: game.show_tuning = !game.show_tuning; break;
     case ACT_SANTA:
         if (!game.sim.santa.active) game_launch_santa(&game.sim, game.screen_w);
         break;
@@ -5794,35 +5843,18 @@ static void handle_event(SDL_Event *ev)
 
         /* Save / load (whole state, including people mid-ride and mods) */
         case SDLK_F5:
-            if (game_save(&game.sim, &game.tower, save_path()) == 0)
-                add_event_message("Game saved.");
-            else
-                add_event_message("Save FAILED!");
+            do_save_game();
             break;
         /* Export as an original-format save (SimTower 1.1 .TDT) */
-        case SDLK_F6: {
-            char terr[128];
-            if (twr_export("ct_export.tdt", &game.tower, &game.sim,
-                           terr, sizeof terr) == 0)
-                add_event_message("Exported ct_export.tdt (original format).");
-            else {
-                add_event_message("TDT export FAILED!");
-                printf("TDT export: %s\n", terr);
-            }
+        case SDLK_F6:
+            do_export_tdt();
             break;
-        }
         /* Financial report (CountT) */
         case SDLK_F7:
             toggle_fin_dialog();
             break;
         case SDLK_F9:
-            if (game_load(&game.sim, &game.tower, save_path()) == 0) {
-                elv_edit_exit();
-                game.elv_open = 0;          /* dialog target may be gone */
-                add_event_message("Game loaded.");
-            } else {
-                add_event_message("Load failed (no/old save).");
-            }
+            do_load_game();
             break;
 
         case SDLK_F8:   /* Toggle Campaign (star-gated) / Sandbox (all unlocked) */
