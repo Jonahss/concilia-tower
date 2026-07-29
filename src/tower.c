@@ -120,8 +120,18 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         REJECT("Cannot place item there");
     if (floor < TOWER_MIN_FLOOR || floor > TOWER_MAX_FLOOR)
         REJECT("Maximum height has been reached");
-    if (floor + height - 1 > TOWER_MAX_FLOOR)
+    /* The cathedral is the one item exempt from the build ceiling (its
+     * pieces are excluded from the max-height gate at 11f8:2f95) — it
+     * stands F100..F104 in the storage range above the ceiling. */
+    if (floor + height - 1 > (type == ITEM_CATHEDRAL ? TOWER_TOP_FLOOR
+                                                     : TOWER_MAX_FLOOR))
         REJECT("Maximum height has been reached");
+
+    /* Cathedral placement is pinned to a base at exactly F100 (11f8:308f:
+     * hardcoded floor compare, msg "Cathedral is available only on 100th
+     * floor"). The 5-star unlock stays on the toolbar layer. */
+    if (type == ITEM_CATHEDRAL && floor != 100)
+        REJECT("Cathedral is available only on 100th floor");
 
     /* Check funds */
     if (tower->money < cost)
@@ -294,6 +304,34 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             walks >= TOWER_MAX_WALK_TRANSPORTS)
             REJECT(type == ITEM_STAIRS ? "No more stairs available"
                                        : "No more escalators available");
+    }
+
+    /* Metro area rules (11f8:2fab + the metro handler at 11f8:3010):
+     * nothing may sit at or below the platform level — the [0xB3E8] gate,
+     * which ExtendDown also carries — and the station itself must bottom
+     * in virgin, un-excavated ground below the current dig. */
+    {
+        const Tenant *metro = NULL;
+        for (int i = 0; i < tower->tenant_count; i++)
+            if (tower->tenants[i].type == ITEM_METRO) {
+                metro = &tower->tenants[i];
+                break;
+            }
+        if (metro && type != ITEM_METRO && floor <= metro->floor)
+            REJECT("Cannot place items under Metro");
+        if (type == ITEM_METRO) {
+            int fidx = floor_to_index(floor);
+            if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT) {
+                for (int cx = 0; cx < TOWER_WIDTH; cx++) {
+                    ItemType e = tower->grid[fidx][cx].type;
+                    if (e == ITEM_NONE) continue;
+                    /* the EXE tolerates a lone bare-deck record on the
+                     * very bottom floor and wipes it */
+                    if (floor == TOWER_MIN_FLOOR && e == ITEM_FLOOR) continue;
+                    REJECT("Place Metro station on bottom floor");
+                }
+            }
+        }
     }
 
     /* Parking (ParkingT, byte-verified 2026-07-11 referee):
@@ -673,13 +711,19 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
     Tenant *t = tower_tenant(tower, tenant_id);
     if (!t) return 0;
 
-    /* The lobby is structural and permanent — the bulldozer can't remove it
-     * (matches the original: you can never demolish the ground lobby). */
-    if (t->type == ITEM_LOBBY)
+    /* The EXE's indestructible set (CanModifyTenant jump table 11f8:33f7):
+     * every lobby (ground AND sky), security, housekeeping, metro,
+     * cathedral. Everything else — including stairs, venues, medical,
+     * recycling — demolishes freely. */
+    switch (t->type) {
+    case ITEM_LOBBY: case ITEM_SECURITY: case ITEM_HOUSEKEEPING:
+    case ITEM_METRO: case ITEM_CATHEDRAL:
         REJECT("Cannot destroy this item");
+    default: break;
+    }
 
-    /* The bulldozer refuses units still being built (res 0x3eb: "Cannot
-     * destroy items under construction"). */
+    /* The bulldozer refuses units still being built (same function,
+     * 11f8:33a5: negated type byte = under construction). */
     if (t->state == TENANT_CONSTRUCTION)
         REJECT("Cannot destroy items under construction");
 

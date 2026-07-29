@@ -167,10 +167,21 @@ static void test_housekeeping(void)
     CHECK(saw_cleaned, "housekeeping cleaned a checked-out room");
     CHECK(saw_hosted_again, "cleaned room hosted guests again");
 
-    /* Remove housekeeping: after the next checkout the room sticks dirty —
+    /* Lose housekeeping: after the next checkout the room sticks dirty —
      * and after 3 daily passes spent dirty-and-unrented the roaches move
-     * in (JudgeT HotelNeglectCheck: the neglect fuse trips at exactly 3) */
-    tower_remove(&tw, hk);
+     * in (JudgeT HotelNeglectCheck: the neglect fuse trips at exactly 3).
+     * The bulldozer refuses housekeeping (indestructible set), so wipe
+     * the record directly to simulate a tower without it. */
+    CHECK(tower_remove(&tw, hk) == 0, "bulldozer refuses housekeeping");
+    {
+        Tenant *hkt = tenant(hk);
+        for (int f = hkt->floor; f < hkt->floor + hkt->height; f++)
+            for (int cx = hkt->x; cx < hkt->x + hkt->width; cx++) {
+                TowerCell *c = tower_cell(&tw, f, cx);
+                if (c && c->tenant_id == hk) { c->type = ITEM_FLOOR; c->tenant_id = 0; }
+            }
+        hkt->type = ITEM_NONE;
+    }
     for (int i = 0; i < 480 * 2; i++) game_update(&sim, &tw);
     CHECK(room->condition != ROOM_CLEAN,
           "without housekeeping the room stays dirty");
@@ -2144,6 +2155,16 @@ static void test_bulldozer(void)
     CHECK(lob != 0, "lobby present at ground");
     CHECK(tower_remove(&tw, lob) == 0, "bulldozer refuses to remove the lobby");
     CHECK(tw.grid[lidx][BX].type == ITEM_LOBBY, "lobby still standing after bulldoze attempt");
+
+    /* Security is in the EXE's indestructible set (CanModifyTenant table)
+     * along with housekeeping, metro, cathedral and every lobby. */
+    uint16_t sec = place(ITEM_SECURITY, 1, 120);
+    Tenant *sect = tower_tenant(&tw, sec);
+    sect->construction = 0;
+    sect->state = TENANT_OCCUPIED;
+    CHECK(tower_remove(&tw, sec) == 0, "bulldozer refuses security");
+    CHECK(strcmp(tower_reject_reason(), "Cannot destroy this item") == 0,
+          "indestructible reason");
 }
 
 static void test_build_caps(void)
@@ -2166,7 +2187,8 @@ static void test_build_caps(void)
     CHECK(tower_can_place(&tw, ITEM_ELEVATOR_SHAFT, 2, 4) == 1,
           "extending shaft 1 upward is not a new group");
 
-    /* Metro is a singleton. */
+    /* Metro: singleton, virgin-ground platform, nothing at or below the
+     * platform level afterwards. */
     fresh();
     place(ITEM_FLOOR, 0, 100);
     uint16_t m1 = place(ITEM_METRO, -3, 105);
@@ -2175,10 +2197,30 @@ static void test_build_caps(void)
           "second metro rejected");
     CHECK(strcmp(tower_reject_reason(), "Only one Metro Station allowed") == 0,
           "metro singleton reason");
+    CHECK(tower_can_place(&tw, ITEM_RAMP, -3, 240) == 0,
+          "nothing may sit at the platform level");
+    CHECK(strcmp(tower_reject_reason(), "Cannot place items under Metro") == 0,
+          "under-metro reason");
 
-    /* Cathedral is a singleton. */
-    CHECK(place(ITEM_CATHEDRAL, 1, 105) != 0, "first cathedral placeable");
+    fresh();
+    place(ITEM_FLOOR, 0, 100);
+    fplace(ITEM_FLOOR, -3, 105);   /* pre-excavated ground where the platform wants to go */
+    CHECK(tower_can_place(&tw, ITEM_METRO, -3, 105) == 0,
+          "platform must sit in virgin ground");
+    CHECK(strcmp(tower_reject_reason(), "Place Metro station on bottom floor") == 0,
+          "metro bottom-floor reason");
+
+    /* Cathedral: pinned to a base at exactly F100, $3M, singleton. */
     CHECK(tower_can_place(&tw, ITEM_CATHEDRAL, 1, 135) == 0,
+          "cathedral off the 100th floor rejected");
+    CHECK(strcmp(tower_reject_reason(),
+                 "Cathedral is available only on 100th floor") == 0,
+          "cathedral floor reason");
+    CHECK(ITEM_COST[ITEM_CATHEDRAL] == 3000000 &&
+          ITEM_COST[ITEM_HOUSEKEEPING] == 50000,
+          "cathedral $3M / housekeeping $50k (cost res 0x3e8)");
+    fplace(ITEM_CATHEDRAL, 100, 105);
+    CHECK(tower_can_place(&tw, ITEM_CATHEDRAL, 100, 140) == 0,
           "second cathedral rejected");
     CHECK(strcmp(tower_reject_reason(), "Only one Cathedral allowed") == 0,
           "cathedral singleton reason");

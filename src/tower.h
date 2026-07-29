@@ -149,7 +149,11 @@ static const int ITEM_COST[] = {
     [ITEM_PARTY_HALL] = 100000,   /* Guide: 100k (was 500k) */
     [ITEM_METRO] = 1000000,
     [ITEM_PARKING] = 3000,        /* Guide: 3k (was 30k) */
-    [ITEM_CATHEDRAL] = 0,         /* Special unlock, free */
+    [ITEM_CATHEDRAL] = 3000000,   /* Cost res 0x3e8 row 0x24 = 30000 x $100;
+                                     charged once at placement (MoneyT
+                                     1178:011d; continuation rows are 0).
+                                     The old "special unlock, free" was
+                                     uncited folklore. */
     [ITEM_MEDICAL] = 500000,
     [ITEM_SECURITY] = 100000,
     [ITEM_RECYCLING] = 500000,
@@ -160,7 +164,8 @@ static const int ITEM_COST[] = {
     [ITEM_ELEVATOR_SHAFT] = 200000,   /* Standard elevator */
     [ITEM_ELEVATOR_SERVICE] = 100000, /* Service elevator (was 80k folklore) */
     [ITEM_ELEVATOR_EXPRESS] = 400000, /* Express elevator */
-    [ITEM_HOUSEKEEPING] = 100000,
+    [ITEM_HOUSEKEEPING] = 50000,  /* cost res 0x3e8 row 0x0f = 500 x $100
+                                     (the $100k figure was uncited) */
     [ITEM_RAMP] = 50000,
 };
 
