@@ -105,7 +105,7 @@ parked-car producer variant — see the header comment at `game.c:1698`.
 
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
-| English Pub … Steak House (5 restaurants); Japanese Soba … Coffee Shop (5 fast foods); Men's Clothing … Sports Gear (11 shops) | each retail unit is a named VARIANT (art + name; the EXE shows the name in the info dialog and the map) | PARTIAL | The variant **identity and art** are implemented: `twr.c:twr_variant_count` (5/5/11 — matching the string counts exactly) and `twr_tenant_variant` (import byte or id-stable), used by the renderer. **The names are nowhere in the port** — the inspector title (`main.c:inspect_title`) shows the generic type name ("Restaurant"). String-side gap; the mechanic (stable per-unit variant) exists. |
+| English Pub … Steak House (5 restaurants); Japanese Soba … Coffee Shop (5 fast foods); Men's Clothing … Sports Gear (11 shops) | each retail unit is a named VARIANT (art + name) | IMPLEMENTED (2026-07-29) — `main.c:retail_variant_name` feeds the inspector title and person-popup whereabouts | The variant **identity and art** are implemented: `twr.c:twr_variant_count` (5/5/11 — matching the string counts exactly) and `twr_tenant_variant` (import byte or id-stable), used by the renderer. **The names are nowhere in the port** — the inspector title (`main.c:inspect_title`) shows the generic type name ("Restaurant"). String-side gap; the mechanic (stable per-unit variant) exists. |
 
 ## res 0x02cd — "People on Floor N need path to Floor M" (PRIORITY)
 
