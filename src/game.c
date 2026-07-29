@@ -547,7 +547,30 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
 {
     long income = 0;
     long expenses = 0;
-    
+
+    /* The construction queue holds 10 jobs (ConstructQ 11f0:004b, pass-2
+     * sweep 2026-07-29): when an 11th starts, the EXE force-completes the
+     * HEAD job instantly — its remaining build time is silently waived.
+     * Zero the oldest jobs past 10 here; the normal completion branch
+     * below finishes them this tick (array order = placement order). */
+    {
+        int in_flight = 0;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+            if (t->state == TENANT_CONSTRUCTION && t->construction > 0)
+                in_flight++;
+        }
+        for (int i = 0; i < tower->tenant_count && in_flight > 10; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (t->type == ITEM_NONE || item_is_transport(t->type)) continue;
+            if (t->state == TENANT_CONSTRUCTION && t->construction > 0) {
+                t->construction = 0;
+                in_flight--;
+            }
+        }
+    }
+
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type == ITEM_NONE || t->type == ITEM_LOBBY || t->type == ITEM_FLOOR)

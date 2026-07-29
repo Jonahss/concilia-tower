@@ -537,8 +537,11 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
      * and escalators together (0xBD70 — the reject message differs by
      * type, the table doesn't). */
     if (type == ITEM_METRO || type == ITEM_CATHEDRAL || type == ITEM_CINEMA ||
-        type == ITEM_PARTY_HALL || type == ITEM_STAIRS || type == ITEM_ESCALATOR) {
+        type == ITEM_PARTY_HALL || type == ITEM_STAIRS || type == ITEM_ESCALATOR ||
+        type == ITEM_RESTAURANT || type == ITEM_SHOP || type == ITEM_FAST_FOOD ||
+        type == ITEM_MEDICAL || type == ITEM_SECURITY) {
         int metros = 0, cathedrals = 0, venues = 0, walks = 0;
+        int commercial = 0, medicals = 0, securities = 0;
         for (int i = 0; i < tower->tenant_count; i++) {
             switch (tower->tenants[i].type) {
             case ITEM_METRO:      metros++;     break;
@@ -547,6 +550,11 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             case ITEM_PARTY_HALL: venues++;     break;
             case ITEM_STAIRS:
             case ITEM_ESCALATOR:  walks++;      break;
+            case ITEM_RESTAURANT:
+            case ITEM_SHOP:
+            case ITEM_FAST_FOOD:  commercial++; break;
+            case ITEM_MEDICAL:    medicals++;   break;
+            case ITEM_SECURITY:   securities++; break;
             default: break;
             }
         }
@@ -561,6 +569,17 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             walks >= TOWER_MAX_WALK_TRANSPORTS)
             REJECT(type == ITEM_STAIRS ? "No more stairs available"
                                        : "No more escalators available");
+        /* Fixed-table caps from the pass-3 dispatch trace (2026-07-29):
+         * restaurants + shops + fast food share ONE 512-record table
+         * ([0xB3F8] < 0x200); medical and security cap at 10 each.
+         * Recycling is genuinely uncapped in the EXE. */
+        if ((type == ITEM_RESTAURANT || type == ITEM_SHOP ||
+             type == ITEM_FAST_FOOD) && commercial >= 512)
+            REJECT("Item no longer available");
+        if (type == ITEM_MEDICAL && medicals >= 10)
+            REJECT("Item no longer available");
+        if (type == ITEM_SECURITY && securities >= 10)
+            REJECT("Item no longer available");
     }
 
     /* Metro area rules (11f8:2fab + the metro handler at 11f8:3010):
@@ -599,10 +618,23 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
      * disconnected ramp and just marks its spaces unusable at the next
      * CheckAllParking sweep. */
     if (type == ITEM_RAMP) {
+        /* Ramps form ONE vertical stack (pass-3 trace 11f8:0aa0): the
+         * first ramp must sit on B1 ([0xB3EE] records its column, err
+         * 0x1F), and every later ramp must share that column (err 0x20).
+         * One per floor follows from the geometry; real saves agree. */
+        int ramp_x = -1;
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
-            if (t->type == ITEM_RAMP && t->floor == floor)
+            if (t->type != ITEM_RAMP) continue;
+            if (t->floor == floor)
                 REJECT("This floor already has a Parking Ramp");
+            ramp_x = t->x;
+        }
+        if (ramp_x < 0) {
+            if (floor != -1)
+                REJECT("Parking Ramps must connect to the 1st floor");
+        } else if (x != ramp_x) {
+            REJECT("Parking Ramps must be connected vertically");
         }
     }
     if (type == ITEM_PARKING) {

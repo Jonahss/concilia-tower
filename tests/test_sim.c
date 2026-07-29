@@ -2283,6 +2283,48 @@ static void test_build_caps(void)
           "second stair 4 cells over on the same floors is legal");
     CHECK(tower_can_place(&tw, ITEM_STAIRS, 1, BX + 2) == 0,
           "stair 2 cells over collides half-tile");
+
+    /* Parking ramps: one vertical stack, rooted on B1 (pass-3 trace
+     * 11f8:0aa0 — [0xB3EE] column, errors 0x1F/0x20). */
+    fresh();
+    CHECK(tower_can_place(&tw, ITEM_RAMP, -2, 120) == 0 &&
+          strcmp(tower_reject_reason(),
+                 "Parking Ramps must connect to the 1st floor") == 0,
+          "first ramp must sit on B1");
+    uint16_t rb1 = place(ITEM_RAMP, -1, 120);
+    CHECK(rb1 != 0, "B1 ramp placed");
+    CHECK(tower_can_place(&tw, ITEM_RAMP, -2, 140) == 0 &&
+          strcmp(tower_reject_reason(),
+                 "Parking Ramps must be connected vertically") == 0,
+          "later ramps must share the first ramp's column");
+    CHECK(tower_can_place(&tw, ITEM_RAMP, -2, 120) == 1,
+          "same-column B2 ramp is legal");
+
+    /* Fixed caps: security and medical stop at 10 (dispatch handlers
+     * 0xc0d/0xc46); commercial types share a 512-record table. */
+    fresh();
+    for (int i = 0; i < 10; i++) {
+        Tenant *t = &tw.tenants[tw.tenant_count++];
+        memset(t, 0, sizeof *t);
+        t->id = tw.next_tenant_id++;
+        t->type = ITEM_SECURITY;
+    }
+    place(ITEM_FLOOR, 1, 100);
+    CHECK(tower_can_place(&tw, ITEM_SECURITY, 1, 105) == 0 &&
+          strcmp(tower_reject_reason(), "Item no longer available") == 0,
+          "11th security office rejected");
+    CHECK(tower_can_place(&tw, ITEM_OFFICE, 1, 105) == 1,
+          "the security cap doesn't leak onto other types");
+    for (int i = 0; i < 512; i++) {
+        Tenant *t = &tw.tenants[tw.tenant_count++];
+        memset(t, 0, sizeof *t);
+        t->id = tw.next_tenant_id++;
+        t->type = (i % 3 == 0) ? ITEM_RESTAURANT
+                : (i % 3 == 1) ? ITEM_SHOP : ITEM_FAST_FOOD;
+    }
+    CHECK(tower_can_place(&tw, ITEM_SHOP, 1, 105) == 0 &&
+          strcmp(tower_reject_reason(), "Item no longer available") == 0,
+          "513th commercial unit rejected (shared 512 table)");
 }
 
 static void test_route_loss(void)
@@ -2328,6 +2370,27 @@ static void test_route_loss(void)
           "service stop warns housekeeping (#2) despite stairs");
     CHECK(game_remove_route_loss(&sim, &tw, 2, f3) == 1,
           "public shafts don't cover the service network");
+}
+
+static void test_construct_queue(void)
+{
+    printf("construction queue (ConstructQ 11f0:004b):\n");
+    fresh();
+    tower_extend_deck(&tw, 1, 110, 174);
+    uint16_t h[11];
+    for (int i = 0; i < 11; i++)
+        h[i] = place(ITEM_HOTEL_SINGLE, 1, 110 + i * 4);
+    int building = 0;
+    for (int i = 0; i < 11; i++)
+        if (tenant(h[i]) && tenant(h[i])->state == TENANT_CONSTRUCTION) building++;
+    CHECK(building == 11, "11 jobs start under construction");
+    for (int i = 0; i < 8; i++) game_update(&sim, &tw);  /* tenant pass is tick%4 */
+    CHECK(tenant(h[0])->state != TENANT_CONSTRUCTION,
+          "11th placement force-completes the oldest job instantly");
+    building = 0;
+    for (int i = 1; i < 11; i++)
+        if (tenant(h[i])->state == TENANT_CONSTRUCTION) building++;
+    CHECK(building == 10, "the other 10 keep their build timers");
 }
 
 static void test_person_names(void)
@@ -2447,6 +2510,7 @@ int main(void)
     test_build_caps();
     test_deck_economics();
     test_person_names();
+    test_construct_queue();
     test_route_loss();
     test_unreachable_empty();
     test_elevators();

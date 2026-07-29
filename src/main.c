@@ -6815,6 +6815,14 @@ static void handle_event(SDL_Event *ev)
             /* Block clicks that land on any window body from reaching the game */
             if (point_in_any_window(ev->button.x, ev->button.y)) break;
 
+            /* Fire/bomb lockout (world-click dispatcher 1058:0000 gate,
+             * [0xB406]&9): during an emergency the WORLD takes no clicks —
+             * no building, demolition, or inspection until it's over.
+             * Menus and dialogs stay live (the EXE's fire response is a
+             * menu command). The EXE beeps; we have no beep sample, so
+             * the click is swallowed silently. */
+            if (game.sim.event.active) break;
+
             /* Simulate/edit mode: a click on the tower toggles the selected
              * shaft's stop at that floor. The world is frozen; no building. */
             if (game.elv_edit_mode) {
