@@ -1162,6 +1162,25 @@ static int find_dirty_room_floor(Tower *tower)
     return -1;
 }
 
+/* As above, but with the EXE's maid partition: each maid works floors
+ * congruent to her member index mod 6 first (MainteT's tower split),
+ * falling back to anywhere dirty. */
+static int find_dirty_room_floor_for(Tower *tower, int member)
+{
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            if (!item_is_hotel_room(t->type) || t->condition != ROOM_DIRTY)
+                continue;
+            int f = floor_to_index(t->floor);
+            if (f < 0 || f >= TOWER_FLOOR_COUNT) continue;
+            if (pass == 0 && (f % 6) != (member % 6)) continue;
+            return f;
+        }
+    }
+    return -1;
+}
+
 static int tenant_commuters(const Tenant *t)
 {
     int n = TENANT_POPULATION[t->type];
@@ -1737,6 +1756,22 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
             if (p->stay && (frame + i) % 8 == 0 && --p->stay == 0) {
                 Tenant *ht = tower_tenant(tower, p->home_tenant);
                 int hf = ht ? floor_to_index(ht->floor) : -1;
+                /* Maids cycle rooms ALL DAY (MainteT: idle->room->next,
+                 * mod-6 floor partition, no new cleans from 16:00) —
+                 * the old single dawn trip understated the service-net
+                 * load a tall hotel really generates. */
+                if (ht && ht->type == ITEM_HOUSEKEEPING && p->service &&
+                    hour < 16) {
+                    int nf = find_dirty_room_floor_for(tower, p->member);
+                    if (nf >= 0) {
+                        p->stay = 4;                 /* next room's dwell */
+                        if (nf != p->cur_floor) {
+                            p->dest_floor = (uint8_t)nf;
+                            p->state = PERSON_PLANNING;
+                        }
+                        break;
+                    }
+                }
                 /* a retail patron heading out (OutRestPeple) */
                 if (ht && is_retail_kind(ht->type))
                     game_retail_customer_out(ht);
