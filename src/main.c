@@ -143,6 +143,14 @@
 #define SPR_ELEV_EXP_F1  0xf82b
 #define SPR_ELEV_EXP_F2  0xf92b
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
+
+/* Person figure sheet (InfoPeple blitter 1100:364a): RT_BITMAP 0x2BC
+ * normal row / 0x2BE named row / 0x2BF VIP row — each 96x24, 12 cells of
+ * 8px; frames 0-5 are 8px wide, frames 6/8/10 are 16px (two cells).
+ * Popup portrait draws 2x, occupant/rider lists draw 1:1. */
+#define SPR_FIGURE_NORMAL 0x82BC
+#define SPR_FIGURE_NAMED  0x82BE
+#define SPR_FIGURE_VIP    0x82BF
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
                                    * (1+16*n, 16); bg 25,25,25 keyed out. */
@@ -5668,13 +5676,64 @@ static SDL_Rect person_btn_name(SDL_Rect d)
 static SDL_Rect person_btn_ok(SDL_Rect d)
 { return (SDL_Rect){ d.x + d.w - 76, d.y + d.h - 34, 64, 22 }; }
 
+/* Figure-frame selector (1100:3856): home-tenant type x member index.
+ * -1 = the EXE draws no figure (condo members past the kid). */
+static int person_figure_frame(const Person *p)
+{
+    Tenant *home = tower_tenant(&game.tower, p->home_tenant);
+    if (!home) return 0;
+    int m = p->member;
+    switch (home->type) {
+    case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN: case ITEM_HOTEL_SUITE:
+        return m == 2 ? 4 : 0;
+    case ITEM_OFFICE:                       /* 0/1 = the Salesmen */
+        return m <= 1 ? 1 : m <= 3 ? 0 : m == 4 ? 2 : 4;
+    case ITEM_CONDO:                        /* 1 = Mother with Baby */
+        return m == 0 ? 0 : m == 1 ? 8 : m == 2 ? 3 : -1;
+    case ITEM_SECURITY:     return 5;
+    case ITEM_HOUSEKEEPING: return 10;
+    default:                                /* patrons: member & 7 wheel */
+        switch (m & 7) {
+        case 1: return 2; case 3: return 4;
+        case 5: return 6; case 7: return 8;
+        default: return 0;
+        }
+    }
+}
+
+/* Blit one person figure from the sheet (row by naming state, per the
+ * EXE: row = VIP ? 2 : named ? 1 : 0 — VIP row waits on the VIP-person
+ * feature). Returns 0 if the sheets are missing (caller falls back). */
+static int draw_person_figure(uint16_t pid, int x, int y, int scale)
+{
+    const Person *p = &game.sim.people.people[pid - 1];
+    int frame = person_figure_frame(p);
+    if (frame < 0) return 1;   /* faithfully draw nothing */
+    int named = tower_person_name(&game.tower, p->home_tenant,
+                                  p->member) != NULL;
+    Sprite *sheet = sprites_find(&game.sprites,
+                                 named ? SPR_FIGURE_NAMED
+                                       : SPR_FIGURE_NORMAL);
+    if (!sheet) return 0;
+    int fw = frame >= 6 ? 16 : 8;
+    SDL_Rect src = { frame * 8, 0, fw, 24 };
+    /* wide frames shift left half a cell so they stay centered (372c) */
+    SDL_Rect dst = { x - (frame >= 6 ? 4 * scale : 0), y,
+                     fw * scale, 24 * scale };
+    SDL_RenderCopy(game.renderer, sheet->texture, &src, &dst);
+    return 1;
+}
+
 static void draw_person_strip(const uint16_t *pids, int n, int x, int y)
 {
     Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
     for (int k = 0; k < n; k++) {
         if (!pids[k]) continue;
+        /* the original's people lists blit the figure sheet 1:1 */
+        if (draw_person_figure(pids[k], x + k * PSTRIP_PITCH + 4, y + 6, 1))
+            continue;
         if (qs) {
-            int fig = (pids[k] * 7) % 40;   /* same identity as the portrait */
+            int fig = (pids[k] * 7) % 40;   /* legacy silhouette fallback */
             SDL_Rect src = { fig * 16, 0, 16, PSTRIP_H };
             SDL_Rect dst = { x + k * PSTRIP_PITCH, y, 16, PSTRIP_H };
             SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
@@ -5729,15 +5788,18 @@ static void render_person_popup(void)
     draw_win31_titlebar(d.x, d.y, d.w, title);
     draw_win31_rect(d.x, d.y + WIN_TITLEBAR_H, d.w, d.h - WIN_TITLEBAR_H, 1);
 
-    /* Portrait: the person's own queue silhouette at 2x (the EXE blits an
-     * 8px portrait column stretched 2x; same idea, same identity). */
-    Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+    /* Portrait: the real figure sheet at 2x (blitter 1100:364a via
+     * WinGStretchBlt; row picked by naming state). Falls back to the
+     * old queue-silhouette stand-in if the sheets didn't load. */
     int tx = d.x + 14, ty = d.y + WIN_TITLEBAR_H + 10;
-    if (qs) {
-        int fig = (game.person_pid * 7) % 40;
-        SDL_Rect src = { fig * 16, 0, 16, 36 };
-        SDL_Rect dst = { tx, ty, 32, 72 };
-        SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+    if (!draw_person_figure(game.person_pid, tx + 8, ty + 12, 2)) {
+        Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+        if (qs) {
+            int fig = (game.person_pid * 7) % 40;
+            SDL_Rect src = { fig * 16, 0, 16, 36 };
+            SDL_Rect dst = { tx, ty, 32, 72 };
+            SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+        }
     }
 
     SDL_Color ink = { 0, 0, 0, 255 };
@@ -7533,6 +7595,10 @@ int main(int argc, char *argv[])
 
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
+    /* person figure sheets (portrait rows) are white-keyed too */
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NORMAL);
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NAMED);
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_VIP);
     /* the in-tenant people band (AnimPeple, 0x85E8-0x85EE) is white-keyed */
     for (uint16_t id = 0x85E8; id <= 0x85EE; id++)
         sprites_apply_white_key(&game.sprites, game.renderer, id);
