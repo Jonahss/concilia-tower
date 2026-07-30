@@ -1459,9 +1459,14 @@ void game_update(GameSim *sim, Tower *tower)
      * medical center (UniPeple medical path; below star 3 nobody rolls). */
     if (tower->star_rating >= 3) {
         for (int i = 0; i < sim->people.office_arrivals; i++)
-            if (rand() % 10 == 0)
-                game_medical_seek(sim, tower,
-                                  sim->people.office_arrival_floor[i]);
+            if (rand() % 10 == 0) {
+                int ofl = sim->people.office_arrival_floor[i];
+                int cfl;
+                /* admitted: the sick worker physically makes the trip
+                 * (UniPeple status 2/0x42/0x23, return 0x63) */
+                if (game_medical_seek_at(sim, tower, ofl, &cfl) == 2)
+                    people_medical_dispatch(&sim->people, tower, ofl, cfl);
+            }
     }
     sim->people.office_arrivals = 0;
     game_venue_arrivals(sim, tower);
@@ -2937,7 +2942,8 @@ static int medical_band(int floor)
     return floor <= 0 ? 0 : floor / 15;
 }
 
-int game_medical_seek(GameSim *sim, Tower *tower, int from_floor)
+int game_medical_seek_at(GameSim *sim, Tower *tower, int from_floor,
+                         int *center_floor)
 {
     int band = medical_band(from_floor);
     Tenant *found = NULL;
@@ -2968,7 +2974,13 @@ int game_medical_seek(GameSim *sim, Tower *tower, int from_floor)
     if (found->patients_today >= 40)
         return 1;                              /* full: turned away, silent */
     found->patients_today++;
+    if (center_floor) *center_floor = found->floor;
     return 2;
+}
+
+int game_medical_seek(GameSim *sim, Tower *tower, int from_floor)
+{
+    return game_medical_seek_at(sim, tower, from_floor, NULL);
 }
 
 /* NOTE: there is no "medical emergency" event in SimTower. A prior port had a

@@ -823,6 +823,11 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         p->state = PERSON_AT_DEST;
         return;
     }
+    if (p->errand == 5 || p->errand == 7) {   /* clinic trip legs */
+        p->errand = (p->errand == 5) ? 6 : 0;
+        p->state = PERSON_AT_DEST;
+        return;
+    }
     /* Hotel guests checking in mark the room hosted (housekeeping loop)
      * and reset its neglect fuse — check-in is the ONLY thing that resets
      * the fuse (HotelCheckIn 1178:0e65 zeroes tenure; maids never do). */
@@ -1545,6 +1550,28 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
     }
 }
 
+/* Send one at-desk office worker (member >= 2 — the sick-roll pool,
+ * office arm 1220:27a1) from an office on `office_floor` to the medical
+ * center: errand 5 = traveling, 6 = at the clinic, 7 = returning. */
+void people_medical_dispatch(PeopleSim *ps, Tower *tower,
+                             int office_floor, int center_floor)
+{
+    int cfx = floor_to_index(center_floor);
+    if (cfx < 0 || cfx >= TOWER_FLOOR_COUNT) return;
+    for (int i = 0; i < ps->people_high; i++) {
+        Person *p = &ps->people[i];
+        if (!p->home_tenant || p->state != PERSON_AT_DEST) continue;
+        if (p->member < 2 || p->errand || p->going_home || p->stay) continue;
+        Tenant *t = tower_tenant(tower, p->home_tenant);
+        if (!t || t->type != ITEM_OFFICE || t->floor != office_floor) continue;
+        if (p->cur_floor != (uint8_t)floor_to_index(t->floor)) continue;
+        p->errand = 5;
+        p->dest_floor = (uint8_t)cfx;
+        p->state = PERSON_PLANNING;
+        return;
+    }
+}
+
 /* ---------- main tick ---------- */
 
 void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
@@ -1641,6 +1668,19 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                         p->state = PERSON_PLANNING;
                         break;
                     }
+                }
+            }
+            /* Clinic visit over: back to the desk (return status 0x63,
+             * leave-check 1170:0414; return by 17:00). */
+            if (p->errand == 6 && (frame + i) % 16 == 0 &&
+                (hour >= 16 || depart_roll(frame, i + 55, 12))) {
+                Tenant *mh = tower_tenant(tower, p->home_tenant);
+                int mf = mh ? floor_to_index(mh->floor) : -1;
+                if (mf >= 0) {
+                    p->errand = 7;
+                    p->dest_floor = (uint8_t)mf;
+                    p->state = PERSON_PLANNING;
+                    break;
                 }
             }
             /* Condo weekday commute out (UniPeple 1220:3e10): residents

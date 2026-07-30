@@ -517,6 +517,51 @@ static void test_parking_cars(void)
     CHECK(guests <= 1, "carless suite guests cancel: one guest at most");
 }
 
+/* Sick worker's physical clinic round-trip (statuses 2/0x42/0x23/0x63) */
+static void test_medical_trip(void)
+{
+    printf("medical patient trip:\n");
+    fresh();
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
+    uint16_t med = place(ITEM_MEDICAL, 2, BX + 6);
+    for (int f = 0; f <= 5; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    force_occupied(office);
+    tenant(med)->state = TENANT_OCCUPIED;
+    people_rebuild_transport(&sim.people, &tw);
+    int f5 = floor_to_index(5), f2 = floor_to_index(2);
+
+    int frame = 0;
+    for (; frame < 3000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        if (people_at(office, f5, PERSON_AT_DEST) >= 4) break;
+    }
+    people_medical_dispatch(&sim.people, &tw, 5, 2);
+    int at_clinic = -1;
+    for (; frame < 6000 && at_clinic < 0; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == office &&
+                sim.people.people[i].errand == 6 &&
+                sim.people.people[i].cur_floor == (uint8_t)f2)
+                at_clinic = i;
+    }
+    CHECK(at_clinic >= 0, "sick worker traveled to the clinic (member >= 2)");
+    CHECK(sim.people.people[at_clinic].member >= 2,
+          "salesmen are not the sick-roll pool");
+    int back = 0;
+    for (; frame < 12000 && !back; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
+                      sim.reach_public, sim.reach_service);
+        const Person *p = &sim.people.people[at_clinic];
+        back = p->errand == 0 && p->state == PERSON_AT_DEST &&
+               p->cur_floor == (uint8_t)f5;
+    }
+    CHECK(back, "patient returned to the desk (status 0x63)");
+}
+
 static int condo_member_home(uint16_t tid, int fidx, int member)
 {
     for (int i = 0; i < sim.people.people_high; i++) {
@@ -2822,6 +2867,7 @@ int main(void)
     test_parking_cars();
     test_vip_visit();
     test_condo_cycle();
+    test_medical_trip();
     test_walk_rules();
     test_errand_warning_watchdog();
     test_queue_and_stress();

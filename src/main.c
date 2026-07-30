@@ -5594,6 +5594,9 @@ static void person_where_line(const Person *p, char *buf, int bufn)
         if (p->errand == 1 || p->errand == 2) {
             /* status 0x40/0x21: "Lobby" + STRL 0x2BD #1 */
             snprintf(buf, bufn, "Lobby for sales calls");
+        } else if (p->errand == 5) {
+            person_fmt_floor(index_to_floor(p->dest_floor), fl, sizeof fl);
+            snprintf(buf, bufn, "Medical Center, %s", fl);
         } else if (p->going_home) {
             /* condo residents "leave" (STRL 0x2BD #2); everyone else
              * goes home */
@@ -5615,6 +5618,11 @@ static void person_where_line(const Person *p, char *buf, int bufn)
         if (!home) { snprintf(buf, bufn, "-"); break; }
         if (p->errand == 2) {   /* parked at the lobby, making calls */
             snprintf(buf, bufn, "Lobby for sales calls");
+            break;
+        }
+        if (p->errand == 6) {   /* being seen at the clinic */
+            person_fmt_floor(index_to_floor(p->cur_floor), fl, sizeof fl);
+            snprintf(buf, bufn, "Medical Center, %s", fl);
             break;
         }
         if (p->service && home->type == ITEM_HOUSEKEEPING &&

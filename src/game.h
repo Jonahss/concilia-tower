@@ -894,6 +894,10 @@ void game_animate_occupants(GameSim *sim, Tower *tower);
  * (center full — silent), 2 = admitted. Exposed for tests; game_update
  * rolls it on 1-in-10 of office arrivals at star>=3. */
 int game_medical_seek(GameSim *sim, Tower *tower, int from_floor);
+/* As above, but reports the admitting center's floor (for the patient's
+ * physical trip). */
+int game_medical_seek_at(GameSim *sim, Tower *tower, int from_floor,
+                         int *center_floor);
 
 /* Stories of the ground lobby (0 if none, capped at 3) — drives the
  * grand-lobby wait-forgiveness bonus. */
