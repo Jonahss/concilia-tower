@@ -1516,6 +1516,16 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                                 reach_public);
             }
             if (v) ps->spawned[i]++;
+        } else if (t->type == ITEM_CATHEDRAL) {
+            /* Weekend congregation (UniPeple 1220:5edd): period-0
+             * mornings only, rand-gated from 8:00 — 40 guests ride all
+             * the way to floor 100 and head home before lunch. */
+            if (!ps->sched_day || hour < 8 || hour >= 11) continue;
+            if (ps->spawned[i] >= 40) continue;
+            if (!depart_roll(frame, i, 3)) continue;
+            fidx = floor_to_index(0);       /* worshippers come off the street */
+            v = t;
+            ps->spawned[i]++;
         } else if (t->type == ITEM_METRO) {
             /* Metro visitors (1220:51dc): outside traffic, 10AM-5PM, a
              * random retail KIND in the GROUND zone. Riders enter and
