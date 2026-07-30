@@ -25,7 +25,7 @@ DISPLAY=:99 CT_TWR=path/to/save.tdt setsid ./simtower $EXE > run.log 2>&1 &
 ## Drive & capture
 
 ```bash
-DISPLAY=:99 xdotool key Up          # scroll 40px/press (Down/Left/Right too)
+DISPLAY=:99 xdotool key Up          # scroll 16px/press (Down/Left/Right; PgUp/PgDn page)
 DISPLAY=:99 xdotool key F12         # screenshot -> /tmp/simtower_screenshot.bmp
 ffmpeg -y -i /tmp/simtower_screenshot.bmp out.png
 ```
@@ -43,7 +43,7 @@ ffmpeg -y -i /tmp/simtower_screenshot.bmp out.png
 - **State crafting**: hex-stamping fixture .TDTs beats driving the UI.
   Floor map starts at file offset 0x230: per floor `u16 n; skip 4;`
   then n×18-byte tenant records (`t[4]`=type: 3/4/5 hotel single/twin/
-  suite; `t[0x0b]`=status byte: 0x18 clean, 0x28 dirty, 0x38 infested),
+  suite; `t[5]`=condition byte: 0x18 clean, 0x28 dirty, 0x38 infested — the importer reads t[5], NOT t[0x0b]),
   then `skip 0xbc`.
 - **`concilliatower-vnc.service` (systemd, Restart=always) owns a simtower
   on :99** — pkill it and systemd respawns a plain instance (no CT_ env)
