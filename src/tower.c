@@ -33,7 +33,11 @@ void tower_init(Tower *tower)
     memset(tower, 0, sizeof(*tower));
     
     tower->star_rating = 1;
-    tower->money = 5000000;  /* $5,000,000 for demo (need enough for all buildings) */
+    tower->money = 2000000;  /* the EXE's starting cash (tower_init
+                                10d0:0ac2: [0xB3CE] = 20000 x $100).
+                                Was a $5M "demo" leftover — and the
+                                corner-click easter egg needs the exact
+                                $2M balance to arm. */
     tower->next_tenant_id = 1;
     tower->day = 1;
     tower->quarter = 0;
