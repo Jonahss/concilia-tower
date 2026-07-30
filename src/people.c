@@ -654,6 +654,7 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
         else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
         p->state = PERSON_WALKING;
         p->leg_floor = (uint8_t)r.hop_to;
+        p->walk_stair = st->id;
         p->walk_timer = (st->type == ITEM_STAIRS) ? WALK_TICKS_STAIR
                                                   : WALK_TICKS_ESC;
         break;
@@ -1445,6 +1446,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
         case PERSON_WALKING:
             if (p->walk_timer) { p->walk_timer--; break; }
             p->cur_floor = p->leg_floor;
+            p->walk_stair = 0;
             p->state = PERSON_PLANNING;
             plan_person(ps, tower, p, i, frame);
             break;

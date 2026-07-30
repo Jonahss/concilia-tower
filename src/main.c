@@ -410,6 +410,22 @@ typedef struct {
     /* Toolbox group pull-down (click-and-hold) state */
     int             tool_popup;      /* index into tool_buttons[] whose sub-menu is open, or -1 */
 
+    /* Windows / Options menu toggles (original menu ids 40009-40016).
+     * Windows: show/hide the floating windows ([0x31A8]/[0x31AA]/[0x31AC]).
+     * Options: the 1994 performance toggles — Animation gates the crowd
+     * and effect passes ([0xDE30]/[0xDE32], read by AnimPeple/AnimeT),
+     * Sound gates voice categories at the mixer funnel
+     * ([0xDE2A]/[0xDE2C]/[0xDE2E]). All default ON, runtime-only. */
+    uint8_t         win_toolbar, win_infobar, win_map;
+    uint8_t         anim_people, anim_effects;
+    uint8_t         snd_elev, snd_bg, snd_events;
+
+    /* SmoothScroll (CameraT 1080): minimap click-nav animates the camera
+     * to the target instead of jumping (pass-3 trace: map click-nav =
+     * SmoothScroll). */
+    uint8_t         cam_anim;
+    float           cam_tx, cam_ty;
+
     /* Window dragging state */
     int             win_dragging;    /* 0=none, 1=info, 2=map, 3=toolbox */
     int             win_drag_ox;     /* Mouse offset from window origin at drag start */
@@ -506,6 +522,14 @@ typedef struct {
 #define ACT_STATS         15
 #define ACT_TUNING        16
 #define ACT_NEW_TOWER     17
+#define ACT_WIN_TOOLBAR   18   /* Windows menu (40014-40016) */
+#define ACT_WIN_INFOBAR   19
+#define ACT_WIN_MAP       20
+#define ACT_ANIM_PEOPLE   21   /* Options menu (40009-40013) */
+#define ACT_ANIM_EFFECTS  22
+#define ACT_SND_ELEV      23
+#define ACT_SND_BG        24
+#define ACT_SND_EVENTS    25
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -593,6 +617,28 @@ static const MenuItem menu_file[] = {
 };
 #define MENU_FILE_COUNT 10
 
+/* Options menu — the original's Animation/Sound toggle block (menu ids
+ * 40009-40013). Fast Mode (40007) lives in the Speed menu; Call Fire
+ * Rescue (40008) awaits the FireT response trace. */
+static const MenuItem menu_options[] = {
+    { "Anim: People",      ITEM_NONE, ACT_ANIM_PEOPLE },
+    { "Anim: Effects",     ITEM_NONE, ACT_ANIM_EFFECTS },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Sound: Elevators",  ITEM_NONE, ACT_SND_ELEV },
+    { "Sound: Background", ITEM_NONE, ACT_SND_BG },
+    { "Sound: Events",     ITEM_NONE, ACT_SND_EVENTS },
+};
+#define MENU_OPTIONS_COUNT 6
+
+/* Windows menu — show/hide the floating windows (menu ids 40014-40016).
+ * Find Person... / Find Tenant... (40019/40020) land here once traced. */
+static const MenuItem menu_windows[] = {
+    { "Tool Bar",   ITEM_NONE, ACT_WIN_TOOLBAR },
+    { "Info Bar",   ITEM_NONE, ACT_WIN_INFOBAR },
+    { "Map Window", ITEM_NONE, ACT_WIN_MAP },
+};
+#define MENU_WINDOWS_COUNT 3
+
 /* Top-level menus */
 typedef struct {
     const char     *label;
@@ -607,9 +653,11 @@ static const TopMenu top_menus[] = {
     { "Transport",  menu_build_trans, MENU_BUILD_TRANS_COUNT },
     { "Services",   menu_build_svc,   MENU_BUILD_SVC_COUNT },
     { "Speed",      menu_speed,       MENU_SPEED_COUNT },
+    { "Options",    menu_options,     MENU_OPTIONS_COUNT },
+    { "Windows",    menu_windows,     MENU_WINDOWS_COUNT },
     { "View",       menu_view,        MENU_VIEW_COUNT },
 };
-#define TOP_MENU_COUNT 7
+#define TOP_MENU_COUNT 9
 
 /* Get pixel position of top menu item */
 static void get_top_menu_rect(int idx, int *x, int *y, int *w, int *h)
@@ -900,8 +948,9 @@ static void render_sky(void)
         }
     }
     
-    /* Render Santa flying across the sky (SantaT: x-=10, y+=1 per tick) */
-    if (game.sim.santa.active && game.santa) {
+    /* Render Santa flying across the sky (SantaT: x-=10, y+=1 per tick).
+     * Options -> Anim: Effects ([0xDE32], the AnimeT gate) hides him. */
+    if (game.sim.santa.active && game.santa && game.anim_effects) {
         SDL_Rect dst = {
             game.sim.santa.x, game.sim.santa.y,
             game.santa->w, game.santa->h
@@ -1729,13 +1778,21 @@ static void render_tower(void)
     static unsigned transport_anim = 0;
     if (game.sim.speed > 0) transport_anim++;
 
-    /* Mark the grid floors that currently have a walker mid-leg (the lower of
-     * the leg's two floors keys the stair/escalator that spans it). */
+    /* Mark the exact stair/escalator each walker is on (walk_stair is the
+     * carrying tenant's id — no more lighting up every unit on the floor
+     * pair). Legacy fallback: a walker without an id (loaded mid-leg from
+     * an older save) still lights its floor pair. */
     uint8_t walk_floor[TOWER_FLOOR_COUNT];
+    uint8_t stair_busy[MAX_TENANTS];
     memset(walk_floor, 0, sizeof(walk_floor));
+    memset(stair_busy, 0, sizeof(stair_busy));
     for (int i = 0; i < game.sim.people.people_high; i++) {
         Person *p = &game.sim.people.people[i];
         if (p->state != PERSON_WALKING) continue;
+        if (p->walk_stair && p->walk_stair <= MAX_TENANTS) {
+            stair_busy[p->walk_stair - 1] = 1;
+            continue;
+        }
         int lo = p->cur_floor < p->leg_floor ? p->cur_floor : p->leg_floor;
         if (lo >= 0 && lo < TOWER_FLOOR_COUNT) walk_floor[lo] = 1;
     }
@@ -1758,7 +1815,8 @@ static void render_tower(void)
             if (nframes < 1) nframes = 1;
             /* Empty unless someone's on this leg; then cycle the motion frames. */
             int fidx_lo = floor_to_index(t->floor);
-            int busy = (fidx_lo >= 0 && fidx_lo < TOWER_FLOOR_COUNT &&
+            int busy = (game.anim_people &&
+                        fidx_lo >= 0 && fidx_lo < TOWER_FLOOR_COUNT &&
                         walk_floor[fidx_lo]);
             int frame_idx = 0;
             if (busy && nframes > 1)
@@ -2867,6 +2925,7 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
  * 24px of the 36px floor exactly like the EXE's 24px slot-8 compositor. */
 static void render_occupants(void)
 {
+    if (!game.anim_people) return;   /* Options -> Anim: People ([0xDE30]) */
     static const struct { uint16_t id; int first, count; } BAND[] = {
         { 0x85E8, 0x00, 30 }, { 0x85E9, 0x1E, 27 }, { 0x85EA, 0x39, 6 },
         { 0x85EB, 0x3F, 10 }, { 0x85EC, 0x49, 7 },  { 0x85ED, 0x50, 16 },
@@ -2947,8 +3006,9 @@ static void render_shaft(ElevatorShaft *s)
         /* Waiting queues: lines of silhouettes at the shaft door (ElvPeple).
          * Figures picked per person id so the crowd stays varied but stable.
          * The line forms on whichever side of the shaft has building — so
-         * it waits indoors instead of marching into the street. */
-        for (int f = s->lo; f <= s->hi && queue_spr; f++) {
+         * it waits indoors instead of marching into the street.
+         * Options -> Anim: People ([0xDE30]) hides the crowd. */
+        for (int f = s->lo; f <= s->hi && queue_spr && game.anim_people; f++) {
             const ElevatorStop *st = &s->stop[f];
             int n = st->up_count + st->down_count;
             if (!n) continue;
@@ -3609,7 +3669,16 @@ static void render_minimap(void)
     int wy = game.map_y;
     
     /* Title bar for dragging */
-    draw_win31_titlebar(wx, wy, MAP_WIN_W, "Map");
+    /* Leading spaces clear the close box (title text is left-aligned). */
+    draw_win31_titlebar(wx, wy, MAP_WIN_W, "      Map");
+    /* Close box at the left of the title bar (the original's map window
+     * has its own close box; reopen from Windows -> Map Window). */
+    {
+        draw_win31_rect(wx + 3, wy + 3, 13, WIN_TITLEBAR_H - 6, 1);
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        SDL_Rect dash = { wx + 6, wy + WIN_TITLEBAR_H / 2 - 1, 7, 2 };
+        SDL_RenderFillRect(game.renderer, &dash);
+    }
     wy += WIN_TITLEBAR_H;
     
     /* Minimap body */
@@ -3776,9 +3845,13 @@ static void render_minimap(void)
         for (int m = 0; m < 4; m++) {
             int bx = map_x + m * bw;
             int by = map_y + map_h + 2;
+            /* 4th overlay is star-gated (unlocks at 2 stars) */
+            int locked = (m == 3 && game.tower.star_rating < 2 &&
+                          game.sim.mode != MODE_SANDBOX);
             draw_win31_rect(bx, by, bw - 2, 16, game.map_mode == m ? 0 : 1);
             stats_label(bx + 6, by + 2, mode_label[m],
-                        (SDL_Color){ 0, 0, 0, 255 });
+                        locked ? (SDL_Color){ 140, 140, 140, 255 }
+                               : (SDL_Color){ 0, 0, 0, 255 });
         }
     }
     
@@ -4323,6 +4396,14 @@ static void render_dropdown(void)
         if (tm->items[i].action == ACT_DEBUG_TOGGLE && game.show_debug) checked = 1;
         if (tm->items[i].action == ACT_MODE_CAMPAIGN && game.sim.mode == MODE_CAMPAIGN) checked = 1;
         if (tm->items[i].action == ACT_MODE_SANDBOX && game.sim.mode == MODE_SANDBOX) checked = 1;
+        if (tm->items[i].action == ACT_WIN_TOOLBAR && game.win_toolbar) checked = 1;
+        if (tm->items[i].action == ACT_WIN_INFOBAR && game.win_infobar) checked = 1;
+        if (tm->items[i].action == ACT_WIN_MAP && game.win_map) checked = 1;
+        if (tm->items[i].action == ACT_ANIM_PEOPLE && game.anim_people) checked = 1;
+        if (tm->items[i].action == ACT_ANIM_EFFECTS && game.anim_effects) checked = 1;
+        if (tm->items[i].action == ACT_SND_ELEV && game.snd_elev) checked = 1;
+        if (tm->items[i].action == ACT_SND_BG && game.snd_bg) checked = 1;
+        if (tm->items[i].action == ACT_SND_EVENTS && game.snd_events) checked = 1;
         
         if (checked) {
             draw_menu_text("\xe2\x9c\x93", drop_x + 6, iy + 2, is_hover); /* ✓ */
@@ -4373,10 +4454,11 @@ static void render_ui(void)
              game.tower.day, tower_item_name(game.build_type));
     SDL_SetWindowTitle(game.window, title);
     
-    /* Sub-windows (matching original SimTower layout) */
-    render_minimap();      /* Top left */
-    render_toolbox();      /* Left, below map */
-    render_info_window();  /* Top right, horizontal strip */
+    /* Sub-windows (matching original SimTower layout); each can be hidden
+     * from the Windows menu (original ids 40014-40016) */
+    if (game.win_map)     render_minimap();      /* Top left */
+    if (game.win_toolbar) render_toolbox();      /* Left, below map */
+    if (game.win_infobar) render_info_window();  /* Top right, horizontal strip */
 }
 
 /* Construction crane — the EXE's real rule (OverlayT seg_11c0).
@@ -5119,7 +5201,7 @@ static void ti_build(const Tenant *t, TiLayout *L)
     L->comment_n = game_tenant_comments(&game.sim, &game.tower, t, L->comments, 3);
 
     TiField *f = L->fields;
-    int nf = 0;
+    int nf = 0, riders_field = -1;
     int evbar = (game.tower.star_rating >= 4) ? 200 : 150;
     ItemType ty = t->type;
     if (ty == ITEM_OFFICE || ty == ITEM_CONDO) {
@@ -5170,6 +5252,9 @@ static void ti_build(const Tenant *t, TiLayout *L)
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Yest. Profit");
         { char m[24]; format_money(t->yesterday_profit, m, sizeof m);
           snprintf(f[nf].value, 40, "%s", m); } nf++;
+    } else if (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) {
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Riders");
+        riders_field = nf; nf++;
     }
     L->nf = nf;
 
@@ -5192,7 +5277,21 @@ static void ti_build(const Tenant *t, TiLayout *L)
      * everyone whose home is this tenant and who is inside it right now,
      * as clickable silhouettes feeding the person popup. */
     L->occ_n = 0;
-    {
+    if (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) {
+        /* Riders mid-leg on this stair/escalator (the original lists
+         * people in transit too — same people-list widget). */
+        PeopleSim *ps = &game.sim.people;
+        int total = 0;
+        for (int i = 0; i < ps->people_high; i++) {
+            const Person *p = &ps->people[i];
+            if (p->state != PERSON_WALKING || p->walk_stair != t->id)
+                continue;
+            total++;
+            if (L->occ_n < 12) L->occ_pid[L->occ_n++] = (uint16_t)(i + 1);
+        }
+        if (riders_field >= 0)
+            snprintf(L->fields[riders_field].value, 40, "%d", total);
+    } else {
         PeopleSim *ps = &game.sim.people;
         int fidx = floor_to_index(t->floor);
         for (int i = 0; i < ps->people_high && L->occ_n < 12; i++) {
@@ -5217,6 +5316,40 @@ static void ti_build(const Tenant *t, TiLayout *L)
 
 /* Total dialog height, for on-open clamping. */
 static int inspect_body_h(const Tenant *t) { TiLayout L; ti_build(t, &L); return L.h; }
+
+/* Open the tenant info popup anchored near a click, clamped on-screen. */
+static void open_tenant_popup_at(uint16_t tid, int x, int y)
+{
+    game.inspect_open = 1;
+    game.inspect_tid = tid;
+    game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
+    game.inspect_x = x + 16;
+    game.inspect_y = y - 40;
+    if (game.inspect_x + INSPECT_W > game.screen_w)
+        game.inspect_x = game.screen_w - INSPECT_W - 8;
+    /* keep the whole body (incl. button rows) on screen — basement
+     * clicks used to hang off the bottom edge */
+    int pbh = inspect_body_h(tower_tenant(&game.tower, tid));
+    if (game.inspect_y + pbh > game.screen_h)
+        game.inspect_y = game.screen_h - pbh - 8;
+    if (game.inspect_y < 0) game.inspect_y = 8;
+}
+
+/* Stair/escalator under a world click: records anchor on the LOWER landing
+ * and span two floors; their grid cells keep the underlying tenant, so the
+ * overlay is found by scanning the tenant list. */
+static uint16_t stair_hit_test(int floor, int cell)
+{
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
+        if (t->state == TENANT_ABANDONED) continue;
+        if (floor < t->floor || floor > t->floor + 1) continue;
+        if (cell < t->x || cell >= t->x + t->width) continue;
+        return t->id;
+    }
+    return 0;
+}
 
 /* ---- small drawing helpers ---- */
 static void draw_centered(SDL_Rect r, const char *s, SDL_Color c)
@@ -5475,6 +5608,7 @@ static void person_where_line(const Person *p, char *buf, int bufn)
  * through the elevator dialog). Returns people[] slot + 1, or 0. */
 static uint16_t person_hit_test(int mx, int my)
 {
+    if (!game.anim_people) return 0;   /* hidden crowd isn't clickable */
     PeopleSim *ps = &game.sim.people;
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
@@ -6130,6 +6264,7 @@ static void drag_place_units(void)
 /* ---------- Toolbox click helper ---------- */
 static int toolbox_click(int mx, int my)
 {
+    if (!game.win_toolbar) return 0;
     int wx = game.tool_x;
     int wy = game.tool_y + WIN_TITLEBAR_H;  /* Skip title bar */
     
@@ -6243,19 +6378,22 @@ static int toolbox_click(int mx, int my)
 static int titlebar_hit_test(int mx, int my)
 {
     /* Info bar title bar (only the thin title strip, not the whole bar) */
-    if (mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
+    if (game.win_infobar &&
+        mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
         my >= game.info_y && my < game.info_y + WIN_TITLEBAR_H) {
         return 1;
     }
-    
+
     /* Minimap title bar */
-    if (mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
+    if (game.win_map &&
+        mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
         my >= game.map_y && my < game.map_y + WIN_TITLEBAR_H) {
         return 2;
     }
-    
+
     /* Toolbox title bar */
-    if (mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
+    if (game.win_toolbar &&
+        mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
         my >= game.tool_y && my < game.tool_y + WIN_TITLEBAR_H) {
         return 3;
     }
@@ -6300,17 +6438,20 @@ static int titlebar_hit_test(int mx, int my)
 static int point_in_any_window(int mx, int my)
 {
     /* Info bar */
-    if (mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
+    if (game.win_infobar &&
+        mx >= game.info_x && mx < game.info_x + INFO_BAR_W &&
         my >= game.info_y && my < game.info_y + INFO_BAR_H + WIN_TITLEBAR_H) {
         return 1;
     }
     /* Minimap */
-    if (mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
+    if (game.win_map &&
+        mx >= game.map_x && mx < game.map_x + MAP_WIN_W &&
         my >= game.map_y && my < game.map_y + MAP_WIN_H) {
         return 1;
     }
     /* Toolbox */
-    if (mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
+    if (game.win_toolbar &&
+        mx >= game.tool_x && mx < game.tool_x + TOOL_WIN_W &&
         my >= game.tool_y && my < game.tool_y + TOOL_WIN_H) {
         return 1;
     }
@@ -6348,29 +6489,36 @@ static int point_in_any_window(int mx, int my)
 /* ---------- Minimap click helper ---------- */
 static int minimap_click(int mx, int my)
 {
+    if (!game.win_map) return 0;
     int wx = game.map_x;
     int wy = game.map_y + WIN_TITLEBAR_H;  /* Skip title bar */
     int map_x = wx + 4;
     int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
     int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
-    
+
     if (mx >= map_x && mx < map_x + map_w &&
         my >= map_y && my < map_y + map_h) {
-        /* Click in minimap: jump camera there (same ground-anchored
-         * mapping as render_minimap) */
+        /* Click in minimap: SmoothScroll the camera there (the original
+         * animates click-nav, MapWndProc -> CameraT SmoothScroll; same
+         * ground-anchored mapping as render_minimap). */
         float pf = (float)map_h / (TOWER_TOP_FLOOR - TOWER_MIN_FLOOR + 1);
         float ground_line = map_y + map_h * 264.0f / 288.0f;
         int clicked_floor = (int)((ground_line - my) / pf);
-        game.cam_fy = -clicked_floor * CELL_H;
-        game.cam_fx = (float)(mx - map_x) * TOWER_WIDTH / map_w * CELL_W;
+        game.cam_ty = -clicked_floor * CELL_H;
+        game.cam_tx = (float)(mx - map_x) * TOWER_WIDTH / map_w * CELL_W;
+        game.cam_anim = 1;
         return 1;
     }
-    /* Mode button strip (Map/Eval/Rent/Hotel — EXE global 0x7840) */
+    /* Mode button strip (Map/Eval/Rent/Hotel — EXE global 0x7840; the
+     * 4th overlay is locked until the 2nd star, pass-3 MapWndProc). */
     if (mx >= map_x && mx < map_x + map_w &&
         my >= map_y + map_h + 2 && my < map_y + map_h + 18) {
         int m = (mx - map_x) / (map_w / 4);
-        if (m >= 0 && m <= 3) game.map_mode = m;
+        if (m >= 0 && m <= 3 &&
+            (m < 3 || game.tower.star_rating >= 2 ||
+             game.sim.mode == MODE_SANDBOX))
+            game.map_mode = m;
         return 1;
     }
     return 0;
@@ -6509,6 +6657,14 @@ static void execute_menu_item(const MenuItem *item)
     case ACT_SANTA:
         if (!game.sim.santa.active) game_launch_santa(&game.sim, game.screen_w);
         break;
+    case ACT_WIN_TOOLBAR:  game.win_toolbar ^= 1; break;
+    case ACT_WIN_INFOBAR:  game.win_infobar ^= 1; break;
+    case ACT_WIN_MAP:      game.win_map ^= 1;     break;
+    case ACT_ANIM_PEOPLE:  game.anim_people ^= 1;  break;
+    case ACT_ANIM_EFFECTS: game.anim_effects ^= 1; break;
+    case ACT_SND_ELEV:     game.snd_elev ^= 1;   break;
+    case ACT_SND_BG:       game.snd_bg ^= 1;     break;
+    case ACT_SND_EVENTS:   game.snd_events ^= 1; break;
     case ACT_MODE_CAMPAIGN:
     case ACT_MODE_SANDBOX:
         game.sim.mode = (item->action == ACT_MODE_SANDBOX)
@@ -6720,10 +6876,18 @@ static void handle_event(SDL_Event *ev)
         }
         
         /* Camera movement */
-        case SDLK_LEFT:  game.cam_fx -= 40; break;
-        case SDLK_RIGHT: game.cam_fx += 40; break;
-        case SDLK_UP:    game.cam_fy -= 40; break;
-        case SDLK_DOWN:  game.cam_fy += 40; break;
+        /* Arrow keys = the original's scrollbar line steps (16px both
+         * axes); PgUp/PgDn = its page steps (view minus one line). */
+        case SDLK_LEFT:  game.cam_fx -= 16; game.cam_anim = 0; break;
+        case SDLK_RIGHT: game.cam_fx += 16; game.cam_anim = 0; break;
+        case SDLK_UP:    game.cam_fy -= 16; game.cam_anim = 0; break;
+        case SDLK_DOWN:  game.cam_fy += 16; game.cam_anim = 0; break;
+        case SDLK_PAGEUP:
+            game.cam_fy -= game.screen_h - MENU_BAR_H - 16;
+            game.cam_anim = 0; break;
+        case SDLK_PAGEDOWN:
+            game.cam_fy += game.screen_h - MENU_BAR_H - 16;
+            game.cam_anim = 0; break;
         
         /* Direct build type selection */
         case SDLK_1: game.build_type = ITEM_OFFICE;       break;
@@ -6781,6 +6945,7 @@ static void handle_event(SDL_Event *ev)
             int dy = ev->motion.y - game.cam_pan_last_y;
             game.cam_fx -= dx;
             game.cam_fy -= dy;
+            game.cam_anim = 0;
             game.cam_pan_last_x = ev->motion.x;
             game.cam_pan_last_y = ev->motion.y;
             break;
@@ -6912,6 +7077,14 @@ static void handle_event(SDL_Event *ev)
             /* Window title bar drag start */
             {
                 int win_hit = titlebar_hit_test(ev->button.x, ev->button.y);
+                if (win_hit == 2 &&
+                    ev->button.x >= game.map_x + 3 &&
+                    ev->button.x < game.map_x + 16 &&
+                    ev->button.y >= game.map_y + 3 &&
+                    ev->button.y < game.map_y + WIN_TITLEBAR_H - 3) {
+                    game.win_map = 0;      /* map close box */
+                    break;
+                }
                 if (win_hit > 0) {
                     game.win_dragging = win_hit;
                     switch (win_hit) {
@@ -7009,8 +7182,18 @@ static void handle_event(SDL_Event *ev)
             if (game.inspect_mode) {
                 if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
                     break;
-                /* Queue people rank above tenants in the EXE's inspect
-                 * chain (elevator -> escalator -> person -> tenant). */
+                /* Stairs/escalators are grid overlays (their cells keep the
+                 * underlying tenant), so hit-test them explicitly. They rank
+                 * between elevators and people in the EXE's inspect chain
+                 * (elevator -> escalator -> person -> tenant). */
+                {
+                    uint16_t tid = stair_hit_test(game.mouse_floor,
+                                                  game.mouse_cell);
+                    if (tid) {
+                        open_tenant_popup_at(tid, ev->button.x, ev->button.y);
+                        break;
+                    }
+                }
                 {
                     uint16_t pid = person_hit_test(ev->button.x, ev->button.y);
                     if (pid) {
@@ -7022,25 +7205,10 @@ static void handle_event(SDL_Event *ev)
                 if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                     game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
                     uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
-                    if (tid) {
-                        game.inspect_open = 1;
-                        game.inspect_tid = tid;
-                        game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
-                        game.inspect_x = ev->button.x + 16;
-                        game.inspect_y = ev->button.y - 40;
-                        if (game.inspect_x + INSPECT_W > game.screen_w)
-                            game.inspect_x = game.screen_w - INSPECT_W - 8;
-                        /* keep the whole body (incl. button rows) on
-                         * screen — basement clicks used to hang off the
-                         * bottom edge */
-                        int pbh = inspect_body_h(
-                            tower_tenant(&game.tower, tid));
-                        if (game.inspect_y + pbh > game.screen_h)
-                            game.inspect_y = game.screen_h - pbh - 8;
-                        if (game.inspect_y < 0) game.inspect_y = 8;
-                    } else {
+                    if (tid)
+                        open_tenant_popup_at(tid, ev->button.x, ev->button.y);
+                    else
                         game.inspect_open = 0;   /* clicked empty space */
-                    }
                 }
                 break;
             }
@@ -7154,6 +7322,7 @@ static void handle_event(SDL_Event *ev)
         } else {
             game.cam_fy -= ev->wheel.y * 60;
         }
+        game.cam_anim = 0;
         break;
     }
         
@@ -7200,6 +7369,29 @@ static void init_fonts(void)
 
 /* Sound: the sim triggers effects through g_sound_hook (sound_hook.h). This
  * shim forwards to the audio mixer. Set after audio init. */
+/* Options -> Sound toggles ([0xDE2A]/[0xDE2C]/[0xDE2E]): category mute at
+ * the mixer funnel. UI feedback (build/cash/delete/tool) always plays.
+ * 0xA714 doubles as explosion AND build-complete in the EXE — same WAV,
+ * so the Events toggle silences both roles, like the original would. */
+static int sound_muted(int wav_id)
+{
+    switch (wav_id) {
+    case SND_ELEV_DING: case SND_ELEV_DEPART:
+        return !game.snd_elev;
+    case SND_METRO: case SND_GARBAGE:
+        return !game.snd_bg;
+    case SND_EXPLOSION: case SND_BUILD_DONE1:
+    case SND_EVENT_OK: case SND_FIRE_LOOP: case SND_FIRE_START:
+    case SND_BOMB_THREAT: case SND_BOMB_ARM:
+    case SND_WEDDING: case SND_GUARD_STEP:
+    case SND_CHIME_9AM: case SND_FANFARE_8AM: case SND_FANFARE_830:
+    case SND_NEWDAY: case SND_NEWDAY_SPEC: case SND_EVENING:
+        return !game.snd_events;
+    default:
+        return 0;
+    }
+}
+
 static void sound_shim(int wav_id)
 {
     if (getenv("CT_SOUND_DEBUG")) {
@@ -7219,6 +7411,7 @@ static void sound_shim(int wav_id)
                wav_id == AMB_SEASON_DAY || wav_id == AMB_SEASON_EVE ||
                wav_id == AMB_SEASON_SANTA ||
                (wav_id >= 0xA329 && wav_id <= 0xA337));   /* cinema soundtracks */
+    if (amb ? !game.snd_bg : sound_muted(wav_id)) return;
     audio_play((uint16_t)wav_id, amb ? 0.35f : 0.55f);
 }
 
@@ -7899,6 +8092,9 @@ int main(int argc, char *argv[])
     game.win_dragging = 0;
     game.tool_popup = -1;
     game.demolish_mode = 0;
+    game.win_toolbar = game.win_infobar = game.win_map = 1;
+    game.anim_people = game.anim_effects = 1;
+    game.snd_elev = game.snd_bg = game.snd_events = 1;
     /* Test affordances: --screenshot renders one input-less frame, so allow forcing
      * UI states for visual verification — TB_POPUP=<button index> opens a group's
      * pull-down; DEMOLISH=1 activates the bulldozer. */
@@ -8329,6 +8525,20 @@ int main(int argc, char *argv[])
             }
         }
 
+        /* SmoothScroll toward a minimap click-nav target (CameraT-style
+         * animated glide; any manual scroll input cancels it). */
+        if (game.cam_anim) {
+            float dx = game.cam_tx - game.cam_fx;
+            float dy = game.cam_ty - game.cam_fy;
+            if (dx > -1.0f && dx < 1.0f && dy > -1.0f && dy < 1.0f) {
+                game.cam_fx = game.cam_tx;
+                game.cam_fy = game.cam_ty;
+                game.cam_anim = 0;
+            } else {
+                game.cam_fx += dx * 0.22f;
+                game.cam_fy += dy * 0.22f;
+            }
+        }
         clamp_camera();
         render();
         frame++;

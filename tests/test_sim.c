@@ -522,14 +522,25 @@ static void test_walk_rules(void)
     people_rebuild_transport(&sim.people, &tw);
 
     int f5 = floor_to_index(5);
-    int arrived = 0;
+    int arrived = 0, tagged = 0, stray = 0;
     for (int frame = 0; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
+        /* rider attribution: WALKING people carry the id of the
+         * escalator they're on (feeds the inspect rider list) */
+        for (int i = 0; i < sim.people.people_high; i++) {
+            const Person *p = &sim.people.people[i];
+            if (p->state != PERSON_WALKING) continue;
+            const Tenant *st = tower_tenant(&tw, p->walk_stair);
+            if (st && st->type == ITEM_ESCALATOR) tagged++;
+            else stray++;
+        }
         arrived = people_at(office, f5, PERSON_AT_DEST);
         if (arrived == 6) break;
     }
     CHECK(arrived == 6, "5 escalator flights are walkable");
+    CHECK(tagged > 0 && stray == 0,
+          "every walking leg is attributed to a real escalator");
 
     /* 5 floors of STAIRS only: beyond the 3-floor stair budget -> no route */
     fresh();

@@ -124,6 +124,14 @@ typedef struct {
                              * member 0/1 = Salesman, condo 1 = Mother
                              * with Baby, ...). Assigned at spawn. */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
+    uint16_t walk_stair;    /* tenant id of the stair/escalator carrying this
+                             * person while WALKING; 0 = none. Feeds the
+                             * rider list (people-list family 1100:327f).
+                             * Occupies former struct padding so sizeof and
+                             * every field offset are unchanged — v13 saves
+                             * still load (the slot reads as 0/garbage there,
+                             * harmless: it's only trusted while WALKING and
+                             * is restamped when the next leg starts). */
     int      wait_start;    /* sim frame when the queue was joined (+0xA) */
     int      x;             /* walking-origin x (home tenant x, GetPersonX) */
 } Person;
