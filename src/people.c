@@ -1201,6 +1201,21 @@ static int depart_roll(int frame, int idx, int n)
     return (h % (uint32_t)n) == 0;
 }
 
+/* Aggregate of the EXE's per-person dice at the venue level: `pool`
+ * people each roll 1-in-`width` per 16-frame visit, so the venue sees
+ * one departure with per-tick odds pool/(width*16). The port rolls one
+ * tenant-level die with that combined probability — the exact sum of
+ * the individual dice, including the natural slowdown as the pool
+ * drains. width 1 = the EXE's "deterministic" arm (everyone leaves on
+ * their next visit). */
+static int pool_roll(int frame, int idx, int pool, int width)
+{
+    if (pool <= 0) return 0;
+    int n = (width * 16) / pool;
+    if (n < 1) n = 1;
+    return depart_roll(frame, idx, n);
+}
+
 static int is_retail_kind(ItemType ty)
 {
     return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD;
@@ -1377,14 +1392,20 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                          t->state == TENANT_ABANDONED && t->demand_armed;
         if ((is_retail_kind(t->type) && t->retail_open &&
              t->retail_quota > 0) || (shop_relet && t->retail_quota > 0)) {
-            int roll = 0;
+            /* The EXE's exact per-person widths, aggregated over the
+             * remaining pool (= today's undispatched quota): FF/shops
+             * rand%36 through the day and rand%6 in the 5-9PM rush;
+             * restaurants rand%12 in the rush, then the DETERMINISTIC
+             * straggler arm until 11PM (2026-07-11 referee). */
+            int width = 0;
             if (t->type == ITEM_RESTAURANT)
-                roll = (hour >= 17 && hour < 21) ? 12
-                     : (hour >= 21 && hour < 23) ? 4 : 0;
+                width = (hour >= 17 && hour < 21) ? 12
+                      : (hour >= 21 && hour < 23) ? 1 : 0;
             else
-                roll = (hour >= 10 && hour < 17) ? 32
-                     : (hour >= 17 && hour < 21) ? 8 : 0;
-            if (roll && depart_roll(frame, i, roll)) walkin = 1;
+                width = (hour >= 10 && hour < 17) ? 36
+                      : (hour >= 17 && hour < 21) ? 6 : 0;
+            if (width && pool_roll(frame, i, t->retail_quota, width))
+                walkin = 1;
         }
 
         /* show venues draw a quota-sized crowd per showing (VenueT summons
@@ -1497,10 +1518,14 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
 
         if (t->type == ITEM_OFFICE) {
             /* Office lunch rush (UniPeple 1220:2288): workers 1..5 of
-             * each office hit a FASTFOOD in their zone, noon-5PM,
-             * weekdays only — offices never patronize restaurants. */
+             * each office hit a FASTFOOD in their zone, weekdays only —
+             * offices never patronize restaurants. Exact dice: rand%12
+             * per visit through the noon period, DETERMINISTIC 13:00-
+             * 17:00, aggregated over the workers still at their desks. */
             if (ps->sched_day || hour < 12 || hour >= 17) continue;
-            if (ps->spawned[i] >= 5 || !depart_roll(frame, i, 12)) continue;
+            if (ps->spawned[i] >= 5 ||
+                !pool_roll(frame, i, 5 - ps->spawned[i],
+                           hour >= 13 ? 1 : 12)) continue;
             v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
                             reach_public);
             if (v) ps->spawned[i]++;
@@ -1509,39 +1534,50 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
              * out for a RESTAURANT dinner, 5-9PM, once per stay. */
             if (!t->hosted || (i & 1) || hour < 17 || hour >= 21) continue;
             if (ps->dinner_sent[i >> 3] & (1 << (i & 7))) continue;
-            if (!depart_roll(frame, i, 6)) continue;
+            if (!pool_roll(frame, i, 1, 6)) continue;   /* rand%6 per visit */
             v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
                             reach_public);
             if (v) ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
         } else if (t->type == ITEM_CONDO) {
-            /* Condo excursions (1220:3a1a): weekdays a shopping trip
-             * after 10AM; weekends every 4th condo dines out 5-9PM and
-             * the rest grab fast food on the daytime schedule. */
-            if (ps->spawned[i] >= 2) continue;
+            /* Condo excursions (1220:3a1a): weekdays the Homebody's one
+             * shopping trip after 10AM (rand%12 per visit); weekends
+             * every 4th condo dines out 5-9PM (rand%6) and the rest
+             * grab fast food on the daytime dice. Weekday trips latch
+             * on the dinner_sent bitmask, NOT spawned[] — that counter
+             * belongs to the residents' own return spawns and sharing
+             * it starved the kid whenever the shopper rolled first. */
             if (!ps->sched_day) {
-                if (hour < 10 || hour >= 21 || !depart_roll(frame, i, 24))
+                if (ps->dinner_sent[i >> 3] & (1 << (i & 7))) continue;
+                if (hour < 10 || hour >= 21 || !pool_roll(frame, i, 1, 12))
                     continue;
                 v = pick_retail(tower, ITEM_SHOP, t->floor, seed,
                                 reach_public);
+                if (v) ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
             } else if ((i & 3) == 0) {
-                if (hour < 17 || hour >= 21 || !depart_roll(frame, i, 6))
+                if (ps->spawned[i] >= 2) continue;
+                if (hour < 17 || hour >= 21 || !pool_roll(frame, i, 1, 6))
                     continue;
                 v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
                                 reach_public);
+                if (v) ps->spawned[i]++;
             } else {
-                if (hour < 10 || hour >= 17 || !depart_roll(frame, i, 24))
+                if (ps->spawned[i] >= 2) continue;
+                if (hour < 10 || hour >= 17 || !pool_roll(frame, i, 1, 12))
                     continue;
                 v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
                                 reach_public);
+                if (v) ps->spawned[i]++;
             }
-            if (v) ps->spawned[i]++;
         } else if (t->type == ITEM_CATHEDRAL) {
             /* Weekend congregation (UniPeple 1220:5edd): period-0
              * mornings only, rand-gated from 8:00 — 40 guests ride all
              * the way to floor 100 and head home before lunch. */
             if (!ps->sched_day || hour < 8 || hour >= 11) continue;
             if (ps->spawned[i] >= 40) continue;
-            if (!depart_roll(frame, i, 3)) continue;
+            /* rand-gated until 10:00, deterministic after — aggregated
+             * over the congregation still to arrive */
+            if (!pool_roll(frame, i, 40 - ps->spawned[i],
+                           hour >= 10 ? 1 : 12)) continue;
             fidx = floor_to_index(0);       /* worshippers come off the street */
             v = t;
             ps->spawned[i]++;

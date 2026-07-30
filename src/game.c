@@ -1940,6 +1940,24 @@ static void parking_owner_label(const Tenant *ot, char *buf, int n)
     else                     snprintf(buf, n, "%s %dF", base, ot->floor);
 }
 
+static int medical_band(int floor);   /* defined with the seek code below */
+
+/* Does this floor's 15-floor zone have medical service? Same two-pass
+ * rule as the patient dispatch: a center in the own band, or any
+ * band-0 (ground-zone) center as the universal fallback. */
+static int medical_band_served(Tower *tower, int floor)
+{
+    int band = medical_band(floor);
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *m = &tower->tenants[i];
+        if (m->type != ITEM_MEDICAL || m->state == TENANT_ABANDONED)
+            continue;
+        int b = medical_band(m->floor);
+        if (b == band || b == 0) return 1;
+    }
+    return 0;
+}
+
 int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
                          char lines[][48], int max)
 {
@@ -2016,11 +2034,11 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
         }
     }
 
-    /* 6. Medical Center is too far away (#18) — office/condo at ★3+ with no
-     * adequate medical (port tracks this tower-wide, not per-15-floor zone;
-     * flagged approximation). */
-    if ((is_office || is_condo) && tower->star_rating >= 3 &&
-        !sim->medical_adequate && n < max)
+    /* 6. Medical Center is too far away (#18) — office/condo at ★3+
+     * whose own 15-floor zone has no center and no band-0 fallback: the
+     * same two-pass search the patient dispatch runs (was tower-wide). */
+    if ((is_office || is_condo) && tower->star_rating >= 3 && n < max &&
+        !medical_band_served(tower, t->floor))
         PUSH("Medical Center is too far away");
 
     /* 7. Not connected to Ramp (#20) — parking space off the ramp chain. */
