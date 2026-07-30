@@ -517,6 +517,59 @@ static void test_parking_cars(void)
     CHECK(guests <= 1, "carless suite guests cancel: one guest at most");
 }
 
+static int condo_member_home(uint16_t tid, int fidx, int member)
+{
+    for (int i = 0; i < sim.people.people_high; i++) {
+        const Person *p = &sim.people.people[i];
+        if (p->home_tenant == tid && p->member == member &&
+            p->state == PERSON_AT_DEST && p->cur_floor == (uint8_t)fidx)
+            return 1;
+    }
+    return 0;
+}
+
+/* Condo daily commute (UniPeple 1220:3b0c/3e10): kid home 13-17h, an
+ * adult in the evening; overnight at home; morning ride-down and out. */
+static void test_condo_cycle(void)
+{
+    printf("condo daily commute cycle:\n");
+    fresh();
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t condo = place(ITEM_CONDO, 5, BX + 6);
+    for (int f = 0; f <= 5; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    force_occupied(condo);
+    people_rebuild_transport(&sim.people, &tw);
+    int f5 = floor_to_index(5);
+
+    int frame = 0, kid = 0, adult = 0;
+    for (; frame < 4000 && !kid; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
+                      sim.reach_public, sim.reach_service);
+        kid = condo_member_home(condo, f5, 2);
+    }
+    CHECK(kid, "the kid rode home in the afternoon (member 2)");
+    for (; frame < 9000 && !adult; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
+                      sim.reach_public, sim.reach_service);
+        adult = condo_member_home(condo, f5, 0);
+    }
+    CHECK(adult, "an adult came home in the evening (member 0)");
+    for (int k = 0; k < 600; k++, frame++)
+        people_update(&sim.people, &tw, frame, TOD_NIGHT, 23,
+                      sim.reach_public, sim.reach_service);
+    CHECK(condo_member_home(condo, f5, 2) && condo_member_home(condo, f5, 0),
+          "both residents stay home overnight");
+    int gone = 0;
+    for (int k = 0; k < 6000 && !gone; k++, frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        gone = 1;
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == condo) gone = 0;
+    }
+    CHECK(gone, "residents rode down and left the tower in the morning");
+}
+
 /* VIP visit (VipT seg_1240): armed sim tags tonight's suite guest
  * (member 1, the driver); a calm stay judges favorable at checkout. */
 static void test_vip_visit(void)
@@ -2768,6 +2821,7 @@ int main(void)
     test_metro_visitors();
     test_parking_cars();
     test_vip_visit();
+    test_condo_cycle();
     test_walk_rules();
     test_errand_warning_watchdog();
     test_queue_and_stress();

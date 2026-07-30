@@ -1327,10 +1327,18 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         /* Hotel guests spawn only for rooms the 5PM demand pass armed —
          * the EXE's +0x14 booking gate (UniPeple 1220:3032). This is what
          * keeps dirty and infested rooms guest-free: they can never arm. */
+        /* Condo residents coming home (UniPeple 1220:3b0c, weekdays):
+         * the kid (member 2) returns 13:00-17:00, an adult (member 0)
+         * in the evening; they stay home overnight and ride down in
+         * the morning. (Member 1, the Homebody, keeps her existing
+         * shopping-trip behavior rather than a standing entity.) */
+        int condo_in = t->type == ITEM_CONDO && !game_is_weekend(tower) &&
+                       (tod == TOD_AFTERNOON || tod == TOD_EVENING);
         int inbound = (t->type == ITEM_OFFICE && tod == TOD_MORNING &&
                        !game_is_weekend(tower)) ||
                       (item_is_hotel_room(t->type) && tod == TOD_EVENING &&
-                       t->demand_armed);
+                       t->demand_armed) ||
+                      condo_in;
 
         /* Retail walk-ins: the venue's own street pool, gated by today's
          * quota (Restaurant.c: quota gate 10b3 counts down at dispatch).
@@ -1371,13 +1379,24 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                     (tod == TOD_DAWN || tod == TOD_MORNING);
         if (!inbound && !patron && !staff && !walkin) continue;
         if (!walkin) {
-            if (ps->spawned[i] >=
-                (show_cap > 0 ? show_cap : tenant_commuters(t)))
-                continue;
+            int cap = show_cap > 0 ? show_cap
+                    : condo_in    ? 1            /* one resident per phase */
+                                  : tenant_commuters(t);
+            if (ps->spawned[i] >= cap) continue;
             if (!depart_roll(frame, i, 8)) continue;  /* irregular trickle */
         }
         int fidx = floor_to_index(t->floor);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
+
+        /* one kid / one adult per condo — skip if they're already home */
+        if (condo_in) {
+            uint8_t want = (tod == TOD_AFTERNOON) ? 2 : 0;
+            int dup = 0;
+            for (int k = 0; k < ps->people_high; k++)
+                if (ps->people[k].home_tenant == t->id &&
+                    ps->people[k].member == want) { dup = 1; break; }
+            if (dup) continue;
+        }
 
         if (staff) {
             int dirty = find_dirty_room_floor(tower);
@@ -1419,6 +1438,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         if (sp) {
             ps->people[sp - 1].entry_floor = (uint8_t)entry;
             ps->people[sp - 1].parked_cat = (uint8_t)cat;
+            if (condo_in)   /* the classifier's fixed family slots */
+                ps->people[sp - 1].member = (tod == TOD_AFTERNOON) ? 2 : 0;
             if (patron)
                 ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
             if (walkin) {
@@ -1620,6 +1641,22 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                         p->state = PERSON_PLANNING;
                         break;
                     }
+                }
+            }
+            /* Condo weekday commute out (UniPeple 1220:3e10): residents
+             * ride down through the morning and leave the tower via the
+             * lobby ("Lobby to leave", status 0x40). They return via the
+             * afternoon/evening spawns. */
+            if (!p->stay && !p->going_home && hour >= 7 && hour < 12 &&
+                (frame + i) % 16 == 0 && !ps->sched_day &&
+                depart_roll(frame, i + 33, 12)) {
+                Tenant *ch = tower_tenant(tower, p->home_tenant);
+                if (ch && ch->type == ITEM_CONDO &&
+                    p->cur_floor == (uint8_t)floor_to_index(ch->floor)) {
+                    p->going_home = 1;
+                    p->dest_floor = (uint8_t)GROUND_IDX;
+                    p->state = PERSON_PLANNING;
+                    break;
                 }
             }
             /* patrons/staff: stay a while, then head back (staff return

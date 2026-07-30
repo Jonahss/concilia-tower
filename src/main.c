@@ -5595,8 +5595,12 @@ static void person_where_line(const Person *p, char *buf, int bufn)
             /* status 0x40/0x21: "Lobby" + STRL 0x2BD #1 */
             snprintf(buf, bufn, "Lobby for sales calls");
         } else if (p->going_home) {
-            snprintf(buf, bufn, "%s to go home",
-                     p->parked_cat ? "Parking Space" : "Lobby");
+            /* condo residents "leave" (STRL 0x2BD #2); everyone else
+             * goes home */
+            snprintf(buf, bufn, home && home->type == ITEM_CONDO
+                     ? "Lobby to leave"
+                     : p->parked_cat ? "Parking Space to go home"
+                                     : "Lobby to go home");
         } else if (visitor) {
             const char *vn = retail_variant_name(home);
             person_fmt_floor(home->floor, fl, sizeof fl);
