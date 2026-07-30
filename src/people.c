@@ -89,6 +89,42 @@ void people_init(PeopleSim *ps)
 
 /* ---------- transport layout ---------- */
 
+/* Floor-pair route diagnostic (ShowNoRouteMessage 10a8:1b58, strings
+ * STRL 0x2CD). Latched per origin floor ([0x77C4] array); cleared on
+ * transport rebuild. NOT save-state: a restart merely re-arms the
+ * warnings, same as the EXE relaunching. */
+static uint8_t noroute_latch[TOWER_FLOOR_COUNT];
+static char    noroute_msg[80];
+static int     noroute_pending;
+
+static void fmt_floor_name(int fidx, char *out, size_t n)
+{
+    int f = index_to_floor(fidx);
+    if (f < 0)       snprintf(out, n, "B%d", -f);
+    else if (f == 0) snprintf(out, n, "Lobby");
+    else             snprintf(out, n, "%d", f);
+}
+
+static void noroute_report(const Person *p)
+{
+    int from = p->cur_floor;
+    if (from < 0 || from >= TOWER_FLOOR_COUNT || noroute_latch[from]) return;
+    noroute_latch[from] = 1;
+    char a[16], b[16];
+    fmt_floor_name(from, a, sizeof a);
+    fmt_floor_name(p->dest_floor, b, sizeof b);
+    snprintf(noroute_msg, sizeof noroute_msg,
+             "People on Floor %s need a path to Floor %s", a, b);
+    noroute_pending = 1;
+}
+
+const char *people_take_noroute_msg(void)
+{
+    if (!noroute_pending) return NULL;
+    noroute_pending = 0;
+    return noroute_msg;
+}
+
 static int shaft_serves(const ElevatorShaft *s, int fidx)
 {
     if (fidx < s->lo || fidx > s->hi) return 0;
@@ -103,6 +139,10 @@ static int shaft_serves(const ElevatorShaft *s, int fidx)
  * ElvPeple state on stair/elevator placement). */
 void people_rebuild_transport(PeopleSim *ps, Tower *tower)
 {
+    /* Transport changed — re-arm the route warnings (the EXE clears its
+     * [0x77C4] latches on the TransferT rebuild). */
+    memset(noroute_latch, 0, sizeof(noroute_latch));
+
     uint8_t gap[TOWER_FLOOR_COUNT];
     memset(gap, 0, sizeof(gap));
     for (int i = 0; i < tower->tenant_count; i++) {
@@ -566,6 +606,28 @@ void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on)
         if (s->home[k] == fidx) s->home[k] = s->lo;
 }
 
+/* Pull one person out of a stop ring mid-queue (the 300-frame watchdog).
+ * Compacts the ring in place; the pending call (if any) stays with the
+ * car and clears normally when it arrives to an empty stop. */
+static void queue_remove(ElevatorShaft *s, int floor, int up, int person_idx)
+{
+    ElevatorStop *st = &s->stop[floor];
+    uint8_t *count = up ? &st->up_count : &st->down_count;
+    uint8_t *head  = up ? &st->up_head  : &st->down_head;
+    uint16_t *ring = up ? st->up_ring   : st->down_ring;
+    uint16_t needle = (uint16_t)(person_idx + 1);
+    for (int k = 0; k < *count; k++) {
+        int pos = (*head + k) % QUEUE_CAP;
+        if (ring[pos] != needle) continue;
+        for (int m = k; m + 1 < *count; m++) {
+            int a = (*head + m) % QUEUE_CAP, b = (*head + m + 1) % QUEUE_CAP;
+            ring[a] = ring[b];
+        }
+        (*count)--;
+        return;
+    }
+}
+
 static int dequeue(ElevatorShaft *s, int floor, int up)
 {
     ElevatorStop *st = &s->stop[floor];
@@ -685,6 +747,7 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
         add_penalty(p, PENALTY_NO_ROUTE);   /* = 300: instant cap-out */
         deliver_stress(ps, tower, p);
         ps->trips_failed++;
+        noroute_report(p);   /* "People on Floor X need a path to Floor Y" */
         p->state = PERSON_AT_DEST;          /* gives up where they stand */
         break;
     }
@@ -708,6 +771,15 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
     int felt = p->wait_accum - ps->lobby_bonus;
     if (felt < 0) felt = 0;
     deliver_stress(ps, tower, p);
+    /* Sales-errand legs (UniPeple office statuses 0x40/0x61): the lobby
+     * arrival parks the salesman making calls; the return leg puts him
+     * back at his desk. Neither is a "worker at the desk" arrival for
+     * the hooks below. */
+    if (p->errand == 1 || p->errand == 3) {
+        p->errand = (p->errand == 1) ? 2 : 4;
+        p->state = PERSON_AT_DEST;
+        return;
+    }
     /* Hotel guests checking in mark the room hosted (housekeeping loop)
      * and reset its neglect fuse — check-in is the ONLY thing that resets
      * the fuse (HotelCheckIn 1178:0e65 zeroes tenure; maids never do). */
@@ -1450,9 +1522,55 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
             p->state = PERSON_PLANNING;
             plan_person(ps, tower, p, i, frame);
             break;
-        case PERSON_QUEUED:  queued++; break;
+        case PERSON_QUEUED:
+            /* 300-frame watchdog (1220:1637 -> 1210:1b41 -> 1220:1aed):
+             * a person stuck in a queue that long gives up — banks the
+             * full wait, storms off, and rests where they stand. */
+            if (frame - p->wait_start >= 300) {
+                queue_remove(&ps->shafts[p->shaft], p->cur_floor, p->dir, i);
+                bank_wait(p, frame);
+                deliver_stress(ps, tower, p);
+                ps->trips_failed++;
+                if (p->errand == 1 || p->errand == 3) p->errand = 4;
+                p->state = PERSON_AT_DEST;
+                break;
+            }
+            queued++; break;
         case PERSON_RIDING:  riding++; break;
         case PERSON_AT_DEST:
+            /* Office sales errand (UniPeple statuses 0/0x40/0x21/0x61):
+             * members 0 and 1 of every occupied office make a midday
+             * round-trip to the ground lobby. Member 0 rolls from the
+             * morning (deterministic after noon); member 1 goes in the
+             * early afternoon; both return during 13:00-17:00. Anyone
+             * still at the lobby at 17:00 just heads home from there
+             * (the evening phase flip already handles that). */
+            if (!p->stay && !p->going_home && p->member <= 1 &&
+                hour >= 7 && hour < 17) {
+                Tenant *ht = tower_tenant(tower, p->home_tenant);
+                if (ht && ht->type == ITEM_OFFICE && (frame + i) % 16 == 0) {
+                    /* the EXE simulates each person every 16 frames (1/16
+                     * LOD, 1220:0daf) — pace the dice the same way */
+                    int hf = floor_to_index(ht->floor);
+                    if (p->errand == 0 && p->cur_floor == (uint8_t)hf) {
+                        int go = (p->member == 0)
+                            ? (hour >= 12 || depart_roll(frame, i + 77, 12))
+                            : (hour >= 13 && depart_roll(frame, i + 77, 12));
+                        if (go) {
+                            p->errand = 1;
+                            p->dest_floor = (uint8_t)GROUND_IDX;
+                            p->state = PERSON_PLANNING;
+                            break;
+                        }
+                    } else if (p->errand == 2 && hour >= 13 && hf >= 0 &&
+                               depart_roll(frame, i + 191, 12)) {
+                        p->errand = 3;
+                        p->dest_floor = (uint8_t)hf;
+                        p->state = PERSON_PLANNING;
+                        break;
+                    }
+                }
+            }
             /* patrons/staff: stay a while, then head back (staff return
              * to their unit, patrons leave via the ground) */
             if (p->stay && (frame + i) % 8 == 0 && --p->stay == 0) {

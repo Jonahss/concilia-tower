@@ -349,7 +349,15 @@ static void test_commute_elevator(void)
     for (int frame = 0; frame < 2000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
+        /* a salesman may already be off on his lobby errand — he still
+         * counts as having commuted in */
         arrived = people_at(office, f5, PERSON_AT_DEST);
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == office &&
+                sim.people.people[i].errand &&
+                !(sim.people.people[i].state == PERSON_AT_DEST &&
+                  sim.people.people[i].cur_floor == (uint8_t)f5))
+                arrived++;
         if (arrived == 6) break;
     }
     CHECK(arrived == 6, "all 6 office workers rode to floor 5");
@@ -536,6 +544,12 @@ static void test_walk_rules(void)
             else stray++;
         }
         arrived = people_at(office, f5, PERSON_AT_DEST);
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == office &&
+                sim.people.people[i].errand &&
+                !(sim.people.people[i].state == PERSON_AT_DEST &&
+                  sim.people.people[i].cur_floor == (uint8_t)f5))
+                arrived++;   /* off on the sales errand = commuted in */
         if (arrived == 6) break;
     }
     CHECK(arrived == 6, "5 escalator flights are walkable");
@@ -558,6 +572,105 @@ static void test_walk_rules(void)
           "5 stair flights exceed the walk budget");
     CHECK(sim.people.trips_failed > 0, "failed trips recorded");
     CHECK(t->stress > before, "no-route frustration reached the tenant");
+}
+
+/* Sales errand (UniPeple 0/0x40/0x21/0x61), route warning (STRL 0x2CD),
+ * 300-frame queue watchdog (1220:1637). */
+static void test_errand_warning_watchdog(void)
+{
+    printf("sales errand, route warning, queue watchdog:\n");
+
+    /* Route warning: office with no transport at all -> first failed
+     * trip reports the floor pair, latched per origin floor. */
+    fresh();
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
+    uint16_t office = place(ITEM_OFFICE, 5, BX + 6);
+    force_occupied(office);
+    people_rebuild_transport(&sim.people, &tw);
+    (void)people_take_noroute_msg();               /* drain */
+    for (int frame = 0; frame < 400; frame++)
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+    const char *msg = people_take_noroute_msg();
+    CHECK(msg && strstr(msg, "need a path to Floor"),
+          "no-route trip produced the floor-pair warning");
+    CHECK(people_take_noroute_msg() == NULL,
+          "warning latched: one per origin floor");
+
+    /* Sales errand: walkable office tower (escalators), then walk the
+     * clock: noon sends member 0 to the lobby, afternoon brings him
+     * back to his desk. */
+    fresh();
+    for (int f = 1; f <= 5; f++) place(ITEM_FLOOR, f, BX);
+    office = place(ITEM_OFFICE, 5, BX + 6);
+    for (int f = 0; f <= 4; f++) place(ITEM_ESCALATOR, f, BX + 20);
+    force_occupied(office);
+    people_rebuild_transport(&sim.people, &tw);
+    int f5 = floor_to_index(5), g = floor_to_index(0);
+    int frame = 0, present = 0;
+    for (; frame < 3000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        present = people_at(office, f5, PERSON_AT_DEST);
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == office &&
+                sim.people.people[i].errand &&
+                !(sim.people.people[i].state == PERSON_AT_DEST &&
+                  sim.people.people[i].cur_floor == (uint8_t)f5))
+                present++;
+        if (present == 6) break;
+    }
+    CHECK(present == 6, "workers commuted in (desk or errand)");
+    int at_lobby = 0;
+    for (; frame < 6000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 12,
+                      sim.reach_public, sim.reach_service);
+        at_lobby = 0;
+        for (int i = 0; i < sim.people.people_high; i++) {
+            const Person *p = &sim.people.people[i];
+            if (p->home_tenant == office && p->errand == 2 &&
+                p->cur_floor == (uint8_t)g && p->state == PERSON_AT_DEST)
+                at_lobby++;
+        }
+        if (at_lobby) break;
+    }
+    CHECK(at_lobby >= 1, "salesman reached the lobby for sales calls");
+    int back = 0;
+    for (; frame < 12000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
+                      sim.reach_public, sim.reach_service);
+        back = 0;
+        for (int i = 0; i < sim.people.people_high; i++) {
+            const Person *p = &sim.people.people[i];
+            if (p->home_tenant == office && p->errand == 4 &&
+                p->cur_floor == (uint8_t)f5 && p->state == PERSON_AT_DEST)
+                back++;
+        }
+        if (back) break;
+    }
+    CHECK(back >= 1, "salesman returned to his desk (errand done)");
+
+    /* Watchdog: a queued person whose car never comes gives up at 300
+     * frames — leaves the ring, banks the wait, trips_failed bumps. */
+    fresh();
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    ElevatorShaft *s = &sim.people.shafts[0];
+    sim.people.people_high = 4;
+    Person *p = &sim.people.people[0];
+    memset(p, 0, sizeof *p);
+    p->home_tenant = office;      /* real tenant: stress lands somewhere */
+    p->state = PERSON_QUEUED;
+    p->cur_floor = (uint8_t)g;
+    p->dir = 1; p->shaft = 0; p->wait_start = 0;
+    people_join_queue(&sim.people, 0, g, 1, 0);
+    int failed_before = sim.people.trips_failed;
+    people_update(&sim.people, &tw, 301, TOD_MORNING, 9,
+                  sim.reach_public, sim.reach_service);
+    CHECK(p->state == PERSON_AT_DEST, "watchdog: gave up after 300 frames");
+    CHECK(s->stop[g].up_count == 0, "watchdog: pulled out of the ring");
+    CHECK(sim.people.trips_failed == failed_before + 1,
+          "watchdog: failure recorded");
 }
 
 static void test_queue_and_stress(void)
@@ -1276,11 +1389,15 @@ static void test_schedules(void)
     s->sched_mode[0][0] = 1;
     s->car[0].floor = s->car[0].target = s->lo;
     s->car[0].dir = 1;
-    for (int i = 0; i < 400; i++)
+    /* salesmen may add mid-run traffic now — assert the car REACHED the
+     * far end while idle, not that it's parked there at the cutoff */
+    int topped = 0;
+    for (int i = 0; i < 400; i++) {
         people_update(&sim.people, &tw, i, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
-    CHECK(s->car[0].floor == s->hi,
-          "shuttle mode: idle car ran to the top of the shaft");
+        if (s->car[0].floor == s->hi) topped = 1;
+    }
+    CHECK(topped, "shuttle mode: idle car ran to the top of the shaft");
     s->sched_mode[0][0] = 0;
 
     /* patience: workers still arrive, but cars dwell (hold_timer engages) */
@@ -1289,11 +1406,21 @@ static void test_schedules(void)
     int held = 0, arrived = 0;
     int f5 = floor_to_index(5);
     for (int frame = 0; frame < 4000; frame++) {
-        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+        /* afternoon: the salesman's return leg supplies boarding traffic
+         * (morning would leave him parked at the lobby until 13:00) */
+        people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
                       sim.reach_public, sim.reach_service);
         if (s->car[0].hold_timer) held = 1;
         arrived = people_at(office, f5, PERSON_AT_DEST);
-        if (arrived == 6) break;
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == office &&
+                sim.people.people[i].errand &&
+                !(sim.people.people[i].state == PERSON_AT_DEST &&
+                  sim.people.people[i].cur_floor == (uint8_t)f5))
+                arrived++;   /* salesman on his errand still counts */
+        /* workers may all be settled before the loop starts now — run
+         * until the errand traffic makes the patient car dwell too */
+        if (held && arrived == 6) break;
     }
     CHECK(held, "patience 2: car dwells at floors (hold timer engaged)");
     CHECK(arrived == 6, "all 6 workers still arrive with patient cars");
@@ -2597,6 +2724,7 @@ int main(void)
     test_metro_visitors();
     test_parking_cars();
     test_walk_rules();
+    test_errand_warning_watchdog();
     test_queue_and_stress();
     test_elevator_dialog();
     test_patrons_and_staff();

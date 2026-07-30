@@ -5573,7 +5573,10 @@ static void person_where_line(const Person *p, char *buf, int bufn)
     switch ((PersonState)p->state) {
     case PERSON_PLANNING: case PERSON_WALKING:
     case PERSON_QUEUED:   case PERSON_RIDING:
-        if (p->going_home) {
+        if (p->errand == 1 || p->errand == 2) {
+            /* status 0x40/0x21: "Lobby" + STRL 0x2BD #1 */
+            snprintf(buf, bufn, "Lobby for sales calls");
+        } else if (p->going_home) {
             snprintf(buf, bufn, "%s to go home",
                      p->parked_cat ? "Parking Space" : "Lobby");
         } else if (visitor) {
@@ -5588,6 +5591,10 @@ static void person_where_line(const Person *p, char *buf, int bufn)
         break;
     default:
         if (!home) { snprintf(buf, bufn, "-"); break; }
+        if (p->errand == 2) {   /* parked at the lobby, making calls */
+            snprintf(buf, bufn, "Lobby for sales calls");
+            break;
+        }
         if (p->service && home->type == ITEM_HOUSEKEEPING &&
             p->cur_floor != (uint8_t)floor_to_index(home->floor)) {
             person_fmt_floor(index_to_floor(p->cur_floor), fl, sizeof fl);
@@ -8500,6 +8507,12 @@ int main(int argc, char *argv[])
             /* Ambient soundscape: sample an on-screen cell, play its type's bed. */
             if (game.sim.speed != SPEED_PAUSED)
                 ambient_tick();
+
+            /* Floor-pair route warning (STRL 0x2CD via 10a8:1b58) */
+            {
+                const char *nr = people_take_noroute_msg();
+                if (nr) add_event_message(nr);
+            }
             
             /* Star rating change */
             if (game.tower.star_rating != prev_star) {

@@ -89,6 +89,12 @@ void tuning_reset(void);
 #define COST_TRANSFER_FULL  (TUNING.cost_transfer_full)
 #define COST_NO_ROUTE       0x7fff
 
+/* Floor-pair route diagnostic ("People on Floor X need path to Floor Y",
+ * STRL 0x2CD via ElvPeple 10a8:1b58): the pending message, or NULL. The
+ * caller (UI loop) consumes it — one message per origin floor until the
+ * next transport rebuild, matching the EXE's [0x77C4] latch array. */
+const char *people_take_noroute_msg(void);
+
 typedef enum {
     PERSON_FREE = 0,
     PERSON_PLANNING,    /* needs a route toward dest_floor */
@@ -123,6 +129,12 @@ typedef struct {
                              * person-type classifier (InfoPeple: office
                              * member 0/1 = Salesman, condo 1 = Mother
                              * with Baby, ...). Assigned at spawn. */
+    uint8_t  errand;        /* office sales-call round-trip (UniPeple
+                             * status 0/0x40/0x21/0x61 chain): 0 none,
+                             * 1 heading to the lobby, 2 at the lobby
+                             * making calls, 3 returning, 4 done for the
+                             * day. Sits in former padding — layout and
+                             * sizeof unchanged, v13 saves still load. */
     uint16_t wait_accum;    /* frustration, capped at WAIT_CAP (person+0xC) */
     uint16_t walk_stair;    /* tenant id of the stair/escalator carrying this
                              * person while WALKING; 0 = none. Feeds the
