@@ -232,22 +232,34 @@ Not bugs, not mechanics — things the EXE ships but hides.
   "Call Fire Rescue" (40008) is greyed into the Options menu and only
   enabled during a fire.
 
-- **The corner-click money doubler.** The build dispatcher's prologue
-  (11f8:0955-098c) hides a one-shot cheat: on a *virgin* tower — no
-  tenants, lobby height still unchosen, balance exactly the starting
-  $2,000,000 — a build-tool click on the lot's bottom-left cell (B10,
-  cell 0) calls AwardMoney(current balance), doubling your money to
-  $4M. Any spend, any placement, or the height lock disarms it forever
-  (the balance check is exact). No sound, no dialog — the balance just
-  changes. Ported as-is. Confidence HIGH (hand-disassembled).
+---
 
-- **The grand lobby is a first-click secret.** [0xB3E6] (ground-lobby
-  height 1-3) is written exactly once per tower, by the FIRST build-tool
-  world click (11f8:098f-09bb): plain click = 1 story, **Ctrl-click = 2
-  stories, Ctrl+Shift-click = 3** — and the write happens before the
-  build dispatch, so a click that fails to place anything still locks
-  the choice. There is no UI for it anywhere; miss the modifier on
-  click one and your tower can never have a grand lobby. Ground-floor
-  lobby drags then auto-build the upper rows (drag-builder 11f8:26dd),
-  priced through TerrainCost's lobby band row ($5,000 x height per
-  cell). Ported faithfully, quirks included. Confidence HIGH.
+## Part 4 — Manual-documented features (implementation decode notes)
+
+Not buried, not secrets: both of these are described in the README guide
+that shipped with the game and are well known to players. Kept here only
+because the byte-level decode is useful to the port; the in-game
+mechanism has no UI, which is why they were initially mistaken for
+hidden easter eggs (corrected 2026-07-30, Jonah).
+
+- **The corner-click money doubler.** Documented in the shipped guide.
+  Mechanism (build dispatcher prologue, 11f8:0955-098c): one-shot — on a
+  *virgin* tower — no tenants, lobby height still unchosen, balance
+  exactly the starting $2,000,000 — a build-tool click on the lot's
+  bottom-left cell (B10, cell 0) calls AwardMoney(current balance),
+  doubling your money to $4M. Any spend, any placement, or the height
+  lock disarms it forever (the balance check is exact). No sound, no
+  dialog — the balance just changes. Ported as-is. Confidence HIGH
+  (hand-disassembled).
+
+- **The grand lobby height choice (Ctrl-click).** Documented in the
+  shipped guide. Mechanism: [0xB3E6] (ground-lobby height 1-3) is
+  written exactly once per tower, by the FIRST build-tool world click
+  (11f8:098f-09bb): plain click = 1 story, **Ctrl-click = 2 stories,
+  Ctrl+Shift-click = 3** — and the write happens before the build
+  dispatch, so a click that fails to place anything still locks the
+  choice. Miss the modifier on click one and your tower can never have
+  a grand lobby. Ground-floor lobby drags then auto-build the upper
+  rows (drag-builder 11f8:26dd), priced through TerrainCost's lobby
+  band row ($5,000 x height per cell). Ported faithfully, quirks
+  included. Confidence HIGH.

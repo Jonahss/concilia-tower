@@ -352,7 +352,8 @@ decomp `output/pass3_coverage_2026-07-29.md` + the pass-2 commits.
   the CGPk art sheets (0x8FE9/0x8FEA), promotion/whitelist/overlap/cost
   per the tall-stair trace; and the grand lobby itself is now BUILDABLE
   (893f9b2): first-click Ctrl / Ctrl+Shift height lock, mirrored upper
-  rows, empty-lot new game, corner-click money easter egg, $2M start.
+  rows, empty-lot new game, corner-click money doubler (documented in
+  the shipped guide), $2M start.
 - Scroll/minimap polish: line scroll is 16px both axes (not a floor), page
   = view−16px; minimap click navigates via animated SmoothScroll; map
   window has a close box; overlay buttons are star-gated (4th at 2★).

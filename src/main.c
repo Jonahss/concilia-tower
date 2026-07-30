@@ -7578,8 +7578,8 @@ static void handle_event(SDL_Event *ev)
                         game.mouse_floor == TOWER_MIN_FLOOR &&
                         game.mouse_cell == 0) {
                         game.tower.money *= 2;
-                        printf("Easter egg: corner click doubled the "
-                               "starting funds\n");
+                        printf("Corner click doubled the starting "
+                               "funds\n");
                         break;
                     }
                     /* First build click locks the ground-lobby height:
@@ -7887,6 +7887,10 @@ int main(int argc, char *argv[])
     /* the in-tenant people band (AnimPeple, 0x85E8-0x85EE) is white-keyed */
     for (uint16_t id = 0x85E8; id <= 0x85EE; id++)
         sprites_apply_white_key(&game.sprites, game.renderer, id);
+    /* grand-lobby tall stair/escalator sheets (CGPk) — white transparent,
+     * same convention as the normal stair/escalator art */
+    sprites_apply_white_key(&game.sprites, game.renderer, 0x8FE9);
+    sprites_apply_white_key(&game.sprites, game.renderer, 0x8FEA);
     /* digit sheet background is the shaft's own near-black (as in OS) */
     sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS,
                             25, 25, 25);
