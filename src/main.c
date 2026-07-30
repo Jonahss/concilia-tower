@@ -434,6 +434,11 @@ typedef struct {
     uint8_t         cam_anim;
     float           cam_tx, cam_ty;
 
+    /* Find Person/Find Tenant modal (10d8:0000): 0 closed, 1 person,
+     * 2 tenant. The sim halts while open. */
+    uint8_t         find_open;
+    int             find_sel;
+
     /* Window dragging state */
     int             win_dragging;    /* 0=none, 1=info, 2=map, 3=toolbox */
     int             win_drag_ox;     /* Mouse offset from window origin at drag start */
@@ -538,6 +543,8 @@ typedef struct {
 #define ACT_SND_ELEV      23
 #define ACT_SND_BG        24
 #define ACT_SND_EVENTS    25
+#define ACT_FIND_PERSON   26   /* Windows menu (40019/40020) */
+#define ACT_FIND_TENANT   27
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -644,8 +651,11 @@ static const MenuItem menu_windows[] = {
     { "Tool Bar",   ITEM_NONE, ACT_WIN_TOOLBAR },
     { "Info Bar",   ITEM_NONE, ACT_WIN_INFOBAR },
     { "Map Window", ITEM_NONE, ACT_WIN_MAP },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Find Person...", ITEM_NONE, ACT_FIND_PERSON },
+    { "Find Tenant...", ITEM_NONE, ACT_FIND_TENANT },
 };
-#define MENU_WINDOWS_COUNT 3
+#define MENU_WINDOWS_COUNT 6
 
 /* Top-level menus */
 typedef struct {
@@ -6148,6 +6158,166 @@ static int inspect_popup_click(int mx, int my)
     #undef TIABS
 }
 
+/* ---------- Find Person... / Find Tenant... (menu 40019/40020) ----------
+ * The EXE's modal dialogs (10d8:0000, RT_DIALOG 0x1FE/0x208): a listbox
+ * of NAMED entries only (the 20-slot registries), OK / Remove / Find,
+ * Remove+Find disabled until a selection, double-click = Find. Find
+ * pauses the game, arms the inspect tool, and centers the camera on the
+ * target (10e0:0cea); a despawned person gets "^0 is not in this tower."
+ * The sim halts while the dialog is open — DialogBoxParam is modal. */
+#define FIND_W     240
+#define FIND_ROW_H 14
+#define FIND_ROWS  20
+
+typedef struct { uint16_t tid; uint8_t member; const char *name; } FindRow;
+
+static int find_build_rows(FindRow *rows)
+{
+    int n = 0;
+    if (game.find_open == 1) {
+        for (int i = 0; i < 20 && n < FIND_ROWS; i++) {
+            const struct PersonNameSlot *s = &game.tower.person_names[i];
+            if (!s->tenant_id) continue;
+            rows[n++] = (FindRow){ s->tenant_id, s->member, s->name };
+        }
+    } else {
+        for (int i = 0; i < game.tower.tenant_count && n < FIND_ROWS; i++) {
+            Tenant *t = &game.tower.tenants[i];
+            if (t->name[0] && t->state != TENANT_ABANDONED)
+                rows[n++] = (FindRow){ t->id, 0, t->name };
+        }
+    }
+    return n;
+}
+
+static void find_window_rect(int n, SDL_Rect *r)
+{
+    int h = WIN_TITLEBAR_H + 8 + (n > 0 ? n : 1) * FIND_ROW_H + 40;
+    r->x = (game.screen_w - FIND_W) / 2;
+    r->y = (game.screen_h - h) / 2;
+    r->w = FIND_W; r->h = h;
+}
+
+static void render_find_dialog(void)
+{
+    if (!game.find_open) return;
+    FindRow rows[FIND_ROWS];
+    int n = find_build_rows(rows);
+    SDL_Rect r; find_window_rect(n, &r);
+    draw_win31_titlebar(r.x, r.y, r.w, game.find_open == 1 ? "Find Person"
+                                                           : "Find Tenant");
+    draw_win31_rect(r.x, r.y + WIN_TITLEBAR_H, r.w, r.h - WIN_TITLEBAR_H, 1);
+
+    SDL_Color ink = { 0, 0, 0, 255 };
+    SDL_Color dim = { 130, 130, 130, 255 };
+    int ly = r.y + WIN_TITLEBAR_H + 4;
+    /* listbox panel: white, like the EXE's LISTBOX with WHITE_BRUSH */
+    SDL_Rect lb = { r.x + 6, ly, r.w - 12, (n > 0 ? n : 1) * FIND_ROW_H + 2 };
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &lb);
+    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
+    SDL_RenderDrawRect(game.renderer, &lb);
+    if (!n)
+        stats_label(lb.x + 6, ly + 2, "(no one has been named)", dim);
+    for (int k = 0; k < n; k++) {
+        if (k == game.find_sel) {
+            SDL_Rect hi = { lb.x + 1, ly + 1 + k * FIND_ROW_H,
+                            lb.w - 2, FIND_ROW_H };
+            SDL_SetRenderDrawColor(game.renderer, 0, 0, 128, 255);
+            SDL_RenderFillRect(game.renderer, &hi);
+        }
+        stats_label(lb.x + 6, ly + 2 + k * FIND_ROW_H, rows[k].name,
+                    k == game.find_sel ? (SDL_Color){255,255,255,255} : ink);
+    }
+    int by = lb.y + lb.h + 8;
+    int sel = game.find_sel >= 0 && game.find_sel < n;
+    draw_win31_rect(r.x + 8, by, 56, 20, 1);
+    stats_label(r.x + 20, by + 4, "OK", ink);
+    draw_win31_rect(r.x + 72, by, 70, 20, 1);
+    stats_label(r.x + 82, by + 4, "Remove", sel ? ink : dim);
+    draw_win31_rect(r.x + 150, by, 60, 20, 1);
+    stats_label(r.x + 166, by + 4, "Find", sel ? ink : dim);
+}
+
+/* Center the camera on a grid cell with the SmoothScroll glide. */
+static void find_center_camera(int fidx, int cell)
+{
+    game.cam_ty = (float)(-index_to_floor(fidx) * CELL_H);
+    game.cam_tx = (float)(cell * CELL_W - game.screen_w / 2);
+    game.cam_anim = 1;
+}
+
+static void find_do_find(const FindRow *row)
+{
+    if (game.find_open == 1) {
+        PeopleSim *ps = &game.sim.people;
+        for (int i = 0; i < ps->people_high; i++) {
+            Person *p = &ps->people[i];
+            if (p->home_tenant != row->tid || p->member != row->member ||
+                !p->home_tenant) continue;
+            /* found: pause ([0x783E]=0), inspect tool ([0x783C]=2),
+             * CenterCameraOn, and open their popup */
+            game.find_open = 0;
+            game.sim.speed = SPEED_PAUSED;
+            game.inspect_mode = 1;
+            game.demolish_mode = game.finger_mode = 0;
+            game.build_type = ITEM_NONE;
+            find_center_camera(p->cur_floor, p->x);
+            open_person_popup_at((uint16_t)(i + 1),
+                                 game.screen_w / 2, game.screen_h / 2);
+            return;
+        }
+        char msg[64];
+        snprintf(msg, sizeof msg, "%s is not in this tower.", row->name);
+        add_event_message(msg);           /* template 0x7f01:0x3EA */
+        return;                           /* dialog stays open */
+    }
+    Tenant *t = tower_tenant(&game.tower, row->tid);
+    if (!t) return;
+    game.find_open = 0;
+    game.sim.speed = SPEED_PAUSED;
+    game.inspect_mode = 1;
+    game.demolish_mode = game.finger_mode = 0;
+    game.build_type = ITEM_NONE;
+    find_center_camera(floor_to_index(t->floor), t->x + t->width / 2);
+    open_tenant_popup_at(row->tid, game.screen_w / 2, game.screen_h / 2);
+}
+
+static void find_dialog_click(int mx, int my, int clicks)
+{
+    FindRow rows[FIND_ROWS];
+    int n = find_build_rows(rows);
+    SDL_Rect r; find_window_rect(n, &r);
+    int ly = r.y + WIN_TITLEBAR_H + 4;
+    SDL_Rect lb = { r.x + 6, ly, r.w - 12, (n > 0 ? n : 1) * FIND_ROW_H + 2 };
+    if (mx >= lb.x && mx < lb.x + lb.w && my >= lb.y && my < lb.y + lb.h) {
+        int k = (my - ly - 1) / FIND_ROW_H;
+        if (k >= 0 && k < n) {
+            game.find_sel = k;
+            if (clicks >= 2) find_do_find(&rows[k]);   /* LBN_DBLCLK */
+        }
+        return;
+    }
+    int by = lb.y + lb.h + 8;
+    int sel = game.find_sel >= 0 && game.find_sel < n;
+    if (my >= by && my < by + 20) {
+        if (mx >= r.x + 8 && mx < r.x + 64) { game.find_open = 0; return; }
+        if (sel && mx >= r.x + 72 && mx < r.x + 142) {     /* Remove */
+            if (game.find_open == 1)
+                tower_person_name_clear(&game.tower, rows[game.find_sel].tid,
+                                        rows[game.find_sel].member);
+            else {
+                Tenant *t = tower_tenant(&game.tower, rows[game.find_sel].tid);
+                if (t) t->name[0] = 0;
+            }
+            game.find_sel = -1;
+            return;
+        }
+        if (sel && mx >= r.x + 150 && mx < r.x + 210)      /* Find */
+            find_do_find(&rows[game.find_sel]);
+    }
+}
+
 static void render(void)
 {
     /* Cursor follows the active tool: crosshair while bulldozing, else arrow. */
@@ -6178,6 +6348,7 @@ static void render(void)
     render_movie_chooser();   /* sub-dialogs draw on top of the info popup */
     render_name_editor();
     render_event_alert();
+    render_find_dialog();      /* modal: above the popups */
     render_menu_bar();         /* Win3.1 top bar + its open dropdown */
     render_dropdown();
     render_disaster_modal();   /* on top of everything — it's modal */
@@ -6734,6 +6905,8 @@ static void execute_menu_item(const MenuItem *item)
     case ACT_SND_ELEV:     game.snd_elev ^= 1;   break;
     case ACT_SND_BG:       game.snd_bg ^= 1;     break;
     case ACT_SND_EVENTS:   game.snd_events ^= 1; break;
+    case ACT_FIND_PERSON:  game.find_open = 1; game.find_sel = -1; break;
+    case ACT_FIND_TENANT:  game.find_open = 2; game.find_sel = -1; break;
     case ACT_MODE_CAMPAIGN:
     case ACT_MODE_SANDBOX:
         game.sim.mode = (item->action == ACT_MODE_SANDBOX)
@@ -6839,6 +7012,18 @@ static void handle_event(SDL_Event *ev)
     if (game.movie_dlg_open) {
         if (ev->type == SDL_KEYDOWN && ev->key.keysym.sym == SDLK_ESCAPE) game.movie_dlg_open = 0;
         else if (ev->type == SDL_MOUSEBUTTONDOWN) movie_chooser_click(ev->button.x, ev->button.y);
+        return;
+    }
+    /* Find Person/Tenant is modal like the EXE's DialogBoxParam. */
+    if (game.find_open) {
+        if (ev->type == SDL_KEYDOWN && (ev->key.keysym.sym == SDLK_ESCAPE ||
+                                        ev->key.keysym.sym == SDLK_RETURN))
+            game.find_open = 0;
+        else if (ev->type == SDL_MOUSEBUTTONDOWN &&
+                 ev->button.button == SDL_BUTTON_LEFT)
+            find_dialog_click(ev->button.x, ev->button.y, ev->button.clicks);
+        else if (ev->type == SDL_QUIT)
+            game.running = 0;
         return;
     }
 
@@ -8374,8 +8559,9 @@ int main(int argc, char *argv[])
             prev_drag = drag_now;
         }
 
-        /* Advance simulation */
-        {
+        /* Advance simulation (halted while the Find modal is up, like
+         * the EXE's DialogBoxParam) */
+        if (!game.find_open) {
             int prev_hour = game.sim.hour;
             int prev_star = game.tower.star_rating;
             int prev_pop = game.tower.population;
