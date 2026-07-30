@@ -1441,6 +1441,18 @@ void game_update(GameSim *sim, Tower *tower)
         people_update(&sim->people, tower, sim->frame, sim->time_of_day,
                       sim->hour, sim->reach_public, sim->reach_service);
         game_animate_occupants(sim, tower);   /* frozen with the people */
+
+        /* An armed VIP day tags tonight's qualifying suite guest: bank
+         * the handle, announce (dialog 0xBB9), and auto-register the
+         * name "VIP" (VipAnnounce 1240:00d1 -> AddPersonName). */
+        int vt = people_vip_take_tagged();
+        if (vt >= 0) {
+            Person *vp = &sim->people.people[vt];
+            sim->vip_visiting = vt + 1;
+            sim->vip_notice = 1;
+            tower_person_name_set(tower, vp->home_tenant, vp->member, "VIP");
+            printf("👔 Oh no! The VIP has arrived at the tower.\n");
+        }
     }
 
     /* Sick-worker rolls: 1-in-10 of office arrivals at star>=3 seek the
@@ -1582,47 +1594,44 @@ void game_update(GameSim *sim, Tower *tower)
                 }
             }
 
-            /* VIP visit check (from VipT seg_1240: day % 9 == 3). The
-             * VIP is a suite guest who arrives BY CAR (1240:008f picks
-             * the person via their parked car) — no usable parking, no
-             * VIP visit (the EXE's VoidVipVisit on a failed park;
-             * binding is MEDIUM-HIGH per the 2026-07-11 referee). */
+            /* VIP visit (VipT seg_1240, full trace 2026-07-29): the VIP
+             * is a REAL suite guest — member 1, the one who drives in.
+             * Gates (1240:000c-0067): day%9==3, star EXACTLY 3 (the old
+             * >=3 was a divergence), verdict not yet favorable, parking
+             * available (the driving guest cancels without a space —
+             * that's the EXE's void-on-failed-park). vip_visiting now
+             * carries the person handle: -1 = armed and waiting for
+             * tonight's check-in, >0 = people[] index + 1. */
             int vip_can_park = tower->usable_spaces > 0;
-            if (tower->day % 9 == 3 && tower->star_rating >= 3 &&
-                !vip_can_park) {
-                printf("👔 VIP visit canceled — nowhere to park the car.\n");
-            }
-            if (tower->day % 9 == 3 && tower->star_rating >= 3 &&
-                vip_can_park) {
-                sim->vip_visiting = 1;
-                sim->vip_last_day = tower->day;
-                sim->vip_notice = 1;   /* arrived (consumed by UI feed) */
-                printf("👔 VIP is visiting the tower today! (Day %d)\n", tower->day);
-            } else {
-                /* VIP evaluation at end of visit day */
-                if (sim->vip_visiting) {
-                    /* VIP satisfied if no stressed/abandoned tenants on hotel floors */
-                    int hotel_ok = 1;
-                    for (int i = 0; i < tower->tenant_count; i++) {
-                        Tenant *t = &tower->tenants[i];
-                        if ((t->type == ITEM_HOTEL_SINGLE || t->type == ITEM_HOTEL_TWIN ||
-                             t->type == ITEM_HOTEL_SUITE) &&
-                            (t->state == TENANT_STRESSED || t->state == TENANT_ABANDONED)) {
-                            hotel_ok = 0;
-                            break;
-                        }
-                    }
-                    if (hotel_ok) {
-                        sim->vip_satisfied = 1;
-                        sim->promo.vip_visited = 1;
-                        sim->vip_notice = 2;   /* satisfied */
-                        printf("👔 VIP was satisfied! ⭐ (Helps with star promotion)\n");
-                    } else {
-                        sim->vip_notice = 3;   /* not satisfied */
-                        printf("👔 VIP was NOT satisfied. Hotels need improvement.\n");
-                    }
-                    sim->vip_visiting = 0;
+            if (tower->day % 9 == 3 && tower->star_rating == 3 &&
+                !sim->vip_satisfied) {
+                if (!vip_can_park) {
+                    printf("👔 VIP visit canceled — nowhere to park the car.\n");
+                } else if (!sim->vip_visiting) {
+                    sim->vip_visiting = -1;      /* armed, no guest yet */
+                    sim->vip_last_day = tower->day;
+                    people_vip_arm(1);
+                    printf("👔 A VIP has made reservations for a Hotel Suite. (Day %d)\n",
+                           tower->day);
                 }
+            } else if (sim->vip_visiting) {
+                /* the day after: settle (CheckVipDay 1240:01de) */
+                int r = people_vip_take_result();
+                if (sim->vip_visiting == -1) {
+                    /* no qualifying guest ever checked in — quiet reset */
+                    printf("👔 The VIP never arrived.\n");
+                } else if (r == 1) {
+                    sim->vip_satisfied = 1;
+                    sim->promo.vip_visited = 1;
+                    sim->vip_notice = 2;
+                    printf("👔 VIP checked out after a comfortable stay! ⭐\n");
+                } else {
+                    /* unfavorable, or the stay never got judged (void) */
+                    sim->vip_notice = 3;
+                    printf("👔 VIP was NOT pleased with the tower.\n");
+                }
+                people_vip_arm(0);
+                sim->vip_visiting = 0;
             }
             
             /* Upkeep sweep (MoneyT 1178:0b44) — fires on the SAME

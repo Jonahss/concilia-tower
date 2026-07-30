@@ -5719,11 +5719,15 @@ static int draw_person_figure(uint16_t pid, int x, int y, int scale)
     const Person *p = &game.sim.people.people[pid - 1];
     int frame = person_figure_frame(p);
     if (frame < 0) return 1;   /* faithfully draw nothing */
-    int named = tower_person_name(&game.tower, p->home_tenant,
-                                  p->member) != NULL;
+    const char *nm = tower_person_name(&game.tower, p->home_tenant,
+                                       p->member);
+    /* row = VIP ? 2 : named ? 1 : 0 (1240:020d / 1188:04db). The VIP is
+     * exactly the person auto-registered under the name "VIP". */
+    int vip = nm && strcmp(nm, "VIP") == 0;
     Sprite *sheet = sprites_find(&game.sprites,
-                                 named ? SPR_FIGURE_NAMED
-                                       : SPR_FIGURE_NORMAL);
+                                 vip ? SPR_FIGURE_VIP
+                                     : nm ? SPR_FIGURE_NAMED
+                                          : SPR_FIGURE_NORMAL);
     if (!sheet) return 0;
     int fw = frame >= 6 ? 16 : 8;
     SDL_Rect src = { frame * 8, 0, fw, 24 };
@@ -8631,12 +8635,13 @@ int main(int argc, char *argv[])
             /* VIP visit notifications (one-shot signal from the sim). The VIP
              * is now a real star-promotion gate, so the player needs to see it. */
             if (game.sim.vip_notice) {
+                /* the EXE's dialog texts (RT_DIALOG 0xBB9/0xBBA/0xBBB) */
                 if (game.sim.vip_notice == 1)
-                    add_event_message("A VIP is visiting the tower today!");
+                    add_event_message("Oh No! A VIP has arrived at your Tower.");
                 else if (game.sim.vip_notice == 2)
-                    add_event_message("The VIP left satisfied! (star promotion unlocked)");
+                    add_event_message("Whew! The VIP has checked out after a comfortable stay!");
                 else
-                    add_event_message("The VIP was unimpressed - improve your hotels.");
+                    add_event_message("Sorry! The VIP was not pleased with your tower.");
                 game.sim.vip_notice = 0;
             }
 

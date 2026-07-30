@@ -517,6 +517,50 @@ static void test_parking_cars(void)
     CHECK(guests <= 1, "carless suite guests cancel: one guest at most");
 }
 
+/* VIP visit (VipT seg_1240): armed sim tags tonight's suite guest
+ * (member 1, the driver); a calm stay judges favorable at checkout. */
+static void test_vip_visit(void)
+{
+    printf("VIP visit (a real suite guest, judged on his own stress):\n");
+    fresh();
+    tw.star_rating = 3;
+    uint16_t ste = fplace(ITEM_HOTEL_SUITE, 3, 100);
+    for (int f = 0; f <= 4; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    Tenant *st = tenant(ste);
+    st->state = TENANT_OCCUPIED; st->demand_armed = 1;
+    uint16_t rmp = fplace(ITEM_RAMP, -1, 120);
+    uint16_t spc = fplace(ITEM_PARKING, -1, 100);
+    tenant(rmp)->state = TENANT_OCCUPIED;
+    tenant(spc)->state = TENANT_OCCUPIED;
+    place(ITEM_ELEVATOR_SHAFT, -1, 250);
+    people_rebuild_transport(&sim.people, &tw);
+    game_update_reachability(&sim, &tw);
+    game_parking_recompute(&sim, &tw);
+
+    people_vip_arm(1);
+    int tagged = -1;
+    for (int frame = 0; frame < 4000 && tagged < 0; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
+                      sim.reach_public, sim.reach_service);
+        int vt = people_vip_take_tagged();
+        if (vt >= 0) tagged = vt;
+    }
+    CHECK(tagged >= 0, "VIP tagged: suite member 1 checked in");
+    CHECK(sim.people.people[tagged].home_tenant == ste &&
+          sim.people.people[tagged].member == 1,
+          "the tagged guest is the suite's driving guest");
+    CHECK(people_vip_take_result() == 0, "no verdict while he's staying");
+
+    /* dawn: guests check out; a calm stay judges favorable */
+    for (int frame = 4000; frame < 12000 &&
+                           sim.people.people[tagged].home_tenant; frame++)
+        people_update(&sim.people, &tw, frame, TOD_DAWN, 6,
+                      sim.reach_public, sim.reach_service);
+    CHECK(sim.people.people[tagged].home_tenant == 0, "the VIP checked out");
+    CHECK(people_vip_take_result() == 1, "calm stay: verdict favorable");
+    people_vip_arm(0);
+}
+
 static void test_walk_rules(void)
 {
     printf("walk budget (6 escalator / 3 with stairs):\n");
@@ -2723,6 +2767,7 @@ int main(void)
     test_commute_elevator();
     test_metro_visitors();
     test_parking_cars();
+    test_vip_visit();
     test_walk_rules();
     test_errand_warning_watchdog();
     test_queue_and_stress();

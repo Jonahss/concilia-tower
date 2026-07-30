@@ -95,6 +95,14 @@ void tuning_reset(void);
  * next transport rebuild, matching the EXE's [0x77C4] latch array. */
 const char *people_take_noroute_msg(void);
 
+/* VIP visit (VipT seg_1240): arm on a VIP day; the sim tags tonight's
+ * qualifying suite guest (take_tagged returns the person index once,
+ * -1 otherwise); take_result returns 1 favorable / 2 unfavorable once
+ * the stay is judged, 0 while pending. */
+void people_vip_arm(int on);
+int  people_vip_take_tagged(void);
+int  people_vip_take_result(void);
+
 typedef enum {
     PERSON_FREE = 0,
     PERSON_PLANNING,    /* needs a route toward dest_floor */

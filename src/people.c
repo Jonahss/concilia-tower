@@ -125,6 +125,38 @@ const char *people_take_noroute_msg(void)
     return noroute_msg;
 }
 
+/* ---------- VIP visit (VipT seg_1240, byte-traced 2026-07-29) ----------
+ * The VIP is a real suite guest: member 1 (the driver) of tonight's
+ * suite check-in. Judged on HIS OWN banked elevator stress vs the
+ * demand bar (VipEvaluate 1240:0130 via JudgeT 1130:0360). Not
+ * save-state: a mid-visit reload quietly voids the day, like the EXE's
+ * CheckVipDay reset across relaunches. */
+static int vip_armed;             /* watching for tonight's suite guest */
+static int vip_tagged = -1;       /* person just tagged (game.c collects) */
+static int vip_watch  = -1;       /* person under judgment */
+static unsigned vip_stress_total;
+static int vip_trips;
+static int vip_result;            /* 0 pending / 1 favorable / 2 not */
+
+void people_vip_arm(int on)
+{
+    vip_armed = on;
+    if (on) {
+        vip_watch = -1; vip_tagged = -1;
+        vip_result = 0; vip_stress_total = 0; vip_trips = 0;
+    }
+}
+int people_vip_take_tagged(void)
+{
+    int t = vip_tagged; vip_tagged = -1; return t;
+}
+int people_vip_take_result(void)
+{
+    int r = vip_result;
+    if (r) { vip_result = 0; vip_watch = -1; }
+    return r;
+}
+
 static int shaft_serves(const ElevatorShaft *s, int fidx)
 {
     if (fidx < s->lo || fidx > s->hi) return 0;
@@ -670,6 +702,10 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
      * elevator-performance average below. */
     int felt = p->wait_accum - ps->lobby_bonus;
     if (felt < 0) felt = 0;
+    if ((int)(p - ps->people) == vip_watch) {      /* the VIP's own book */
+        vip_stress_total += (unsigned)felt;
+        vip_trips++;
+    }
     if (t) {
         if (felt >= TUNING.judge_stressed)      t->stress += 15;
         else if (felt >= TUNING.judge_moderate) t->stress += 5;
@@ -762,6 +798,13 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
          * unit — either way the return trip ends the entity */
         deliver_stress(ps, tower, p);
         release_car(tower, p);
+        /* VIP checkout: judge his stay on his own banked average vs the
+         * 3-star demand bar (1240:0158; [0xDD78] = 150 below 4 stars) */
+        if ((int)(p - ps->people) == vip_watch && !vip_result) {
+            int avg = vip_trips ? (int)(vip_stress_total / (unsigned)vip_trips)
+                                : 0;
+            vip_result = (avg <= TUNING.judge_moderate) ? 1 : 2;
+        }
         p->home_tenant = 0;
         p->state = PERSON_FREE;
         return;
@@ -787,6 +830,12 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
     if (t && !p->going_home && item_is_hotel_room(t->type)) {
         t->hosted = 1;
         t->tenure = 0;
+        /* VIP registration (VipArrival 1240:0000): tonight's first
+         * suite check-in by member 1 — the guest who drives. */
+        if (vip_armed && t->type == ITEM_HOTEL_SUITE && p->member == 1) {
+            vip_armed = 0;
+            vip_watch = vip_tagged = (int)(p - ps->people);
+        }
     }
     /* A worker at their desk — candidate for the sick-worker roll */
     if (t && !p->going_home && t->type == ITEM_OFFICE &&
@@ -1230,6 +1279,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (!p->home_tenant || p->state != PERSON_AT_DEST) continue;
             Tenant *t = tower_tenant(tower, p->home_tenant);
             if (!t) { release_car(tower, p);
+                      /* abnormal exit voids a live VIP visit (1240:0198) */
+                      if (i == vip_watch && !vip_result) vip_result = 2;
                       p->home_tenant = 0; p->state = PERSON_FREE; continue; }
             int is_office = t->type == ITEM_OFFICE;
             int is_hotel = t->type == ITEM_HOTEL_SINGLE ||
