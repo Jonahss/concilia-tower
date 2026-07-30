@@ -1840,23 +1840,56 @@ static void render_tower(void)
         Tenant *t = &game.tower.tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
 
-        int frame_w_hint = 0, item_floors = 1;
-        uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
-        spr_id = item_sprite_animated(t->type, spr_id);
-        Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        int fidx_lo = floor_to_index(t->floor);
+        int busy = (game.anim_people &&
+                    ((t->id && t->id <= MAX_TENANTS && stair_busy[t->id - 1]) ||
+                     (fidx_lo >= 0 && fidx_lo < TOWER_FLOOR_COUNT &&
+                      walk_floor[fidx_lo])));
 
         int tx, ty;
         grid_to_screen(t->floor, t->x, &tx, &ty);
         int tw = t->width * CELL_W;
 
+        /* Grand-lobby tall variants (kinds 2-5): drawn from the CGPk raw
+         * sheets 0x8FE9 (2-story) / 0x8FEA (3-story) — horizontal strips
+         * of 64x36 bands, decoded by the raw loader. Layout (StairsT
+         * 10c0:0345): stairs legs 0..rise x 11 bands each (frame 0 idle,
+         * 1-10 walk), then escalators at base (rise+1)*11, 12 bands per
+         * leg (frame 0 idle, 1-11 steps). Leg 0 is the TOP floor band. */
+        if (rise > 1) {
+            Sprite *sheet = sprites_find(&game.sprites,
+                                         rise == 2 ? 0x8FE9 : 0x8FEA);
+            if (sheet) {
+                int legs = rise + 1;
+                for (int L = 0; L < legs; L++) {
+                    int band;
+                    if (t->type == ITEM_STAIRS)
+                        band = L * 11 + (busy ? (transport_anim / 2) % 10 + 1 : 0);
+                    else
+                        band = legs * 11 + L * 12 +
+                               (busy ? (transport_anim / 2) % 11 + 1 : 0);
+                    SDL_Rect src = { band * 64, 0, 64, 36 };
+                    int ly;
+                    grid_to_screen(t->floor + rise - L, t->x, &tx, &ly);
+                    SDL_Rect dst = { tx, ly, tw, CELL_H };
+                    SDL_RenderCopy(game.renderer, sheet->texture, &src, &dst);
+                }
+                continue;
+            }
+            /* no sheet -> fall through to the tinted-box fallback */
+        }
+
+        int frame_w_hint = 0, item_floors = 1;
+        uint16_t spr_id = item_sprite_id(t->type, &frame_w_hint, &item_floors);
+        spr_id = item_sprite_animated(t->type, spr_id);
+        Sprite *spr = spr_id ? sprites_find(&game.sprites, spr_id) : NULL;
+        if (rise > 1) { spr = NULL; item_floors = rise + 1; }
+
         if (spr && frame_w_hint > 0) {
             int nframes = spr->w / frame_w_hint;
             if (nframes < 1) nframes = 1;
-            /* Empty unless someone's on this leg; then cycle the motion frames. */
-            int fidx_lo = floor_to_index(t->floor);
-            int busy = (game.anim_people &&
-                        fidx_lo >= 0 && fidx_lo < TOWER_FLOOR_COUNT &&
-                        walk_floor[fidx_lo]);
+            /* Empty unless someone's on this unit; then cycle the motion. */
             int frame_idx = 0;
             if (busy && nframes > 1)
                 frame_idx = 1 + ((transport_anim / 4) % (nframes - 1));
@@ -3272,6 +3305,11 @@ static int elevator_drag_column(void)
  * instead of hanging entirely to its right. Clamped to the tower width. */
 static int build_origin_cell(int mouse_cell)
 {
+    /* The floor tool anchors at the pressed cell — its 63-cell nominal
+     * width is only the bare-click stamp size, and centering it made a
+     * drag's span start 31 cells left of the press (impossible to lay
+     * deck over a small footprint without overhang rejects). */
+    if (game.build_type == ITEM_FLOOR) return mouse_cell;
     int w = ITEM_WIDTH[game.build_type];
     int c = mouse_cell - (w - 1) / 2;
     if (c < 0) c = 0;
@@ -5383,7 +5421,8 @@ static uint16_t stair_hit_test(int floor, int cell)
         Tenant *t = &game.tower.tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
         if (t->state == TENANT_ABANDONED) continue;
-        if (floor < t->floor || floor > t->floor + 1) continue;
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        if (floor < t->floor || floor > t->floor + rise) continue;
         if (cell < t->x || cell >= t->x + t->width) continue;
         return t->id;
     }

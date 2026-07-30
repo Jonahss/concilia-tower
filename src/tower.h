@@ -523,6 +523,12 @@ void tower_init(Tower *tower);
  * tower_place falls back to height 1 so headless/test placement works. */
 void tower_choose_lobby_height(Tower *tower, int h);
 
+/* Grand-lobby tall stair/escalator promotion (kinds 2-5): snaps *floor
+ * to the ground lobby and returns the unit's rise in floors (1 = a
+ * normal 2-floor unit; 2/3 = tall variants spanning the whole lobby).
+ * For a placed unit, rise == Tenant.height - 1. */
+int tower_stair_rise(const Tower *tower, ItemType type, int *floor);
+
 /* Place an item. Returns tenant_id on success, 0 on failure. */
 uint16_t tower_place(Tower *tower, ItemType type, int floor, int x);
 

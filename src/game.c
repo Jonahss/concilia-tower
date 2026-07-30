@@ -824,7 +824,8 @@ static int walk_touches_fidx(const Tower *tower, int fidx)
         const Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
         int lf = floor_to_index(t->floor);
-        if (lf == fidx || lf + 1 == fidx) return 1;
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        if (fidx >= lf && fidx <= lf + rise) return 1;
     }
     return 0;
 }
@@ -899,13 +900,17 @@ void game_update_reachability(GameSim *sim, Tower *tower)
     sim->reach_service[ground] = 1;
 
     /* Collect stair/escalator links (floor f <-> f+1) once */
-    static int link_a[MAX_TRANSPORT_LINKS];
+    static int link_a[MAX_TRANSPORT_LINKS], link_b[MAX_TRANSPORT_LINKS];
     int link_count = 0;
     for (int i = 0; i < tower->tenant_count && link_count < MAX_TRANSPORT_LINKS; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
         int a = floor_to_index(t->floor);
-        if (a >= 0 && a + 1 < TOWER_FLOOR_COUNT) link_a[link_count++] = a;
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        if (a >= 0 && a + rise < TOWER_FLOOR_COUNT) {
+            link_a[link_count] = a;
+            link_b[link_count++] = a + rise;   /* tall: endpoints only */
+        }
     }
 
     /* Collect elevator shaft runs once: contiguous same-type segments in a
@@ -933,7 +938,7 @@ void game_update_reachability(GameSim *sim, Tower *tower)
     while (changed) {
         changed = 0;
         for (int i = 0; i < link_count; i++) {
-            int a = link_a[i], b = link_a[i] + 1;
+            int a = link_a[i], b = link_b[i];
             if (sim->reach_public[a] != sim->reach_public[b]) {
                 sim->reach_public[a] = sim->reach_public[b] = 1;
                 changed = 1;
@@ -1666,8 +1671,15 @@ void game_update(GameSim *sim, Tower *tower)
                 }
                 for (int i = 0; i < tower->tenant_count; i++)
                     if (tower->tenants[i].type == ITEM_ESCALATOR) {
-                        upkeep += TUNING.maint_escalator;
-                        sim->fin_expense_q[FINEXP_ESCALATOR] += TUNING.maint_escalator;
+                        /* Per GAP (MoneyT 1178:0c4c: res 0x3EA row x
+                         * ((kind>>1)+1)) — a tall grand-lobby escalator
+                         * pays for each floor it spans. Stairs stay free
+                         * (their 0x3EA row is 0). */
+                        int gaps = tower->tenants[i].height - 1;
+                        if (gaps < 1) gaps = 1;
+                        upkeep += TUNING.maint_escalator * gaps;
+                        sim->fin_expense_q[FINEXP_ESCALATOR] +=
+                            TUNING.maint_escalator * gaps;
                     }
                 /* Metro + parking upkeep (res 0x3EA, byte-verified 2026-07-11
                  * referee): $100,000 per station, $10,000 per RAMP — spaces

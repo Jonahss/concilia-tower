@@ -318,9 +318,26 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
         int x  = s[2] | (s[3] << 8);
         int ff = s[4] | (s[5] << 8);
         int pf = ff - 10;
-        if (pf < TOWER_MIN_FLOOR || pf + 1 > TOWER_MAX_FLOOR) continue;
-        tower_import_item(tower, s[1] ? ITEM_STAIRS : ITEM_ESCALATOR,
+        /* kind byte +1: bit0 = stairs, kind>>1 = extra floor-gaps of the
+         * grand-lobby tall variants (2/3 = 2-story, 4/5 = 3-story). */
+        int kind = s[1];
+        int rise = (kind >> 1) + 1;
+        if (pf < TOWER_MIN_FLOOR || pf + rise > TOWER_MAX_FLOOR) continue;
+        uint16_t sid = tower_import_item(tower,
+                          (kind & 1) ? ITEM_STAIRS : ITEM_ESCALATOR,
                           pf, x, 0);
+        if (sid && rise > 1) {
+            Tenant *st = tower_tenant(tower, sid);
+            if (st) {
+                st->height = rise + 1;
+                for (int f = pf; f <= pf + rise; f++) {
+                    int fi = floor_to_index(f);
+                    if (fi < 0) continue;
+                    for (int cx = st->x; cx < st->x + st->width; cx++)
+                        tower->grid[fi][cx].flags |= CELL_TRANSPORT_OVERLAY;
+                }
+            }
+        }
     }
 
     /* === tail (walk chains, gap map, routing slots, judge state...) ===
@@ -853,8 +870,10 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             const Tenant *t = &tower->tenants[i];
             if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
             uint8_t *s = st + n++ * 10;
+            int gaps = t->height - 1; if (gaps < 1) gaps = 1;
             s[0] = 1;
-            s[1] = t->type == ITEM_STAIRS ? 1 : 0;
+            s[1] = (uint8_t)((t->type == ITEM_STAIRS ? 1 : 0) +
+                             (gaps - 1) * 2);   /* kinds 0-5 */
             put16(s + 2, (unsigned)t->x);
             put16(s + 4, (unsigned)(t->floor + 10));
         }

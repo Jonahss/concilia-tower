@@ -371,14 +371,30 @@ static long lobby_charge(const Tower *tower, int floor, int x, int width)
     return cells * (long)ITEM_COST[ITEM_LOBBY] + deck;
 }
 
+int tower_stair_rise(const Tower *tower, ItemType type, int *floor)
+{
+    /* Grand-lobby tall promotion (11f8:1461-1488): with lobby height
+     * H >= 2, a stair/escalator whose upper landing falls anywhere in
+     * the lobby's stories (or on the first floor above it) becomes ONE
+     * tall unit spanning ground..H — kinds 2/3 (H=2) and 4/5 (H=3).
+     * Port floors: lower landing snaps to 0, rise = H. A unit whose
+     * upper landing is the ground floor (B1 stairs) is not promoted. */
+    if (type != ITEM_STAIRS && type != ITEM_ESCALATOR) return 1;
+    int H = tower->lobby_height;
+    if (H >= 2 && *floor >= 0 && *floor < H) { *floor = 0; return H; }
+    return 1;
+}
+
 int tower_can_place(Tower *tower, ItemType type, int floor, int x)
 {
     last_reject[0] = '\0';
     if (type <= ITEM_NONE || type >= ITEM_TYPE_COUNT) return 0;
 
+    int rise = tower_stair_rise(tower, type, &floor);
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
     int cost = ITEM_COST[type];
+    if (rise > 1) height = rise + 1;
 
     /* The floor tool is deck extension, not an item: per-cell charge for
      * cells outside the floor's extent (build dispatch 0dc4 -> deck
@@ -727,7 +743,7 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
          * `floor` is the LOWER landing (the UI translates the click, which
          * the original treats as the UPPER landing). */
         int lf = floor_to_index(floor);
-        int uf = floor_to_index(floor + 1);
+        int uf = floor_to_index(floor + rise);
         if (lf < 0 || uf < 0 || uf >= TOWER_FLOOR_COUNT)
             REJECT("Cannot place stairs here");
 
@@ -779,7 +795,7 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
          * too: any shaft cell on floors [lower-1, upper+2] in the
          * footprint's columns collides (candidate rect vs shaft rect
          * padded bottom-2 / top+1). */
-        for (int f = floor - 1; f <= floor + 3; f++) {
+        for (int f = floor - 1; f <= floor + rise + 2; f++) {
             int fi = floor_to_index(f);
             if (fi < 0 || fi >= TOWER_FLOOR_COUNT) continue;
             for (int cx = x; cx < x + width; cx++)
@@ -796,16 +812,36 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         for (int i = 0; i < tower->tenant_count; i++) {
             const Tenant *o = &tower->tenants[i];
             if (o->type != ITEM_STAIRS && o->type != ITEM_ESCALATOR) continue;
-            /* candidate halves: (floor, [x,x+4)) and (floor+1, [x+4,x+8)) */
-            const struct { int f; int x0; } mine[2] =
-                { { floor, x }, { floor + 1, x + half } };
-            const struct { int f; int x0; } theirs[2] =
-                { { o->floor, o->x }, { o->floor + 1, o->x + half } };
-            for (int a = 0; a < 2; a++)
-                for (int b = 0; b < 2; b++)
-                    if (mine[a].f == theirs[b].f &&
-                        mine[a].x0 < theirs[b].x0 + half &&
-                        theirs[b].x0 < mine[a].x0 + half)
+            int orise = o->height - 1; if (orise < 1) orise = 1;
+            /* Tall units (rise > 1) collide on their FULL 8-cell footprint
+             * across every spanned band (the EXE's tall overlap fn 10c0:0d06
+             * checks the whole candidate rect); normal units keep the
+             * half-tile model — lower-left 4 cells on the lower floor,
+             * upper-right 4 on the upper (10c0:0983). */
+            struct box { int f0, f1, x0, x1; } mine[2], theirs[2];
+            int mn, tn;
+            if (rise > 1) {
+                mine[0] = (struct box){ floor, floor + rise, x, x + width };
+                mn = 1;
+            } else {
+                mine[0] = (struct box){ floor, floor, x, x + half };
+                mine[1] = (struct box){ floor + 1, floor + 1, x + half, x + width };
+                mn = 2;
+            }
+            if (orise > 1) {
+                theirs[0] = (struct box){ o->floor, o->floor + orise,
+                                          o->x, o->x + width };
+                tn = 1;
+            } else {
+                theirs[0] = (struct box){ o->floor, o->floor, o->x, o->x + half };
+                theirs[1] = (struct box){ o->floor + 1, o->floor + 1,
+                                          o->x + half, o->x + width };
+                tn = 2;
+            }
+            for (int a = 0; a < mn; a++)
+                for (int b = 0; b < tn; b++)
+                    if (mine[a].f0 <= theirs[b].f1 && theirs[b].f0 <= mine[a].f1 &&
+                        mine[a].x0 < theirs[b].x1 && theirs[b].x0 < mine[a].x1)
                         REJECT("Cannot place over other transportation items");
         }
     }
@@ -940,8 +976,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     if (!tower_can_place(tower, type, floor, x)) return 0;
     if (tower->tenant_count >= MAX_TENANTS) return 0;
 
+    /* can_place promoted internally; mirror it here so the record and
+     * grid overlay carry the tall span (rise = height - 1 from here on). */
+    int rise = tower_stair_rise(tower, type, &floor);
     int width = ITEM_WIDTH[type];
     int height = ITEM_HEIGHT[type];
+    if (rise > 1) height = rise + 1;
     int cost = ITEM_COST[type];
     long charged = cost;
 

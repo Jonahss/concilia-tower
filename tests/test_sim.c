@@ -2383,6 +2383,43 @@ static void test_flavor(void)
     CHECK(charged3 == 3 * (before - tw.money),
           "3-story lobby extension costs exactly 3x the 1-story one");
 
+    /* Grand-lobby tall stairs (kinds 2-5, StairsT 11f8:1461/10c0): a
+     * stair placed with its span inside a 3-story lobby snaps to ONE
+     * tall unit, ground..H, and reachability crosses it end to end. */
+    fresh();
+    tw.lobby_height = 0;
+    tower_choose_lobby_height(&tw, 3);
+    tower_place(&tw, ITEM_LOBBY, 0, 300);        /* mirrors rows 1-2 */
+    for (int cx = 100; cx < 120; cx += 4) place(ITEM_FLOOR, 3, cx);
+    uint16_t ts = tower_place(&tw, ITEM_STAIRS, 1, 104);
+    Tenant *tst = tower_tenant(&tw, ts);
+    CHECK(tst && tst->floor == 0 && tst->height == 4,
+          "stairs in the lobby span promote to one ground..3 tall unit");
+    CHECK(!tower_can_place(&tw, ITEM_ESCALATOR, 2, 104),
+          "a second unit on the same footprint is refused (dedupe)");
+    uint16_t off3 = place(ITEM_OFFICE, 3, 110);
+    game_update_reachability(&sim, &tw);
+    CHECK(sim.reach_public[floor_to_index(3)],
+          "floor 3 is publicly reachable across the tall stairs");
+    (void)off3;
+    /* kind round-trips through the .TDT block: 3-story stairs = kind 5 */
+    {
+        const char *tp = "/tmp/test_tallstair.tdt";
+        static Tower tw2; static GameSim sim2;
+        char err[128] = "";
+        CHECK(twr_export(tp, &tw, &sim, err, sizeof err) == 0,
+              "tall-stair export ok");
+        CHECK(twr_import(tp, &tw2, &sim2, err, sizeof err) == 0,
+              "tall-stair import ok");
+        int found = 0;
+        for (int i = 0; i < tw2.tenant_count; i++)
+            if (tw2.tenants[i].type == ITEM_STAIRS &&
+                tw2.tenants[i].height == 4 && tw2.tenants[i].floor == 0)
+                found = 1;
+        CHECK(found, "tall stairs survive the .TDT round-trip (kind 5)");
+        CHECK(tw2.lobby_height == 3, "lobby height survives the round-trip");
+    }
+
     /* The REAL medical mechanic (MoreMedicalPlease): a sick worker seeks a
      * center. There is no "medical emergency" event — that was a fabrication,
      * deleted (referee_medical_reconcile_2026-07-13). */

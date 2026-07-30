@@ -181,8 +181,11 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
         int f = floor_to_index(t->floor);
-        if (f < 0 || f + 1 >= TOWER_FLOOR_COUNT) continue;
-        gap[f] |= (t->type == ITEM_ESCALATOR) ? 1 : 2;   /* 0xCF10 bits */
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        for (int g = f; g < f + rise; g++) {   /* tall: every spanned gap */
+            if (g < 0 || g + 1 >= TOWER_FLOOR_COUNT) continue;
+            gap[g] |= (t->type == ITEM_ESCALATOR) ? 1 : 2;   /* 0xCF10 bits */
+        }
     }
 
     /* Contiguous same-type column runs = shafts (as in reachability) */
@@ -307,20 +310,27 @@ static int can_walk(const PeopleSim *ps, int from, int to, int service)
 /* Find the cheapest stair/escalator tenant covering the gap from->from±1.
  * Returns tenant index or -1; score per the EXE: esc 8*xd, stairs 8*xd+640. */
 static int find_stair_hop(Tower *tower, int from, int up, int x,
-                          int service, int *score_out)
+                          int service, int *score_out, int *hop_out)
 {
-    int best = -1, best_score = COST_NO_ROUTE;
-    int gap = up ? from : from - 1;
+    /* A unit is entered only at its landings and traverses its whole
+     * rise as one leg (TripT: journey_a = from +/- span) — a tall
+     * grand-lobby unit (rise 2/3) has no intermediate stops. */
+    int best = -1, best_score = COST_NO_ROUTE, best_hop = from;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_STAIRS && t->type != ITEM_ESCALATOR) continue;
         if (service && t->type != ITEM_STAIRS) continue;
-        if (floor_to_index(t->floor) != gap) continue;
+        int rise = t->height - 1; if (rise < 1) rise = 1;
+        int bot = floor_to_index(t->floor);
+        int hop;
+        if (up)      { if (bot != from) continue;        hop = from + rise; }
+        else         { if (bot + rise != from) continue; hop = from - rise; }
         int xd = t->x - x; if (xd < 0) xd = -xd;
         int sc = 8 * xd + (t->type == ITEM_STAIRS ? COST_STAIR_BASE : 0);
-        if (sc < best_score) { best_score = sc; best = i; }
+        if (sc < best_score) { best_score = sc; best = i; best_hop = hop; }
     }
     *score_out = best_score;
+    if (hop_out) *hop_out = best_hop;
     return best;
 }
 
@@ -361,13 +371,14 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
     int up = to > from;
 
     /* 1. Walking, if the whole remaining climb is within budget */
-    int walk_score = COST_NO_ROUTE, walk_stair = -1;
+    int walk_score = COST_NO_ROUTE, walk_stair = -1, walk_hop = from;
     if (can_walk(ps, from, to, service))
-        walk_stair = find_stair_hop(tower, from, up, x, service, &walk_score);
+        walk_stair = find_stair_hop(tower, from, up, x, service,
+                                    &walk_score, &walk_hop);
     if (walk_stair >= 0 && walk_score < COST_STAIR_BASE) {
         /* escalator within 80 cells wins before elevators are considered */
         r.kind = ROUTE_WALK; r.stair = walk_stair;
-        r.hop_to = from + (up ? 1 : -1);
+        r.hop_to = walk_hop;
         return r;
     }
 
@@ -418,7 +429,7 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
     }
     if (walk_stair >= 0) {     /* stairs were legal, just not cheap */
         r.kind = ROUTE_WALK; r.stair = walk_stair;
-        r.hop_to = from + (up ? 1 : -1);
+        r.hop_to = walk_hop;
         return r;
     }
 
@@ -435,11 +446,11 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
                 has_lobby = 1;
         }
         if (!has_lobby) continue;
-        int sc, hop_up = L > from;
-        int st = find_stair_hop(tower, from, hop_up, x, service, &sc);
+        int sc, hp, hop_up = L > from;
+        int st = find_stair_hop(tower, from, hop_up, x, service, &sc, &hp);
         if (st >= 0) {
             r.kind = ROUTE_WALK; r.stair = st;
-            r.hop_to = from + (hop_up ? 1 : -1);
+            r.hop_to = hp;
             return r;
         }
     }
@@ -472,7 +483,8 @@ int people_nearest_transport(PeopleSim *ps, Tower *tower, int from_fidx,
         Tenant *n = &tower->tenants[i];
         if (n->type != ITEM_STAIRS && n->type != ITEM_ESCALATOR) continue;
         int nf = floor_to_index(n->floor);
-        if (nf != from_fidx && nf != from_fidx - 1) continue;
+        int nrise = n->height - 1; if (nrise < 1) nrise = 1;
+        if (nf != from_fidx && nf + nrise != from_fidx) continue;
         int d = n->x - x; if (d < 0) d = -d;
         if (d < best) { best = d; kind = 1; stairs = (n->type == ITEM_STAIRS); }
     }
@@ -744,17 +756,22 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
     switch (r.kind) {
     case ROUTE_WALK: {
         Tenant *st = &tower->tenants[r.stair];
+        int rise = st->height - 1; if (rise < 1) rise = 1;
+        /* Stress = gaps x per-gap penalty (TryStartTrip: span * [0xDDB8/BA])
+         * — a tall grand-lobby unit charges its whole rise at entry. */
         int span_pen = (st->type == ITEM_STAIRS) ? PENALTY_STAIR_SPAN
                                                  : PENALTY_ESC_SPAN;
-        add_penalty(p, span_pen);
+        add_penalty(p, span_pen * rise);
         int xd = st->x - p->x; if (xd < 0) xd = -xd;
         if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
         else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
         p->state = PERSON_WALKING;
         p->leg_floor = (uint8_t)r.hop_to;
         p->walk_stair = st->id;
-        p->walk_timer = (st->type == ITEM_STAIRS) ? WALK_TICKS_STAIR
-                                                  : WALK_TICKS_ESC;
+        /* (EXE dwell is one person-tick regardless of rise; the port
+         * models visible walk time, so a tall unit takes rise x longer.) */
+        p->walk_timer = ((st->type == ITEM_STAIRS) ? WALK_TICKS_STAIR
+                                                   : WALK_TICKS_ESC) * rise;
         break;
     }
     case ROUTE_ELEVATOR: {
