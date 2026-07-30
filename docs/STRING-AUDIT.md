@@ -348,9 +348,11 @@ decomp `output/pass3_coverage_2026-07-29.md` + the pass-2 commits.
   round-trip; the trace also killed the "medical rotates" claim (its
   counter feeds an initial-status byte the renderer never reads) and
   found two import bugs (hotel condition byte, rate-class byte), fixed.
-- Grand-lobby stairs: with a 2/3-story ground lobby, stairs/escalators in
-  the lobby span become multi-floor variants snapped to the lobby top.
-  Port can only get a tall lobby via .TDT import today.
+- ~~Grand-lobby stairs~~ **DONE 2026-07-29** (bc2f1c3): kinds 2-5 with
+  the CGPk art sheets (0x8FE9/0x8FEA), promotion/whitelist/overlap/cost
+  per the tall-stair trace; and the grand lobby itself is now BUILDABLE
+  (893f9b2): first-click Ctrl / Ctrl+Shift height lock, mirrored upper
+  rows, empty-lot new game, corner-click money easter egg, $2M start.
 - Scroll/minimap polish: line scroll is 16px both axes (not a floor), page
   = view−16px; minimap click navigates via animated SmoothScroll; map
   window has a close box; overlay buttons are star-gated (4th at 2★).
