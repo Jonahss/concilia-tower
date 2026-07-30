@@ -1167,6 +1167,21 @@ static void render_tower(void)
     if (top_floor > TOWER_TOP_FLOOR) top_floor = TOWER_TOP_FLOOR;
     if (bot_floor < TOWER_MIN_FLOOR) bot_floor = TOWER_MIN_FLOOR;
     
+    /* Per-condo resident sleep census (the EXE's all-asleep check,
+     * UniPeple 7100): a unit shows lit while any resident is awake and
+     * goes dark when the last one sleeps — the staggered evening look. */
+    static uint8_t condo_lit[MAX_TENANTS];
+    memset(condo_lit, 0, (size_t)game.tower.tenant_count);
+    for (int i = 0; i < game.sim.people.people_high; i++) {
+        const Person *p = &game.sim.people.people[i];
+        if (!p->home_tenant || p->state != PERSON_AT_DEST) continue;
+        if (p->errand == 8) continue;                 /* asleep */
+        Tenant *ct = tower_tenant(&game.tower, p->home_tenant);
+        if (!ct || ct->type != ITEM_CONDO) continue;
+        if (p->cur_floor != (uint8_t)floor_to_index(ct->floor)) continue;
+        condo_lit[ct - game.tower.tenants] = 1;
+    }
+
     /* Lobby sprite (raw bitmap, 992×36) */
     Sprite *lobby_spr = sprites_find(&game.sprites, SPR_LOBBY_BOT0);
     
@@ -1452,10 +1467,16 @@ static void render_tower(void)
                      * loadCondo). Sold once it has residents (reachable ->
                      * population>0); unsold/unreachable shows the For Sale board. */
                     TimeOfDay tod = game.sim.time_of_day;
-                    if (tenant->population > 0)
-                        frame_idx = (tod == TOD_NIGHT) ? 2 :
-                                    (tod == TOD_EVENING) ? 1 : 0;
-                    else
+                    if (tenant->population > 0) {
+                        /* evening/night: lit while a resident is awake,
+                         * dark once the last one turns in (staggered
+                         * per unit — no more uniform blackout) */
+                        if (tod == TOD_NIGHT || tod == TOD_EVENING)
+                            frame_idx =
+                                condo_lit[tenant - game.tower.tenants] ? 1 : 2;
+                        else
+                            frame_idx = 0;
+                    } else
                         frame_idx = (tod == TOD_NIGHT || tod == TOD_EVENING) ? 4 : 3;
                 } else if (tenant->type == ITEM_MEDICAL && nframes >= 3) {
                     /* Medical: 1 clean/idle by day, 2 at night. Frame 0 was the

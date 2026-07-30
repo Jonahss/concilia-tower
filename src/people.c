@@ -1683,11 +1683,34 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                     break;
                 }
             }
+            /* Condo bedtime/wake (UniPeple 3b97/41de, wake 3d14): from
+             * 21:00 the kid turns in on his next visit, adults roll
+             * 1-in-12 until 1:00 then deterministically; everyone wakes
+             * from 6:00. errand 8 = asleep (condo residents don't use
+             * the office errand codes). The render pass darkens a unit
+             * when no resident is awake — the staggered evening look. */
+            if ((frame + i) % 16 == 0 && !p->stay && !p->going_home &&
+                (p->errand == 0 || p->errand == 8)) {
+                Tenant *cb = tower_tenant(tower, p->home_tenant);
+                if (cb && cb->type == ITEM_CONDO) {
+                    if (p->errand == 8) {
+                        if (hour >= 6 && hour < 21 &&
+                            (hour >= 7 || depart_roll(frame, i + 11, 12)))
+                            p->errand = 0;
+                    } else if (hour >= 21 || hour == 0) {
+                        if (p->member == 2 || depart_roll(frame, i + 11, 12))
+                            p->errand = 8;
+                    } else if (hour >= 1 && hour < 6) {
+                        p->errand = 8;    /* 1:00 = deterministic bedtime */
+                    }
+                }
+            }
             /* Condo weekday commute out (UniPeple 1220:3e10): residents
              * ride down through the morning and leave the tower via the
              * lobby ("Lobby to leave", status 0x40). They return via the
              * afternoon/evening spawns. */
-            if (!p->stay && !p->going_home && hour >= 7 && hour < 12 &&
+            if (!p->stay && !p->going_home && p->errand == 0 &&
+                hour >= 7 && hour < 12 &&
                 (frame + i) % 16 == 0 && !ps->sched_day &&
                 depart_roll(frame, i + 33, 12)) {
                 Tenant *ch = tower_tenant(tower, p->home_tenant);

@@ -604,6 +604,13 @@ static void test_condo_cycle(void)
                       sim.reach_public, sim.reach_service);
     CHECK(condo_member_home(condo, f5, 2) && condo_member_home(condo, f5, 0),
           "both residents stay home overnight");
+    {
+        int asleep = 0;
+        for (int i = 0; i < sim.people.people_high; i++)
+            if (sim.people.people[i].home_tenant == condo &&
+                sim.people.people[i].errand == 8) asleep++;
+        CHECK(asleep >= 1, "bedtime staggering: someone has turned in by 23:00");
+    }
     int gone = 0;
     for (int k = 0; k < 6000 && !gone; k++, frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
