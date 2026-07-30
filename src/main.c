@@ -7526,6 +7526,30 @@ static void handle_event(SDL_Event *ev)
             /* Normal game click — anchor centered on the cursor, matching
              * the placement ghost. */
             else if (game.build_type != ITEM_NONE) {
+                /* EXE build-dispatcher prologue (11f8:0955-09bb), runs
+                 * while the lobby-height choice is still open: */
+                if (game.tower.lobby_height == 0) {
+                    /* The money doubler: virgin tower, exactly the
+                     * starting $2M, build-tool click on the lot's
+                     * bottom-left cell (B10, cell 0) → AwardMoney(
+                     * current balance), click consumed, choice stays
+                     * open. No fanfare in the EXE either. */
+                    if (game.tower.money == 2000000L &&
+                        game.tower.tenant_count == 0 &&
+                        game.mouse_floor == TOWER_MIN_FLOOR &&
+                        game.mouse_cell == 0) {
+                        game.tower.money *= 2;
+                        printf("Easter egg: corner click doubled the "
+                               "starting funds\n");
+                        break;
+                    }
+                    /* First build click locks the ground-lobby height:
+                     * plain = 1 story, Ctrl = 2, Ctrl+Shift = 3 —
+                     * placement success not required (EXE quirk kept). */
+                    SDL_Keymod m = SDL_GetModState();
+                    tower_choose_lobby_height(&game.tower,
+                        (m & KMOD_CTRL) ? ((m & KMOD_SHIFT) ? 3 : 2) : 1);
+                }
                 game.dragging = 1;
                 game.drag_start_cell = build_origin_cell(game.mouse_cell);
                 game.drag_start_floor = game.mouse_floor;

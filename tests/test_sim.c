@@ -2349,23 +2349,39 @@ static void test_flavor(void)
 
     fresh();
     CHECK(game_lobby_height(&tw) == 1, "default ground lobby -> height 1");
-    for (int f = 0; f <= 1; f++) {
-        Tenant *l = &tw.tenants[tw.tenant_count++];
-        *l = (Tenant){0};
-        l->type = ITEM_LOBBY; l->floor = f; l->state = TENANT_OCCUPIED;
-    }
-    CHECK(game_lobby_height(&tw) == 2, "lobby on floors 0-1 -> height 2");
-    Tenant *l2 = &tw.tenants[tw.tenant_count++];
-    *l2 = (Tenant){0}; l2->type = ITEM_LOBBY; l2->floor = 2; l2->state = TENANT_OCCUPIED;
-    CHECK(game_lobby_height(&tw) == 3, "lobby on floors 0-2 -> height 3");
+    /* Height is the LOCKED first-click choice ([0xB3E6]), not a row scan.
+     * Reopen it (fresh()'s placements locked it at 1) and pick 2. */
+    tw.lobby_height = 0;
+    tower_choose_lobby_height(&tw, 2);
+    CHECK(game_lobby_height(&tw) == 2, "chosen 2-story lobby -> height 2");
+    tower_choose_lobby_height(&tw, 3);
+    CHECK(game_lobby_height(&tw) == 2, "the choice is locked — 3 refused");
 
-    /* a gap breaks the stack */
+    /* A ground drag mirrors the upper rows of a grand lobby, free. */
     fresh();
-    Tenant *g0 = &tw.tenants[tw.tenant_count++];
-    *g0 = (Tenant){0}; g0->type = ITEM_LOBBY; g0->floor = 0; g0->state = TENANT_OCCUPIED;
-    Tenant *g2 = &tw.tenants[tw.tenant_count++];
-    *g2 = (Tenant){0}; g2->type = ITEM_LOBBY; g2->floor = 2; g2->state = TENANT_OCCUPIED;
-    CHECK(game_lobby_height(&tw) == 1, "lobby floors 0 and 2 (gap) -> height 1");
+    tw.lobby_height = 0;
+    tower_choose_lobby_height(&tw, 3);
+    long before = tw.money;
+    tower_place(&tw, ITEM_LOBBY, 0, 300);   /* extend past fresh()'s span */
+    long charged3 = before - tw.money;
+    int rows = 0, span_ok = 1;
+    for (int i = 0; i < tw.tenant_count; i++) {
+        Tenant *l = &tw.tenants[i];
+        if (l->type != ITEM_LOBBY || l->floor < 1 || l->floor > 2) continue;
+        rows++;
+        if (l->x != 100 || l->width != 204) span_ok = 0;
+    }
+    CHECK(rows == 2, "3-story lobby drag builds the two upper rows");
+    CHECK(span_ok, "upper rows span the full ground lobby");
+    CHECK(game_lobby_height(&tw) == 3, "grand lobby height reads 3");
+    /* Band pricing: ground cells charge the lobby row x height ([0xB3E6]
+     * via TerrainCost), so the same extension costs 3x under a 3-story
+     * lobby — the upper rows themselves add nothing on top. */
+    fresh();
+    before = tw.money;
+    tower_place(&tw, ITEM_LOBBY, 0, 300);
+    CHECK(charged3 == 3 * (before - tw.money),
+          "3-story lobby extension costs exactly 3x the 1-story one");
 
     /* The REAL medical mechanic (MoreMedicalPlease): a sick worker seeks a
      * center. There is no "medical emergency" event — that was a fabrication,

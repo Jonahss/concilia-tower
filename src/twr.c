@@ -150,6 +150,10 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
     tower->built_value = (constr_costs < 0 ? -constr_costs : constr_costs) * 100;
     tower->star_rating = star < 1 ? 1 : star;
     tower->day = (int)(day < 0 ? 0 : day);
+    /* EXE [0xB3E6]: the locked 1/2/3-story ground-lobby choice. Clamp
+     * garbage to 1 so pricing/stress read something sane. */
+    tower->lobby_height = (lobby_height >= 1 && lobby_height <= 3)
+                              ? lobby_height : 1;
 
     /* === floor map: 120 floors, 0 = B10 === */
     int placed = 0, skipped = 0, width_mismatches = 0;
@@ -662,11 +666,14 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
     if (tower->twr_header_valid)
         memcpy(h, tower->twr_header, 0x230);
     else {
-        put16(h + 0x1c, 3);          /* lobby height, 3 in all real saves */
         put16(h + 0x20, 0xffff);     /* b3ea/b3ec: -1 sentinels in the wild */
         put16(h + 0x22, 0xffff);
         put16(h + 0x36, 2);          /* b400 = 2 in all real saves */
     }
+    /* lobby height is modeled now — write the real choice (was
+     * hardcoded 3, which grew every exported tower a grand lobby) */
+    put16(h + 0x1c, (unsigned)(tower->lobby_height >= 1
+                                   ? tower->lobby_height : 1));
     put16(h + 0x36, 0);              /* people-name count: none persisted */
     put16(h + 0x38, (unsigned)name_n);   /* tenant-name count */
     put16(h + 0x00, 0x2400);

@@ -421,6 +421,11 @@ typedef struct {
     uint16_t  next_tenant_id;
     
     int       star_rating;     /* 1-5 stars */
+    /* Ground-lobby height 1-3 (EXE [0xB3E6]); 0 = not yet chosen. The EXE
+     * locks this on the FIRST build-tool world click of a new tower —
+     * plain click = 1, Ctrl = 2, Ctrl+Shift = 3 — whether or not that
+     * click places anything, and only tower_clear/new-game resets it. */
+    int       lobby_height;
     long      money;           /* Current funds */
     int       population;      /* Total people in tower */
     int       day;             /* Game day counter */
@@ -508,8 +513,15 @@ static inline int index_to_floor(int index)
  * floor. Anchors overlay decorations, the crane, and disaster targeting. */
 void tower_floor_extents(const Tower *tower, int16_t *left, int16_t *right);
 
-/* Initialize a new tower with lobby on floor 0 */
+/* Initialize a new tower — an empty lot, like the EXE (file_new runs
+ * tower_clear + tower_init and builds nothing; the first lobby is the
+ * player's first drag). */
 void tower_init(Tower *tower);
+
+/* Lock in the ground-lobby height (1-3). No-op unless still unchosen.
+ * The UI calls this on the first build click with the modifier state;
+ * tower_place falls back to height 1 so headless/test placement works. */
+void tower_choose_lobby_height(Tower *tower, int h);
 
 /* Place an item. Returns tenant_id on success, 0 on failure. */
 uint16_t tower_place(Tower *tower, ItemType type, int floor, int x);

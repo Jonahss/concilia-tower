@@ -42,33 +42,23 @@ void tower_init(Tower *tower)
     tower->cam_x = (TOWER_WIDTH * CELL_W) / 2;
     tower->cam_y = floor_to_index(0) * CELL_H;
     
-    /* Place initial lobby — centered, 16 cells wide (4 segments).
-     * Player extends it from here. From original: lobby starts small. */
-    int lobby_idx = floor_to_index(TOWER_LOBBY_FLOOR);
-    int lobby_x = (TOWER_WIDTH - 16) / 2;  /* Centered */
-    int lobby_w = 16;
-    uint16_t lobby_id = tower->next_tenant_id++;
-    
-    Tenant *lobby = &tower->tenants[tower->tenant_count++];
-    lobby->id = lobby_id;
-    lobby->type = ITEM_LOBBY;
-    lobby->floor = TOWER_LOBBY_FLOOR;
-    lobby->x = lobby_x;
-    lobby->width = lobby_w;
-    lobby->height = 1;
-    lobby->state = 0;
-    
-    for (int x = lobby_x; x < lobby_x + lobby_w; x++) {
-        TowerCell *cell = &tower->grid[lobby_idx][x];
-        cell->type = ITEM_LOBBY;
-        cell->tenant_id = lobby_id;
-        cell->cell_index = x - lobby_x;
-        cell->flags = CELL_OCCUPIED;
-    }
-    
-    printf("Tower initialized: $%ld, %d star(s)\n", tower->money, tower->star_rating);
-    printf("  Lobby: x=%d w=%d (cells %d-%d of %d)\n", 
-           lobby_x, lobby_w, lobby_x, lobby_x + lobby_w - 1, TOWER_WIDTH);
+    /* An empty lot, like the EXE: file_new (10d0:001d) runs tower_clear +
+     * tower_init and places nothing — the first lobby is the player's
+     * first drag. lobby_height 0 = the 1/2/3-story choice is still open
+     * (it locks on the first build click; see tower_choose_lobby_height). */
+    tower->lobby_height = 0;
+
+    printf("Tower initialized: $%ld, %d star(s), empty lot\n",
+           tower->money, tower->star_rating);
+}
+
+void tower_choose_lobby_height(Tower *tower, int h)
+{
+    /* EXE 11f8:0955-09bb: only while [0xB3E6] is still 0, i.e. once per
+     * tower — and the write happens before the build dispatch, so a
+     * click that fails to place anything still locks the choice. */
+    if (tower->lobby_height == 0 && h >= 1 && h <= 3)
+        tower->lobby_height = h;
 }
 
 TowerCell *tower_cell(Tower *tower, int floor, int x)
@@ -196,11 +186,14 @@ int tower_shaft_group_count(const Tower *tower)
  * this on top of its item cost (ChargeBuild = ItemCost + TerrainCost),
  * which is how the EXE prices the gap-fill and the overhang cells. */
 
-/* Ground-lobby band height (seg21:0x1310 in_lobby_band): floors 0..2
- * carrying a lobby. The build path can only make a 1-high lobby today,
- * but .TDT imports bring in 2-3-high grand lobbies. */
+/* Ground-lobby band height (seg21:0x1310 in_lobby_band): the EXE reads
+ * [0xB3E6] directly, so floors 0..H-1 price as lobby band even before
+ * their rows are decked. Falls back to counting placed rows for towers
+ * from before the height field existed. */
 static int deck_lobby_band(const Tower *tower)
 {
+    if (tower->lobby_height >= 1)
+        return tower->lobby_height;
     int h = 1;
     for (int f = 1; f <= 2; f++) {
         int found = 0;
@@ -505,6 +498,22 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         }
         if (!touches)
             REJECT("New express shafts anchor at lobby floors (every 15th)");
+    }
+
+    /* No new shaft may START inside a grand lobby's upper stories
+     * (MakeElevator: floor >= 1 requires NOT IsGroundLobbyUpperFloor,
+     * 10a0:133b = floors 1..H-1). Extensions through the band are fine —
+     * the drag path isn't MakeElevator. */
+    if (item_is_elevator(type) && floor >= 1 && floor < deck_lobby_band(tower)) {
+        int touches = 0;
+        for (int df = -1; df <= 1 && !touches; df += 2) {
+            int fidx2 = floor_to_index(floor + df);
+            if (fidx2 < 0 || fidx2 >= TOWER_FLOOR_COUNT) continue;
+            if (tower->grid[fidx2][x].type == type)
+                touches = 1;
+        }
+        if (!touches)
+            REJECT("Cannot start a shaft inside the lobby's upper stories");
     }
 
     /* Shaft clearance (CheckElevatorClearance 10a0:10e8 — seg44 drag trace
@@ -866,6 +875,56 @@ static void fill_floor_gaps(Tower *tower, int floor)
     }
 }
 
+/* Grand lobby: a ground-floor lobby drag also builds the upper rows
+ * (EXE drag-builder 11f8:26dd — after the floor-10 build, height>=2
+ * repeats the span on internal floors 11/12). The rows are free: the
+ * ground band's TerrainCost row already charged $5,000 x height per
+ * cell (11f8:284d is called with the skip-charge flag for them). */
+static void lobby_mirror_upper_rows(Tower *tower, int left, int right)
+{
+    for (int f = 1; f < tower->lobby_height; f++) {
+        int fidx = floor_to_index(f);
+        if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) break;
+
+        Tenant *row = NULL;
+        for (int i = 0; i < tower->tenant_count; i++) {
+            if (tower->tenants[i].type == ITEM_LOBBY &&
+                tower->tenants[i].floor == f) { row = &tower->tenants[i]; break; }
+        }
+        if (!row) {
+            if (tower->tenant_count >= MAX_TENANTS) return;
+            row = &tower->tenants[tower->tenant_count++];
+            memset(row, 0, sizeof(*row));
+            row->id = tower->next_tenant_id++;
+            row->type = ITEM_LOBBY;
+            row->floor = f;
+            row->x = left;
+            row->width = right - left;
+            row->height = 1;
+            row->state = TENANT_OCCUPIED;
+            row->capacity = CAP_MIN;
+            row->demand_armed = 1;
+            row->demand_category = 0xFF;
+        } else {
+            int L = row->x < left ? row->x : left;
+            int R = row->x + row->width > right ? row->x + row->width : right;
+            row->x = L;
+            row->width = R - L;
+            left = L;
+            right = R;
+        }
+        for (int cx = row->x; cx < row->x + row->width; cx++) {
+            TowerCell *cell = &tower->grid[fidx][cx];
+            if (item_is_elevator(cell->type)) continue;
+            cell->type = ITEM_LOBBY;
+            cell->tenant_id = row->id;
+            cell->cell_index = cx - row->x;
+            cell->flags = CELL_OCCUPIED |
+                          (cell->flags & CELL_TRANSPORT_OVERLAY);
+        }
+    }
+}
+
 uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
 {
     /* The floor tool builds deck cells, no tenant record — success
@@ -940,6 +999,9 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
                 printf("Extended lobby on F%d: now x=%d w=%d (+%d cells, cost $%ld, balance $%ld)\n",
                        floor, final_left, existing_lobby->width, new_cells, charge, tower->money);
             }
+            if (tower->lobby_height == 0) tower->lobby_height = 1;
+            if (floor == 0 && tower->lobby_height >= 2)
+                lobby_mirror_upper_rows(tower, final_left, final_right);
             return existing_lobby->id;
         }
         /* Otherwise fall through to create a new lobby tenant */
@@ -1050,6 +1112,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
 
     printf("Placed %s at floor %d, x=%d (cost $%ld, balance $%ld)\n",
            tower_item_name(type), floor, x, charged, tower->money);
+
+    /* First build locks the lobby-height choice at 1 if the UI didn't
+     * pick a grand lobby (EXE dispatcher order: height first, then build). */
+    if (tower->lobby_height == 0) tower->lobby_height = 1;
+    if (type == ITEM_LOBBY && floor == 0 && tower->lobby_height >= 2)
+        lobby_mirror_upper_rows(tower, x, x + width);
 
     return id;
 }

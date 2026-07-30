@@ -2388,6 +2388,8 @@ static int calc_lobby_maintenance(Tower *tower)
  * stories tall and earns the WaitT wait-forgiveness bonus. Capped at 3. */
 int game_lobby_height(Tower *tower)
 {
+    /* The EXE reads [0xB3E6] (the locked choice), not the placed rows. */
+    if (tower->lobby_height >= 1) return tower->lobby_height;
     int h = 0;
     for (int f = TOWER_LOBBY_FLOOR; f <= TOWER_LOBBY_FLOOR + 2; f++) {
         int on_this_floor = 0;
@@ -3513,7 +3515,9 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 13u  /* v13: art styles (Tenant.style,
+#define SAVE_VERSION 14u  /* v14: grand lobby (Tower.lobby_height;
+                             new towers start on an empty lot).
+                             v13: art styles (Tenant.style,
                              Tower.style_ctr).
                              v12: person inspection (Person.member,
                              Tower.person_names registry).
