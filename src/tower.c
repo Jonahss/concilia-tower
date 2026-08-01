@@ -1188,6 +1188,20 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
     if (t->state == TENANT_CONSTRUCTION)
         REJECT("Cannot destroy items under construction");
 
+    /* Demolishing an occupied condo BUYS THE OWNER OUT at the full sale
+     * price (11f8:35ac @377a -> ChargeExpense(9, class)) — the owner got
+     * paid when they moved in and the wrecking ball doesn't void the deed.
+     * Without this, sell -> demolish -> rebuild -> resell printed ~$70k
+     * per cycle (condo-economy referee 2026-08-01). */
+    if (t->type == ITEM_CONDO && t->state >= TENANT_OCCUPIED &&
+        t->state != TENANT_ABANDONED) {
+        long buyout = TENANT_RENT_BY_CLASS[ITEM_CONDO]
+                          [t->rent_class <= 3 ? t->rent_class : 1];
+        tower->money -= buyout;
+        printf("🏚️  Condo owner on F%d bought out for $%ld\n",
+               t->floor, buyout);
+    }
+
     /* Value accounting: bulldozed construction is lost value */
     tower->built_value -= ITEM_COST[t->type];
     tower->lost_value += ITEM_COST[t->type];

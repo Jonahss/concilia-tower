@@ -388,6 +388,9 @@ typedef struct {
     int             crane_x;     /* left edge captured at that moment */
     Sprite         *fireladder;  /* 0x842D — fire escape stairs */
     Sprite         *skyline;     /* 0x8389 — city skyline background */
+    SDL_Texture    *queue_hot;   /* white clone of the queue silhouettes —
+                                  * color-mod can only DARKEN, so tinting the
+                                  * black figures pink/red needs a white base */
     int             cloud_count;
 
     /* Disaster event art (real EXE sprites, replacing colored rectangles) */
@@ -471,12 +474,6 @@ typedef struct {
     char            notice_text[192];
     char            notice_btn[32];
     GameSpeed       notice_saved_speed;
-
-    /* Star-promotion certificate — a celebratory card shown when the tower
-     * earns a new star. Non-blocking; auto-dismisses or click to close. */
-    int             cert_active;
-    int             cert_star;            /* star level being celebrated (2..6) */
-    int             cert_timer;           /* frames left before auto-dismiss */
 
     /* Route-loss confirmation (res 0x3ed): a Yes/No modal shown before a
      * stop-toggle or shaft-segment demolition severs a floor's only route.
@@ -3233,15 +3230,24 @@ static void render_shaft(ElevatorShaft *s)
                 {
                     const Person *qp = &game.sim.people.people[pid - 1];
                     int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
-                    float wr = (float)qp->wait_accum / (float)cap;
+                    /* banked frustration PLUS the wait they're suffering
+                     * right now — wait_accum only banks at board/give-up,
+                     * so queues never reddened while actually waiting */
+                    int live = game.sim.frame - qp->wait_start;
+                    if (live < 0) live = 0;
+                    float wr = (float)(qp->wait_accum + live) / (float)cap;
                     if (wr > 1.0f) wr = 1.0f;
-                    if (wr > 0.25f) {
-                        uint8_t sub = (uint8_t)(190.0f * (wr - 0.25f) / 0.75f);
-                        SDL_SetTextureColorMod(queue_spr->texture,
-                                               255, 255 - sub, 255 - sub);
-                    } else {
-                        SDL_SetTextureColorMod(queue_spr->texture,
-                                               255, 255, 255);
+                    if (wr > 0.25f && game.queue_hot) {
+                        /* swap to the white clone — mod can only darken,
+                         * so the black sheet itself can never redden */
+                        uint8_t sub = (uint8_t)(220.0f * (wr - 0.25f) / 0.75f);
+                        SDL_SetTextureColorMod(game.queue_hot,
+                                               160 + (uint8_t)(95.0f * wr),
+                                               160 - sub > 0 ? (uint8_t)(160 - sub) : 0,
+                                               160 - sub > 0 ? (uint8_t)(160 - sub) : 0);
+                        SDL_RenderCopy(game.renderer, game.queue_hot,
+                                       &src, &dst);
+                        continue;
                     }
                 }
                 SDL_RenderCopy(game.renderer, queue_spr->texture, &src, &dst);
@@ -5205,17 +5211,6 @@ static int request_remove_tenant(uint16_t tid, ItemType ty)
     return 1;
 }
 
-/* Draw text horizontally centered on cx. */
-static void draw_text_centered(const char *text, int cx, int y, SDL_Color color)
-{
-    int w, h;
-    SDL_Texture *t = render_text(text, color, &w, &h);
-    if (!t) return;
-    SDL_Rect dst = { cx - w / 2, y, w, h };
-    SDL_RenderCopy(game.renderer, t, NULL, &dst);
-    SDL_DestroyTexture(t);
-}
-
 /* Fire-glow: a warm, pulsing tint washed over the scene while a fire burns.
  * (The decomp animates fire via palette entries 207/213; this is the SDL
  * equivalent — a screen-wide glow that intensifies with the blaze's size.) */
@@ -5241,64 +5236,6 @@ static void render_fire_glow(void)
 /* Star-promotion certificate — a celebratory gold-framed card. SimTower has
  * no certificate bitmap (promotions fire event animations 0xBD4+star), so
  * this is a port-authored flourish built from the real star sprites. */
-#define CERT_W 400
-#define CERT_H 210
-static void render_certificate(void)
-{
-    if (!game.cert_active) return;
-    int wx = (game.screen_w - CERT_W) / 2;
-    int wy = (game.screen_h - CERT_H) / 2;
-    int cx = wx + CERT_W / 2;
-
-    /* parchment + gold double frame */
-    SDL_SetRenderDrawColor(game.renderer, 250, 246, 224, 255);
-    SDL_Rect body = { wx, wy, CERT_W, CERT_H };
-    SDL_RenderFillRect(game.renderer, &body);
-    for (int b = 0; b < 4; b++) {
-        SDL_SetRenderDrawColor(game.renderer, 176 + b * 16, 140 + b * 16, 36 + b * 14, 255);
-        SDL_Rect fr = { wx + 3 + b, wy + 3 + b, CERT_W - 6 - 2 * b, CERT_H - 6 - 2 * b };
-        SDL_RenderDrawRect(game.renderer, &fr);
-    }
-
-    SDL_Color ink  = { 90, 60, 10, 255 };
-    int is_tower = (game.cert_star >= 6);
-    draw_text_centered("Certificate of Achievement", cx, wy + 26, ink);
-
-    /* star row (or TOWER trophy text) */
-    int stars_y = wy + 70;
-    if (is_tower) {
-        SDL_Color gold = { 150, 100, 10, 255 };
-        draw_text_centered("T O W E R", cx, stars_y, gold);
-    } else if (game.ui_star[1] && game.ui_star_w > 0) {
-        int n = game.cert_star;
-        int sw = game.ui_star_w, sh = game.ui_star_h, gap = 6;
-        int total = n * sw + (n - 1) * gap;
-        int sx = cx - total / 2;
-        for (int i = 0; i < n; i++) {
-            SDL_Rect d = { sx + i * (sw + gap), stars_y, sw, sh };
-            SDL_RenderCopy(game.renderer, game.ui_star[1], NULL, &d);
-        }
-    }
-
-    /* The EXE's own congratulation (dialogs 0xBD6..0xBDA: 2..5 stars +
-     * "Tower" rating), split on its embedded newline. */
-    {
-        int star = game.cert_star < 2 ? 2 : game.cert_star > 6 ? 6
-                                                               : game.cert_star;
-        char full[160], *nl;
-        snprintf(full, sizeof full, "%s",
-                 exe_dlg_text((uint16_t)(0xBD6 + star - 2), 0,
-                              "Congratulations!\nYour tower has been given "
-                              "a new Star Rating!"));
-        nl = strchr(full, '\n');
-        if (nl) *nl = '\0';
-        draw_text_centered(full, cx, wy + 120, ink);
-        draw_text_centered(nl ? nl + 1 : "", cx, wy + 146, ink);
-    }
-    SDL_Color faint = { 150, 130, 90, 255 };
-    draw_text_centered("(click to dismiss)", cx, wy + CERT_H - 30, faint);
-}
-
 static void render_event_alert(void)
 {
     if (!game.sim.event.active) return;
@@ -6625,7 +6562,6 @@ static void render(void)
     render_disaster_modal();   /* on top of everything — it's modal */
     render_notice_modal();     /* resolution/VIP notices, same layer */
     render_route_confirm();    /* likewise */
-    render_certificate();      /* star-promotion celebration card */
 
     SDL_RenderPresent(game.renderer);
 }
@@ -7324,13 +7260,6 @@ static void handle_event(SDL_Event *ev)
             disaster_modal_key(ev->key.keysym.sym);
             break;
         }
-        return;
-    }
-
-    /* The promotion certificate is non-blocking, but a click dismisses it
-     * (and is swallowed so it doesn't also build something). */
-    if (game.cert_active && ev->type == SDL_MOUSEBUTTONDOWN) {
-        game.cert_active = 0;
         return;
     }
 
@@ -8491,7 +8420,36 @@ int main(int argc, char *argv[])
             }
         }
     }
-    
+
+    /* Frustration tint base: a white clone of the queue-silhouette sheet.
+     * SDL color mod multiplies, so the black figures can never redden —
+     * the stressed draw swaps to this clone modded (255, 255-x, 255-x). */
+    game.queue_hot = NULL;
+    {
+        NEResource *res = ne_find(&game.exe, NE_RT_BITMAP, SPR_ELEV_QUEUE);
+        SDL_Surface *surf = res ? sprites_dib_to_surface(&game.sprites, res)
+                                : NULL;
+        if (surf) {
+            SDL_SetColorKey(surf, SDL_TRUE,
+                            SDL_MapRGB(surf->format, 0xFF, 0xFF, 0xFF));
+            SDL_Surface *rgba =
+                SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_RGBA8888, 0);
+            SDL_FreeSurface(surf);
+            if (rgba) {
+                uint32_t *px = rgba->pixels;
+                for (int i = 0; i < rgba->w * rgba->h; i++)
+                    if (px[i] & 0x000000FF)          /* opaque -> white */
+                        px[i] |= 0xFFFFFF00;
+                game.queue_hot =
+                    SDL_CreateTextureFromSurface(game.renderer, rgba);
+                if (game.queue_hot)
+                    SDL_SetTextureBlendMode(game.queue_hot,
+                                            SDL_BLENDMODE_BLEND);
+                SDL_FreeSurface(rgba);
+            }
+        }
+    }
+
     /* ===== Load UI bitmaps from EXE ===== */
     game.ui_items = NULL;
     game.ui_timebar = NULL;
@@ -8885,10 +8843,12 @@ int main(int argc, char *argv[])
         game.disaster_saved_speed = SPEED_NORMAL;
         game.sim.speed = SPEED_PAUSED;
     }
-    if (getenv("CT_CERT")) {           /* demo: show the star certificate */
-        game.cert_active = 1;
-        game.cert_star = atoi(getenv("CT_CERT"));
-        game.cert_timer = 100000;
+    if (getenv("CT_CERT")) {           /* demo: pop the star-up dialog */
+        int st = atoi(getenv("CT_CERT"));
+        st = st < 2 ? 2 : st > 6 ? 6 : st;
+        show_notice_modal(exe_dlg_text((uint16_t)(0xBD6 + st - 2), 0,
+                                       "Congratulations!"),
+                          exe_dlg_text((uint16_t)(0xBD6 + st - 2), 1, "OK"));
     }
     (void)show_underground;
     game.zoom = 1.0f;
@@ -9114,15 +9074,21 @@ int main(int argc, char *argv[])
                 game.sim.medical_nag = 0;
             }
 
-            /* Star-promotion certificate: consume the sim's pending flag. */
+            /* Star promotion: the EXE pops its congratulations dialog
+             * (0xBD6..0xBDA — 2..5 stars + Tower), a plain message box.
+             * The old parchment "certificate" card was a port invention
+             * (and its star bitmaps dragged the info-bar background
+             * along). Faithful = the real dialog text + OK. */
             if (game.sim.pending_star_up) {
-                game.cert_active = 1;
-                game.cert_star   = game.sim.pending_star_up;
-                game.cert_timer  = 360;
+                int st = game.sim.pending_star_up;
+                st = st < 2 ? 2 : st > 6 ? 6 : st;
+                show_notice_modal(
+                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 0,
+                                 "Congratulations!\nYour tower has been "
+                                 "given a new Star Rating!"),
+                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 1, "OK"));
                 game.sim.pending_star_up = 0;
             }
-            if (game.cert_active && --game.cert_timer <= 0)
-                game.cert_active = 0;
 
             /* Commute feedback: units cut off from the entrance. Names the
              * lowest dark floor with the res-0x2cd floor-pair phrasing —

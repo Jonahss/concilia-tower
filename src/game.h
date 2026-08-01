@@ -318,7 +318,9 @@ static const int TENANT_POPULATION[] = {
     [ITEM_LOBBY] = 0,
     [ITEM_FLOOR] = 0,
     [ITEM_OFFICE] = 6,          /* ~6 workers per office */
-    [ITEM_CONDO] = 4,           /* Family of 4 */
+    [ITEM_CONDO] = 3,           /* family of 3 — EXE spawns members 0/1/2
+                                 * per condo (condo-economy referee
+                                 * 2026-08-01; the old 4 overcounted pop) */
     [ITEM_HOTEL_SINGLE] = 1,
     [ITEM_HOTEL_TWIN] = 2,
     [ITEM_HOTEL_SUITE] = 3,
