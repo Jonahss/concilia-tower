@@ -368,6 +368,9 @@ typedef struct {
     int             cap_drag;       /* pointer-drag on a motor room / pit: the
                                      * shaft's type was borrowed into build_type
                                      * for the drag; restore ITEM_NONE on release */
+    int             cap_drag_dir;   /* +1 dragging the top cap, -1 the pit */
+    int             cap_drag_next;  /* next floor a live drag step will claim */
+    int             cap_drag_placed;/* segments placed live during this drag */
     
     /* Camera smoothing */
     float           cam_fx, cam_fy;
@@ -581,6 +584,10 @@ static const MenuItem menu_build_com[] = {
 
 /* Build > Transport */
 static const MenuItem menu_build_trans[] = {
+    { "Standard Elevator\tE", ITEM_ELEVATOR_SHAFT,   ACT_NONE },
+    { "Service Elevator\tV",  ITEM_ELEVATOR_SERVICE, ACT_NONE },
+    { "Express Elevator\tW",  ITEM_ELEVATOR_EXPRESS, ACT_NONE },
+    { NULL, ITEM_NONE, ACT_NONE },
     { "Stairs\t8",        ITEM_STAIRS,       ACT_NONE },
     { "Escalator\t9",     ITEM_ESCALATOR,    ACT_NONE },
     { NULL, ITEM_NONE, ACT_NONE },
@@ -589,7 +596,7 @@ static const MenuItem menu_build_trans[] = {
     { "Parking Ramp",     ITEM_RAMP,         ACT_NONE },
     { "Metro Station\tM", ITEM_METRO,        ACT_NONE },
 };
-#define MENU_BUILD_TRANS_COUNT 7
+#define MENU_BUILD_TRANS_COUNT 11
 
 /* Build > Services */
 static const MenuItem menu_build_svc[] = {
@@ -1011,11 +1018,15 @@ static void render_sky(void)
         }
     }
     
-    /* Render Santa flying across the sky (SantaT: x-=10, y+=1 per tick).
+    /* Render Santa flying across the sky (SantaT). He flies at a fixed
+     * WORLD altitude — LaunchSanta's y = viewport_height - 0x84c puts him
+     * ~2124px (59 floors) above the ground — so you only catch him when
+     * you're scrolled up near the top of a tall tower on Christmas night.
      * Options -> Anim: Effects ([0xDE32], the AnimeT gate) hides him. */
     if (game.sim.santa.active && game.santa && game.anim_effects) {
         SDL_Rect dst = {
-            game.sim.santa.x, game.sim.santa.y,
+            game.sim.santa.x,
+            lobby_sy + CELL_H - 0x84c + game.sim.santa.y,
             game.santa->w, game.santa->h
         };
         SDL_RenderCopy(game.renderer, game.santa->texture, NULL, &dst);
@@ -2748,7 +2759,9 @@ static void render_elv_dialog(void)
 #define SPR_FIN_DIALOG_OK 0x81f5   /* same art, OK button pressed */
 #define FIN_DLG_W 343
 #define FIN_DLG_H 364
-#define FIN_OK_BTN 128, 336, 88, 22   /* measured OK-button rect (dialog-local) */
+#define FIN_OK_BTN 130, 325, 94, 23   /* OK-button rect re-measured off the
+                                       * art's outline (was 11px low — the
+                                       * top half of the button was dead) */
 
 /* Right-aligned text, for the numeric ledger columns. */
 static void draw_text_right(const char *text, int right_x, int y, SDL_Color c)
@@ -2761,8 +2774,25 @@ static void draw_text_right(const char *text, int right_x, int y, SDL_Color c)
     SDL_DestroyTexture(tex);
 }
 
-/* y of grid row `row` (0..9), dialog-local. ~13.1px pitch measured off 0x81f4. */
-static int fin_row_y(int row) { return 86 + row * 131 / 10; }
+/* Small variant for the 13px-pitch ledger grid — the 14px UI font overflowed
+ * the rows and looked nothing like the art's compact ledger digits. */
+static void draw_text_right_small(const char *text, int right_x, int y,
+                                  SDL_Color c)
+{
+    if (!game.font_small || !text || !text[0]) return;
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(game.font_small, text, c);
+    if (!surf) return;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(game.renderer, surf);
+    SDL_Rect dst = { right_x - surf->w, y, surf->w, surf->h };
+    SDL_RenderCopy(game.renderer, tex, NULL, &dst);
+    SDL_FreeSurface(surf);
+    SDL_DestroyTexture(tex);
+}
+
+/* y of ledger row `row` (0..8), dialog-local. The art's label rows sit at
+ * exactly 83 + 13*row (pixel-measured off 0x81f4); -2 centers the 11px
+ * small font on the 7px label band. */
+static int fin_row_y(int row) { return 81 + row * 13; }
 
 /* Compact money for the narrow per-category columns ($3.52M / $130k / $90).
  * The original's columns were sized for its ÷100 internal values (a documented
@@ -2841,11 +2871,11 @@ static void render_fin_dialog(void)
         int y = by + fin_row_y(r);
         if (pop[r] > 0) {
             snprintf(buf, sizeof buf, "%ld", pop[r]);
-            draw_text_right(buf, bx + 130, y, ink);
+            draw_text_right_small(buf, bx + 130, y, ink);
         }
         if (sim->fin_income_q[r] != 0) {
             fin_compact_money(sim->fin_income_q[r], buf, sizeof buf);
-            draw_text_right(buf, bx + 184, y, ink);
+            draw_text_right_small(buf, bx + 184, y, ink);
         }
     }
 
@@ -2854,7 +2884,7 @@ static void render_fin_dialog(void)
         if (sim->fin_expense_q[r] == 0) continue;
         int y = by + fin_row_y(r);
         fin_compact_money(sim->fin_expense_q[r], buf, sizeof buf);
-        draw_text_right(buf, bx + 324, y, ink);
+        draw_text_right_small(buf, bx + 324, y, ink);
     }
 
     /* ---- Summary block (right-aligned values on each labelled line). ---- */
@@ -2882,7 +2912,7 @@ static void render_fin_dialog(void)
             SDL_RenderDrawRect(game.renderer, &c);
         }
         SDL_SetRenderDrawColor(game.renderer, 0, 120, 255, 255);
-        SDL_Rect ok = { bx + 128, by + 336, 88, 22 };
+        SDL_Rect ok = { bx + 130, by + 325, 94, 23 };
         SDL_RenderDrawRect(game.renderer, &ok);
     }
     (void)ink;
@@ -3172,7 +3202,10 @@ static void render_shaft(ElevatorShaft *s)
                     right_in = 1;
             }
             int rightward = right_in && !left_in;
-            int shown = n > 10 ? 10 : n;
+            /* Draw the WHOLE line (both 40-deep rings) — the original lets
+             * a drowning shaft's queue snake across the lobby; capping at
+             * 10 hid exactly that signal. (person_hit_test mirrors this.) */
+            int shown = n;
             for (int k = 0; k < shown; k++) {
                 uint16_t pid;
                 if (k < st->up_count)
@@ -3404,6 +3437,9 @@ static int build_origin_floor(ItemType ty, int mouse_floor)
 static void render_build_ghost(void)
 {
     if (game.demolish_mode || game.build_type == ITEM_NONE) return;
+    /* A live cap drag lays real shaft as the cursor moves — the growing
+     * shaft itself is the feedback; a ghost shadow on top is just noise. */
+    if (game.cap_drag) return;
 
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
@@ -5881,7 +5917,7 @@ static uint16_t person_hit_test(int mx, int my)
                     right_in = 1;
             }
             int rightward = right_in && !left_in;
-            int shown = n > 10 ? 10 : n;
+            int shown = n;   /* full line, mirroring the queue render */
             for (int k = shown - 1; k >= 0; k--) {   /* topmost drawn first */
                 uint16_t pid;
                 if (k < st->up_count)
@@ -7171,9 +7207,44 @@ static int try_cap_drag(void)
         game.dragging = 1;
         game.drag_start_cell = s->x;
         game.drag_start_floor = game.mouse_floor;
+        /* Live extension state: the cap follows the cursor DURING the drag
+         * (the original extends on drag, not on release), one segment per
+         * floor the handle is pulled past. */
+        game.cap_drag_dir = (fidx == s->hi + 1) ? 1 : -1;
+        game.cap_drag_next = game.mouse_floor;
+        game.cap_drag_placed = 0;
         return 1;
     }
     return 0;
+}
+
+/* Step a live cap drag toward the cursor: the grabbed motor room / pit
+ * tracks the mouse, and every floor it's pulled past becomes shaft. The
+ * segment under the handle itself is claimed only once the handle moves
+ * BEYOND it, so a 1-floor nudge extends by exactly 1. */
+static void cap_drag_track(void)
+{
+    if (!game.cap_drag || !game.dragging) return;
+    int placed = 0;
+    if (game.cap_drag_dir > 0) {
+        while (game.cap_drag_next < game.mouse_floor &&
+               tower_place(&game.tower, game.build_type,
+                           game.cap_drag_next, game.drag_start_cell)) {
+            game.cap_drag_next++;
+            placed++;
+        }
+    } else {
+        while (game.cap_drag_next > game.mouse_floor &&
+               tower_place(&game.tower, game.build_type,
+                           game.cap_drag_next, game.drag_start_cell)) {
+            game.cap_drag_next--;
+            placed++;
+        }
+    }
+    if (placed > 0) {
+        game.cap_drag_placed += placed;
+        play_snd(SND_BUILD_PLACE);
+    }
 }
 
 /* ---------- Input handling ---------- */
@@ -7420,6 +7491,9 @@ static void handle_event(SDL_Event *ev)
         case SDLK_r: game.build_type = ITEM_RECYCLING;    break;
         case SDLK_o: game.build_type = ITEM_SHOP;         break;  /* O for shOp */
         case SDLK_l: game.build_type = ITEM_LOBBY;        break;  /* L for Lobby */
+        case SDLK_e: game.build_type = ITEM_ELEVATOR_SHAFT;   break;
+        case SDLK_v: game.build_type = ITEM_ELEVATOR_SERVICE; break;  /* serVice */
+        case SDLK_w: game.build_type = ITEM_ELEVATOR_EXPRESS; break;  /* Wide car */
         
         /* Cycle through types with Tab / Shift+Tab */
         case SDLK_TAB:
@@ -7444,9 +7518,10 @@ static void handle_event(SDL_Event *ev)
     case SDL_MOUSEMOTION:
         game.mouse_x = ev->motion.x;
         game.mouse_y = ev->motion.y;
-        screen_to_grid(game.mouse_x, game.mouse_y, 
+        screen_to_grid(game.mouse_x, game.mouse_y,
                        &game.mouse_floor, &game.mouse_cell);
-        
+        cap_drag_track();   /* live shaft extension follows the cursor */
+
         /* Camera panning (middle/right-click drag) */
         if (game.cam_panning) {
             int dx = ev->motion.x - game.cam_pan_last_x;
@@ -7805,7 +7880,20 @@ static void handle_event(SDL_Event *ev)
                 }
             }
             /* Stop building placement drag */
-            if (game.dragging) {
+            if (game.dragging && game.cap_drag) {
+                /* Live cap drag: segments were already laid while the mouse
+                 * moved. A motionless click on the cap still nudges the
+                 * shaft one floor (the original's clickable arrows). */
+                if (!game.cap_drag_placed &&
+                    game.drag_start_floor == game.mouse_floor &&
+                    !tower_place(&game.tower, game.build_type,
+                                 game.drag_start_floor, game.drag_start_cell) &&
+                    tower_reject_reason()[0])
+                    add_event_message(tower_reject_reason());
+                game.dragging = 0;
+                game.cap_drag = 0;
+                game.build_type = ITEM_NONE;   /* hand back the plain pointer */
+            } else if (game.dragging) {
                 /* No-drag click: the centered origin under the cursor still
                  * matches where the drag anchored. */
                 if (game.drag_start_cell == build_origin_cell(game.mouse_cell) &&
@@ -7829,10 +7917,6 @@ static void handle_event(SDL_Event *ev)
                     drag_place_units();
                 }
                 game.dragging = 0;
-                if (game.cap_drag) {   /* hand back the plain pointer */
-                    game.build_type = ITEM_NONE;
-                    game.cap_drag = 0;
-                }
             }
         }
         break;

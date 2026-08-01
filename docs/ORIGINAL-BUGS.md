@@ -96,6 +96,24 @@ held it holds only `MakeLobby` and the subway routine. The only medical mechanic
 is a sick office worker (10% daily roll at 3★+) who can't reach a live center.
 2026-07-13.
 
+### B12. The 15th movie, "Under the Apple Tree", can never play ✅ HIGH
+String table 0x1A4 carries 15 film titles, but the movie-id space is 0..13:
+a new cinema rolls `rand() % 14` (1180:014a) and the change-movie rotation
+maps through `(id+1) % 7` within each half. Index 14 is unreachable — the
+title shipped in every copy of the game and no player ever saw it.
+referee_cinema_soundtrack_2026-07-30. (The port mirrors the 0..13 space;
+the title is read from the EXE but likewise never drawn.)
+
+### B13. Two cinema themes are malformed WAVs — two films play a silent movie ✅ HIGH (this EXE)
+Each film has its own theme, sound resource 9001+movie_id (11c8:0895
+`add ax,0x2329`), gated on show state. But in our SIMTOWER.EXE, resources
+9004 and 9007 — the themes for film 3 "Big Wave" and film 6 "Western
+Sheriff" — are not valid RIFF data (every other theme is). The original's
+sndPlaySound on that data most plausibly fails silently, so those two
+films screen without music. Unknown whether this is universal or a bad
+pressing of this particular 1.1 EXE. The port reproduces the silence.
+referee_cinema_soundtrack_2026-07-30 + RIFF sweep 2026-08-01.
+
 ---
 
 # Part 2 — Surprising mechanics (intended design, NOT bugs)

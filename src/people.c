@@ -244,6 +244,10 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
                 continue;
             ns->num_cars = os->num_cars;
             ns->hidden = os->hidden;
+            /* carry the cars themselves — extending a shaft must not
+             * teleport its cars to the bottom (they keep their floor and
+             * get re-dispatched from where they stand) */
+            memcpy(ns->car, os->car, sizeof(ns->car));
             int lo = os->lo > ns->lo ? os->lo : ns->lo;
             int hi = os->hi < ns->hi ? os->hi : ns->hi;
             for (int f = lo; f <= hi; f++) ns->serviced[f] = os->serviced[f];
@@ -267,11 +271,31 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
         for (int c = 0; c < s->num_cars; c++) {
-            s->car[c].active = 1;
-            s->car[c].floor = s->lo;
-            s->car[c].target = s->lo;
-            s->car[c].dir = 1;
-            s->car[c].schedule_index = sched_mode_now(ps, s);
+            ElevatorCar *car = &s->car[c];
+            if (!car->active) {
+                /* genuinely new car (fresh shaft, or add-a-car) */
+                car->floor = s->lo;
+                car->dir = 1;
+            } else {
+                /* carried across a rebuild: hold position (clamped into
+                 * the new extent) and let the dispatcher pick fresh work.
+                 * Riders were already flipped back to PLANNING below, so
+                 * the passenger manifest restarts empty either way. */
+                if (car->floor < s->lo) car->floor = s->lo;
+                if (car->floor > s->hi) car->floor = s->hi;
+            }
+            car->target = car->floor;
+            car->door_timer = 0;
+            car->move_timer = 0;
+            car->hold_timer = 0;
+            car->passengers = 0;
+            car->distinct_dests = 0;
+            car->assigned_calls = 0;
+            memset(car->pax, 0, sizeof car->pax);
+            memset(car->pax_dest, 0, sizeof car->pax_dest);
+            memset(car->dest_count, 0, sizeof car->dest_count);
+            car->active = 1;
+            car->schedule_index = sched_mode_now(ps, s);
         }
     }
     /* Anyone queued or riding lost their shaft — replan from where they are */
@@ -686,6 +710,15 @@ static int dequeue(ElevatorShaft *s, int floor, int up)
 }
 
 /* ---------- stress (WaitT -> tenant) ---------- */
+
+/* Calibration note (2026-08-01): the EXE's wait constants (queue watchdog
+ * 300, wait_cap 300, judge bars 150/200) are in ITS frame-time, ~320 ft
+ * per daytime game hour — and our NORMAL speed runs ~120 render frames per
+ * game hour with a ~2880-frame day, close enough to the EXE's ~2500-ft day
+ * that the raw frame counts are already roughly EXE-calibrated. A per-hour
+ * exchange-rate conversion was tried and reverted: it made the watchdog
+ * pathological at fast speeds (18 frames at TURBO). Queues visibly
+ * shrinking without a car IS the original's give-up mechanic. */
 
 static void bank_wait(Person *p, int frame)
 {

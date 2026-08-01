@@ -107,7 +107,15 @@ int game_calc_population(GameSim *sim, Tower *tower)
         /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
         if (t->state == 1) base_pop /= 2;  /* moving in */
 
-        if (t->state >= 1) {
+        /* Only units someone actually lives/works in count. A condo held
+         * on the market (MOVING_IN until a buyer can reach it), a unit
+         * still building, or an abandoned unit houses nobody — counting
+         * them showed sold-out art and star-worthy population for
+         * unreachable rooms. */
+        int is_lived_in = t->state >= TENANT_OCCUPIED &&
+                          t->state != TENANT_ABANDONED;
+
+        if (is_lived_in) {
             /* STANDING population: everyone who lives or works here,
              * regardless of the hour — the EXE's population global counts
              * person records tied to tenants, so an office's workers count
@@ -125,14 +133,14 @@ int game_calc_population(GameSim *sim, Tower *tower)
 
         if (type_idx < ITEM_TYPE_COUNT && TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day]) {
             /* Active — people are physically present right now */
-            if (t->state >= 1) {  /* At least MOVING_IN */
+            if (is_lived_in) {
                 t->population = base_pop;
                 pop += base_pop;
                 occupied++;
             }
         } else {
             /* Inactive right now — condos still count (people sleep there) */
-            if (t->type == ITEM_CONDO && t->state >= 1) {
+            if (t->type == ITEM_CONDO && is_lived_in) {
                 t->population = TENANT_POPULATION[ITEM_CONDO];
                 pop += t->population;
                 occupied++;
@@ -495,7 +503,12 @@ static void update_capacity(GameSim *sim, Tenant *t, TimeOfDay tod,
         default: break;
         }
     }
-    /* Condos, services, etc. stay at their current capacity */
+    /* Condos, services, etc. stay at their current capacity — except a
+     * sold condo whose byte was drained while it was cut off from the
+     * entrance: once the family can get home again the interior refills
+     * (otherwise a reconnected condo stayed dark forever). */
+    else if (t->type == ITEM_CONDO && t->capacity < CAP_MIN)
+        t->capacity = cap_step_up_to(t->capacity, CAP_MIN);
 }
 
 /* Financial-report category maps (order matches the report art, bitmap 0x81f4). */
@@ -654,12 +667,20 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         case TENANT_MOVING_IN:
             /* Condos are a one-time SALE, banked when the buyer moves in
              * (res 0x3E9 condo row: $200k/$150k/$100k/$40k by rate class).
-             * A re-occupied abandoned condo is a resale to a new buyer. */
+             * A re-occupied abandoned condo is a resale to a new buyer.
+             * No buyer can move into space the entrance can't reach — the
+             * unit sits on the market (For Sale board) until it's connected.
+             * (TenantInit occupies on placement because the EXE judges
+             * reachability there; unreachable condos printed free money.) */
             if (t->type == ITEM_CONDO) {
+                if (!reachable) break;         /* still For Sale */
                 int sale = tenant_rent(ITEM_CONDO, t->rent_class);
                 income += sale;
                 fin_bank_income(sim, ITEM_CONDO, sale);
                 if (sim->cash_pending < 30) sim->cash_pending++;   /* queued cha-ching */
+                /* the family is home — the occupancy byte leaves EMPTY so
+                 * the interior (and its AnimPeple residents) come alive */
+                t->capacity = CAP_MIN;
                 printf("\xf0\x9f\x8f\xa0 Condo on F%d sold for $%d\n",
                        t->floor, sale);
             }
@@ -1423,6 +1444,12 @@ void game_update(GameSim *sim, Tower *tower)
             /* CheckAllParking (TimeT ft-0 row = 7:00AM) */
             game_parking_recompute(sim, tower);
         }
+        /* Santa: 9PM on the LAST day of the 12-day year — Christmas night
+         * (TimeT ft 0x7D0: day % 0xC == 0xB -> SantaT LaunchSanta). Once a
+         * year, after dark, exactly like the EXE. */
+        if (sim->hour == 21 && tower->day % 12 == 11 && !sim->santa.active)
+            game_launch_santa(sim, 960);
+
         evaluate_star_rating(sim, tower);
     }
 
@@ -1718,14 +1745,6 @@ void game_update(GameSim *sim, Tower *tower)
             if (upkeep > 0) {
                 tower->money -= upkeep;
                 sim->expenses_this_quarter += upkeep;
-            }
-            
-            /* Santa: a rare holiday flyby. A game "year" is only 4 days, so
-             * firing every year (day % 4) put Santa on screen every ~3 minutes
-             * at normal speed — far too often. Make it a roughly-every-third-
-             * year Easter egg (day % 12) so it stays a treat. */
-            if (tower->day > 0 && tower->day % 12 == 0 && !sim->santa.active) {
-                game_launch_santa(sim, 960);
             }
             
             printf("🌅 Day %d begins! Pop: %d, Stars: %d, Money: $%ld\n",
@@ -3522,13 +3541,13 @@ void game_update_santa(GameSim *sim)
     if (!sim->santa.active) return;
     
     sim->santa.x -= 3;   /* Fly left (slower than original's 10 for visibility) */
-    /* Stay HIGH in the sky with a gentle bob, instead of drifting down low
-     * across the flight (the old y += 1 sank Santa to mid-screen by the end).
-     * Integer triangle wave — no math.h needed. */
+    /* y is a small bob AROUND the fixed flight altitude — the renderer
+     * anchors him in WORLD space ~0x84c px above the ground (LaunchSanta's
+     * viewport_height - 0x84c), so he's only seen when you're scrolled up
+     * around floor 60. Not a screen-pinned decoration. */
     {
         int phase = (sim->santa.x >> 3) & 15;          /* 0..15 */
-        int bob = phase < 8 ? phase : 16 - phase;      /* 0..8..0 */
-        sim->santa.y = 14 + bob;                        /* stays high: 14..22 */
+        sim->santa.y = phase < 8 ? phase : 16 - phase; /* 0..8..0 */
     }
 
     if (sim->santa.x < -200) {
