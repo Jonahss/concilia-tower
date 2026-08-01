@@ -32,7 +32,7 @@ errors now land in the in-game event feed.)
 
 | string | mechanic | status | evidence / notes |
 |---|---|---|---|
-| 15 film titles | cinema film identity: ids 0-6 ordinary, 7-13 hits; draw decays with age | IMPLEMENTED (14 titles CORRECT) | `main.c:4717 MOVIE_TITLES[14]` + `game.c:game_change_movie`/`movie_patron_quota`. **The port carries 14 of the 15 titles — "Under the Apple Tree" was dropped** (movie_id range is 0..13, so either the port's id space is one short or the 15th title is genuinely unused in the EXE; worth a decomp check). Cosmetic. |
+| 15 film titles | cinema film identity: ids 0-6 ordinary, 7-13 hits; draw decays with age | IMPLEMENTED (14 titles CORRECT) | `main.c:4717 MOVIE_TITLES[14]` + `game.c:game_change_movie`/`movie_patron_quota`. The port carries 14 of the 15 titles — **decomp verdict (referee_cinema_soundtrack_2026-07-30): the EXE's movie_id space is 0..13** (init `rand()%14` 1180:014a, rotation `(id+1)%7` halves), so the 15th title "Under the Apple Tree" is genuinely unreachable in the EXE too. Same referee decoded the theme mapping: sound = 9001+movie_id, now ported. |
 
 ## res 0x02bc / 0x02bd — Person names & activities (PRIORITY)
 

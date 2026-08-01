@@ -1368,6 +1368,22 @@ void game_update(GameSim *sim, Tower *tower)
     sim->frame++;
     sim->tick++;
 
+    /* Garbage truck (#2280): the renderer's trash cycle steps the 5-frame
+     * recycling sheet every 96 frames and parks the collection truck on the
+     * last phase — ring the truck sound once as it pulls up, if the tower
+     * has a working recycling center. (One play covers every center: the
+     * cycle is a single frame-derived clock they all share.) */
+    if (sim->frame % (96 * 5) == 96 * 4) {
+        for (int i = 0; i < tower->tenant_count; i++) {
+            const Tenant *t = &tower->tenants[i];
+            if (t->type == ITEM_RECYCLING &&
+                (t->state == TENANT_OCCUPIED || t->state == TENANT_VACANT)) {
+                play_snd(SND_GARBAGE);
+                break;
+            }
+        }
+    }
+
     /* Drain the settlement cha-ching queue: one ka-ching every ~26 ticks so a
      * rich morning rings a clear run of them (each cash WAV is ~0.5s). */
     if (sim->cash_pending > 0) {

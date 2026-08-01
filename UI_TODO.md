@@ -79,18 +79,28 @@
 - [x] **Post-catch clock jump to 4PM** — was only wired for a *caught* bomb; a *detonated* bomb now also jumps to 4PM (unconditional), and fire jumps *only if before 4PM* (the EXE's conditional guard). Verified with a sound/clock harness.
 - [x] **Event sounds** — wired the real triggers (referee-corrected labels): bomb-threat `0x2713` at the offer, arm `0x2710` on deploy, **explosion `0x2714` once at detonation**, ransom-paid `0x271F`, **fire-outbreak `0x2716` once at ignition**, fire-crackle `0x2719` looping while burning. Verified.
 - [x] **`0x87EC` red floor-plate** — the shaft floor number lights red when a car is on that floor (IsCarOnFloor). Verified at the real surface (forced via `ELV_REDTEST` for capture).
-- [ ] **24px elevator mode-icon art** — still vector glyphs (scan/shuttle/hold). The real icons are a boot-loaded GDI bitmap, not a standard NE resource, so extraction is unresolved. Low priority; needs a referee pass to locate the GDI blob.
-- [ ] **Shop closed / for-rent sprite frames** (referee 2026-07-18) — restaurants/FF already draw the state-byte closed frame (`variant*4+3` via `retail_open`); SHOPS still don't. Faithful fix: load the shop sheet's shared **closed frame 0x22** and **for-rent 0x21**, and pick shop frame by state (`0xFF→0x21`, closed→`0x22`, else `variant*3+state`) instead of the capacity bucket. Needs the two shared frames loaded (the port's per-variant 3-frame sheets omit them). See docs/ORIGINAL-BUGS.md "Resolved".
-- [ ] **Two defined-but-unwired sounds** (audit 2026-07-21): `SND_GARBAGE`
-  (#2280, garbage-truck collection) and `SND_GUARD_STEP` (#10014, bomb-guard
-  footsteps) exist in `audio_events.h` but nothing triggers them yet.
-- [ ] **Cinema soundtrack sub-index mapping** — the 9xxx movie themes play,
-  but which theme belongs to which film is a guess (`movie_id % 13`); the
-  real EXE mapping is undecoded. Needs a referee pass.
-- [ ] **NE string-table reader** — event dialog/feed text is hardcoded to
-  match the original wording; the real strings (res `0xBC2`–`0xBD0` etc.)
-  sit unread in the EXE. A small string-table loader would make the text
-  byte-faithful and localizable for free.
+- [x] **24px elevator mode-icon art** — the "boot-loaded GDI bitmap" claim was wrong: they're plain RT_BITMAP (0x8002) resources 0x8192/0x8193/0x8194, 24x21 (referee_elv_mode_icons_2026-07-30). Drawn per period in the faithful dialog (Full zigzag / Express Up / Express Down). Verified at the real surface on SCHMITT's express shaft.
+- [x] **Shop closed / for-rent sprite frames** — shops now draw the two
+  SHARED single-frame sheets (0x8673 "For RENT" when un-let, 0x8674
+  shuttered when `!retail_open`; fill frames otherwise). Verified both ways
+  at the real surface: SCHMITT's own retail table imports its B7–B9 shops
+  closed (state 3 → shutters); the same records stamped open+patrons show
+  packed fill frames.
+- [x] **Two defined-but-unwired sounds** — `SND_GARBAGE` rings once as the
+  recycling truck pulls up (trash-cycle phase 4, any working center);
+  `SND_GUARD_STEP` loops on the ambient loop channel while a bomb sweep
+  runs (same machinery as the fire crackle). Garbage firing verified via
+  CT_SOUND_DEBUG tally on SCHMITT; both WAVs confirmed valid RIFF in the EXE.
+- [x] **Cinema soundtrack sub-index mapping** — decoded
+  (referee_cinema_soundtrack_2026-07-30): each film has its OWN fixed theme,
+  sound = 9001 + movie_id (11c8:0895 `add ax,0x2329`); the `% 13` pool is
+  gone. Films 3 and 6 are non-RIFF in our EXE → silence, like the original.
+- [x] **NE string-table reader** — `src/strings.{c,h}` reads the 21 custom
+  0x7f06 string tables (movie titles, item names) and RT_DIALOG control
+  captions (event/VIP/star dialogs, with `^0`/`$#000` substitution). All
+  user-visible event/dialog text now comes from the EXE with the old
+  hardcoded wording as fallback. Verified against the real EXE: 21 tables +
+  43 dialog texts load; titles/dialogs byte-checked via harness.
 
 ## Backlog / research / MODS
 - [ ] **MOD: merge F3 graphs into F7 financial report** — the over-time trend graphs (F3 Analytics: Population/Commuters, Income/Expenses, Value built/lost — a port invention) could be surfaced inside the faithful 1994 financial-report dialog (F7, art 0x81f4). Keep them optional/mod-gated since the original report has no graph. Jonah asked to keep both surfaces for now; merge later. (2026-07-16)

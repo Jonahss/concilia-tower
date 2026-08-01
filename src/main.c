@@ -21,6 +21,7 @@
 #include "twr.h"
 #include "audio.h"
 #include "sound_hook.h"
+#include "strings.h"
 
 /* ---------- Window / display ---------- */
 #define WINDOW_W    960
@@ -73,12 +74,14 @@
 #define SPR_HOTEL_SUITE_B 0x8529
 
 /* Shop: 0x8668-0x8672 = 11 shop type variants, each 288×24 (3 frames of 96px)
- *        0x8673-0x8674 = end-cap/signage pieces, 96×24 each
+ *        0x8673 = shared "For RENT" storefront, 0x8674 = shared closed
+ *        shutters (single 96×24 frames — the EXE's frames 0x21/0x22 past
+ *        the 11×3 variant frames)
  * OpenSkyscraper: loadMergedByID(shops[1], 'y', 0x8668..0x8672) */
 #define SPR_SHOP_BASE   0x8668  /* 288×24, 3 frames of 96px */
 #define SPR_SHOP_VARIANTS 11    /* 0x8668 through 0x8672 */
-#define SPR_SHOP_END0   0x8673  /* Left/right end-cap, 96×24 */
-#define SPR_SHOP_END1   0x8674
+#define SPR_SHOP_END0   0x8673  /* shared For-RENT frame (EXE frame 0x21) */
+#define SPR_SHOP_END1   0x8674  /* shared closed frame  (EXE frame 0x22) */
 
 /* Security: 0x8768 (animated, 3 frames via palette cycling) */
 #define SPR_SECURITY    0x8768
@@ -458,6 +461,14 @@ typedef struct {
     int             disaster_modal;       /* 1 = modal capturing input */
     GameSpeed       disaster_saved_speed; /* speed to restore on dismiss */
 
+    /* One-button notice dialog — the EXE pops these for event resolutions
+     * and VIP visits (dialogs 0xBB9/0xBBA/0xBBB/0xBC5/0xBCF/0xBD0), pausing
+     * until dismissed. Text/button come straight from the dialog resource. */
+    int             notice_modal;
+    char            notice_text[192];
+    char            notice_btn[32];
+    GameSpeed       notice_saved_speed;
+
     /* Star-promotion certificate — a celebratory card shown when the tower
      * earns a new star. Non-blocking; auto-dismisses or click to close. */
     int             cert_active;
@@ -793,16 +804,15 @@ static void ambient_tick(void)
     case ITEM_PARKING:      id = (rand() & 1) ? AMB_PARKING_A : AMB_PARKING_B; break;
     case ITEM_PARTY_HALL:   id = AMB_PARTY; break;
     case ITEM_CINEMA: {
-        /* A running show (venue_state 3) emits one of the 9xxx soundtrack WAVs.
-         * The exact EXE sub-index is undecoded (referee MED), so we key it to
-         * the film for a stable "each film has its theme". Two ids in the block
-         * (0xA32C/0xA32F) are non-RIFF and omitted. */
-        static const uint16_t soundtrack[] = {
-            0xA329, 0xA32A, 0xA32B, 0xA32D, 0xA32E, 0xA330, 0xA331,
-            0xA332, 0xA333, 0xA334, 0xA335, 0xA336, 0xA337 };
+        /* A running show (venue_state 3, SoundT 11c8:0875) plays that film's
+         * OWN theme: sound resource 9001 + movie_id (11c8:0895 `add ax,0x2329`)
+         * — a fixed per-film mapping, no pool (referee 2026-07-30, HIGH).
+         * Films 3 and 6 point at non-RIFF resources (0xA32C/0xA32F) in our
+         * EXE — the original most likely runs those two films silent, and so
+         * do we (play_snd no-ops on an unloaded clip). */
         Tenant *ct = tower_tenant(&game.tower, game.tower.grid[fidx][cell].tenant_id);
         if (!ct || ct->venue_state != 3) return;   /* silent unless showing */
-        id = soundtrack[ct->movie_id % (int)(sizeof soundtrack / sizeof soundtrack[0])];
+        id = (uint16_t)(0xA329 + ct->movie_id);
         break;
     }
     default: return;   /* other/infrastructure types silent */
@@ -883,6 +893,41 @@ static int draw_text(const char *text, int x, int y, SDL_Color color)
     SDL_RenderCopy(game.renderer, tex, NULL, &dst);
     SDL_DestroyTexture(tex);
     return w;
+}
+
+/* Draw a dialog-style body: split on '\n', word-wrap each paragraph to
+ * max_w. Returns the y just below the last line drawn. Used for the EXE
+ * dialog texts, whose line breaks were laid out for the original's
+ * dialog widths. */
+static int draw_text_wrapped(const char *text, int x, int y, int max_w,
+                             SDL_Color color)
+{
+    char line[160];
+    const char *p = text;
+    while (*p) {
+        /* collect words until the line would overflow max_w */
+        int len = 0;
+        line[0] = '\0';
+        while (*p && *p != '\n') {
+            const char *we = p;
+            while (*we && *we != ' ' && *we != '\n') we++;
+            int wl = (int)(we - p);
+            char probe[160];
+            snprintf(probe, sizeof probe, "%s%s%.*s",
+                     line, len ? " " : "", wl, p);
+            int tw = 0, th = 0;
+            if (game.font) TTF_SizeUTF8(game.font, probe, &tw, &th);
+            if (len && tw > max_w) break;         /* wrap before this word */
+            snprintf(line, sizeof line, "%s", probe);
+            len = 1;
+            p = we;
+            while (*p == ' ') p++;
+        }
+        if (line[0]) draw_text(line, x, y, color);
+        y += 18;
+        if (*p == '\n') p++;
+    }
+    return y;
 }
 
 /* ---------- Rendering ---------- */
@@ -1528,10 +1573,27 @@ static void render_tower(void)
                               : tenant->patrons_now >= 1  ? 1 : 0;
                     if (frame_idx > crowd_frames - 1) frame_idx = crowd_frames - 1;
                 } else if (tenant->type == ITEM_SHOP && nframes >= 3) {
-                    /* shops share the patron tiers (no closed frame in the
-                     * sheet — verified 2026-06-13) */
-                    frame_idx = tenant->patrons_now >= 10 ? 2
-                              : tenant->patrons_now >= 1  ? 1 : 0;
+                    /* Shops: the variant sheets hold only the 3 fill frames;
+                     * the closed and for-rent storefronts are the two SHARED
+                     * single-frame sheets appended after the 11 variants —
+                     * frame 0x21 = 0x8673 "For RENT", 0x22 = 0x8674 shuttered
+                     * (referee 2026-07-18; sheets dumped and confirmed
+                     * 2026-07-30 — their old "end-cap" label was wrong).
+                     * State pick per the EXE: un-let → 0x21, outside opening
+                     * hours → 0x22, else the patron tiers. */
+                    uint16_t shared =
+                        tenant->state == TENANT_ABANDONED ? SPR_SHOP_END0
+                        : !tenant->retail_open            ? SPR_SHOP_END1 : 0;
+                    Sprite *sh = shared ? sprites_find(&game.sprites, shared)
+                                        : NULL;
+                    if (sh) {
+                        spr = sh;
+                        nframes = 1;
+                        frame_idx = 0;
+                    } else {
+                        frame_idx = tenant->patrons_now >= 10 ? 2
+                                  : tenant->patrons_now >= 1  ? 1 : 0;
+                    }
                 } else if (tenant->capacity <= CAP_EMPTY) {
                     frame_idx = 0;
                 } else {
@@ -2409,23 +2471,32 @@ static void elv_box(int ox, int oy, int x, int y, int w, int h,
     else      SDL_RenderDrawRect(game.renderer, &rc);
 }
 
-/* One of the three schedule modes (0/1/2) the EXE's ELVPOPUP picks. The
- * original blits a 24px icon per mode from an app-global strip we haven't
- * isolated yet; until then we draw a distinct pictograph per mode that reads
- * at a glance (scan / shuttle / hold) — NOT a bare digit. */
+/* One of the three schedule modes (0/1/2). The REAL icons are ordinary
+ * RT_BITMAP resources 0x8192/0x8193/0x8194 (24x21) — the earlier "boot-
+ * loaded GDI blob we can't extract" note was wrong; the EXE composes them
+ * into a strip at boot (seg_1098:0068) which is what hid them. Semantics
+ * per the art: mode 0 = Full service (gray zigzag), 1 = Express Up (red
+ * up-arrow), 2 = Express Down (red down-arrow). (Referee 2026-07-30.) */
 static void elv_mode_glyph(int cx, int cy, int mode)
 {
+    Sprite *icon = sprites_find(&game.sprites,
+                                (uint16_t)(0x8192 + (mode % 3)));
+    if (icon) {
+        SDL_Rect dst = { cx - icon->w / 2, cy - icon->h / 2,
+                         icon->w, icon->h };
+        SDL_RenderCopy(game.renderer, icon->texture, NULL, &dst);
+        return;
+    }
+    /* fallback pictograph if the bitmap is missing */
     SDL_SetRenderDrawColor(game.renderer, 20, 20, 20, 255);
-    if (mode == 1) {                     /* shuttle: bar with heads at both ends */
+    if (mode == 1) {
         SDL_RenderDrawLine(game.renderer, cx, cy - 6, cx, cy + 6);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 3; i++)
             SDL_RenderDrawLine(game.renderer, cx - i, cy - 6 + i, cx + i, cy - 6 + i);
-            SDL_RenderDrawLine(game.renderer, cx - i, cy + 6 - i, cx + i, cy + 6 - i);
-        }
-    } else if (mode == 2) {              /* hold: small filled square */
+    } else if (mode == 2) {
         SDL_Rect r = { cx - 4, cy - 4, 8, 8 };
         SDL_RenderFillRect(game.renderer, &r);
-    } else {                             /* scan: up + down triangles stacked */
+    } else {
         for (int i = 0; i < 4; i++) {
             SDL_RenderDrawLine(game.renderer, cx - i, cy - 2 - i, cx + i, cy - 2 - i);
             SDL_RenderDrawLine(game.renderer, cx - i, cy + 2 + i, cx + i, cy + 2 + i);
@@ -2469,10 +2540,14 @@ static void render_elv_dialog_faithful(void)
     int wx = game.elv_x, wy = game.elv_y;
     int bx = wx, by = wy + WIN_TITLEBAR_H;   /* bitmap origin (client area) */
 
+    /* Transport names from EXE string table 0x190 (0 Express, 1 Standard,
+     * 2 Service). */
     const char *title =
-        s->type == ITEM_ELEVATOR_EXPRESS ? "Express Elevator"
-      : s->type == ITEM_ELEVATOR_SERVICE ? "Service Elevator"
-                                         : "Elevator";
+        s->type == ITEM_ELEVATOR_EXPRESS
+            ? exe_str(0x0190, 0, "Express Elevator")
+      : s->type == ITEM_ELEVATOR_SERVICE
+            ? exe_str(0x0190, 2, "Service Elevator")
+            : exe_str(0x0190, 1, "Standard Elevator");
     draw_win31_titlebar(wx, wy, ELV_DLG_W, title);
 
     Sprite *bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
@@ -4710,7 +4785,9 @@ static void render_events(void)
  * paid off at a star-scaled ransom, or security hunts it until 1PM. */
 
 #define DMODAL_W 360
-#define DMODAL_H 156
+/* Fire carries two EXE texts (report 0xBC3 + crew offer 0xBC4) and needs
+ * the taller card. */
+#define DMODAL_H (game.sim.event.type == EVENT_FIRE ? 216 : 156)
 
 static void disaster_modal_origin(int *x, int *y)
 {
@@ -4778,30 +4855,48 @@ static void render_disaster_modal(void)
     }
 
     SDL_Color black = { 0, 0, 0, 255 };
-    char line[96];
+    char line[192], num[24];
     int ty = body_y + 16;
+    int text_w = wx + DMODAL_W - 14 - text_x;
     if (is_fire) {
-        snprintf(line, sizeof line, "Fire has broken out on floor %d!",
-                 game.sim.event.target_floor);
-        draw_text(line, text_x, ty, black); ty += 24;
-        draw_text("Hire firefighting helicopters for", text_x, ty, black); ty += 18;
-        draw_text("$500,000 - or let it burn itself out?", text_x, ty, black);
+        /* The EXE's own words: outbreak report (dialog 0xBC3, ^0 = floor)
+         * + the fire-crew offer (0xBC4, $#000 = the fee). */
+        char rep[192];
+        snprintf(num, sizeof num, "%d", game.sim.event.target_floor);
+        str_subst(rep, sizeof rep,
+                  exe_dlg_text(0xBC3, 0, "A fire has been reported on floor "
+                               "^0!\nEveryone should take emergency refuge!"),
+                  "^0", num);
+        ty = draw_text_wrapped(rep, text_x, ty, text_w, black) + 6;
+        format_money(FIRE_CHOPPER_COST, num, sizeof num);
+        str_subst(line, sizeof line,
+                  exe_dlg_text(0xBC4, 0, "Would you like to call an emergency "
+                               "fire crew?\nIt will cost $#000."),
+                  "$#000", num);
+        draw_text_wrapped(line, text_x, ty, text_w, black);
     } else {
-        /* The EXE's threat dialog names the price but NOT the floor —
-         * with no fire department, you pay blind (dialog 0xBCE). */
-        draw_text("A bomb has been planted in the tower.", text_x, ty, black); ty += 24;
-        draw_text("Send security to hunt for it (they may", text_x, ty, black); ty += 18;
-        draw_text("fail and it detonates) - or pay it off.", text_x, ty, black);
+        /* Dialog 0xBCC: the blackmail note names the price but NOT the
+         * floor — you pay blind. */
+        format_money(game.sim.event.ransom_cost, num, sizeof num);
+        str_subst(line, sizeof line,
+                  exe_dlg_text(0xBCC, 2, "Blackmail from Terrorists!\nThey "
+                               "demand $#000 or a hidden bomb will explode "
+                               "at 3 o'clock."),
+                  "$#000", num);
+        draw_text_wrapped(line, text_x, ty, text_w, black);
     }
 
     if (is_fire) {
-        draw_modal_button(disaster_btn_rect(0), "Let It Burn");
-        draw_modal_button(disaster_btn_rect(1), "Helicopters $500,000");
+        /* 0xBC4's buttons are Yes/No; keep which-is-which explicit. */
+        draw_modal_button(disaster_btn_rect(0),
+                          exe_dlg_text(0xBC4, 2, "No"));
+        draw_modal_button(disaster_btn_rect(1),
+                          exe_dlg_text(0xBC4, 1, "Yes"));
     } else {
-        draw_modal_button(disaster_btn_rect(0), "Deploy Security");
-        char pay[48];
-        snprintf(pay, sizeof pay, "Pay $%d", game.sim.event.ransom_cost);
-        draw_modal_button(disaster_btn_rect(1), pay);
+        draw_modal_button(disaster_btn_rect(0),
+                          exe_dlg_text(0xBCC, 0, "Find the Bomb"));
+        draw_modal_button(disaster_btn_rect(1),
+                          exe_dlg_text(0xBCC, 1, "Pay Them"));
     }
 }
 
@@ -4856,6 +4951,47 @@ static void disaster_modal_key(SDL_Keycode k)
         disaster_do_proceed();
     else if (k == SDLK_p || k == SDLK_y)
         disaster_do_ransom();
+}
+
+/* ---- One-button notice dialogs (the EXE's resolution/VIP popups) ---- */
+#define NOTICE_W 340
+#define NOTICE_H 140
+
+static void show_notice_modal(const char *text, const char *btn)
+{
+    snprintf(game.notice_text, sizeof game.notice_text, "%s", text);
+    snprintf(game.notice_btn, sizeof game.notice_btn, "%s", btn);
+    if (!game.notice_modal) {           /* don't clobber saved speed */
+        game.notice_saved_speed = game.sim.speed;
+        game.notice_modal = 1;
+    }
+    game.sim.speed = SPEED_PAUSED;
+}
+
+static SDL_Rect notice_btn_rect(void)
+{
+    int wx = (game.screen_w - NOTICE_W) / 2;
+    int wy = (game.screen_h - NOTICE_H) / 2;
+    SDL_Rect r = { wx + (NOTICE_W - 110) / 2, wy + NOTICE_H - 40, 110, 26 };
+    return r;
+}
+
+static void render_notice_modal(void)
+{
+    if (!game.notice_modal) return;
+    int wx = (game.screen_w - NOTICE_W) / 2;
+    int wy = (game.screen_h - NOTICE_H) / 2;
+    draw_win31_rect(wx, wy, NOTICE_W, NOTICE_H, 1);
+    SDL_Color black = { 0, 0, 0, 255 };
+    draw_text_wrapped(game.notice_text, wx + 18, wy + 16,
+                      NOTICE_W - 36, black);
+    draw_modal_button(notice_btn_rect(), game.notice_btn);
+}
+
+static void notice_close(void)
+{
+    game.notice_modal = 0;
+    game.sim.speed = game.notice_saved_speed;
 }
 
 /* ---- Route-loss confirmations (res 0x3ed, text verbatim) ----
@@ -5100,13 +5236,21 @@ static void render_certificate(void)
         }
     }
 
-    char line[96];
-    if (is_tower)
-        snprintf(line, sizeof line, "Your skyscraper has earned TOWER status!");
-    else
-        snprintf(line, sizeof line, "Your tower is now a %d-star tower!", game.cert_star);
-    draw_text_centered(line, cx, wy + 120, ink);
-    draw_text_centered("Congratulations, architect.", cx, wy + 146, ink);
+    /* The EXE's own congratulation (dialogs 0xBD6..0xBDA: 2..5 stars +
+     * "Tower" rating), split on its embedded newline. */
+    {
+        int star = game.cert_star < 2 ? 2 : game.cert_star > 6 ? 6
+                                                               : game.cert_star;
+        char full[160], *nl;
+        snprintf(full, sizeof full, "%s",
+                 exe_dlg_text((uint16_t)(0xBD6 + star - 2), 0,
+                              "Congratulations!\nYour tower has been given "
+                              "a new Star Rating!"));
+        nl = strchr(full, '\n');
+        if (nl) *nl = '\0';
+        draw_text_centered(full, cx, wy + 120, ink);
+        draw_text_centered(nl ? nl + 1 : "", cx, wy + 146, ink);
+    }
     SDL_Color faint = { 150, 130, 90, 255 };
     draw_text_centered("(click to dismiss)", cx, wy + CERT_H - 30, faint);
 }
@@ -5177,14 +5321,21 @@ static void tenant_clear_name(uint16_t id)   /* the rename dialog's Delete */
     if (t) t->name[0] = 0;
 }
 
-/* The 14 real movie titles (res 0x1A4), indexed by movie_id 0..13. */
-static const char *MOVIE_TITLES[14] = {
+/* The 14 movie titles, read from the EXE's string table 0x1A4 at display
+ * time (movie_id 0..13; the table's 15th title is unreachable in the EXE
+ * too — referee 2026-07-30). Literals kept as fallbacks. */
+static const char *MOVIE_TITLES_FALLBACK[14] = {
     "Revenge of the Big Spider", "Northwest Romance", "Samurai Cop",
     "Big Wave", "Farewell to Morocco", "Fear of Shark Teeth",
     "Western Sheriff", "Dino Wars", "The Making of a Star",
     "Love in N.Y.", "Waikiki Moon", "My Man of War",
     "Christmas for Both of Us", "Casual Friends",
 };
+static const char *movie_title(int id)
+{
+    if (id < 0 || id >= 14) return "-";
+    return exe_str(0x01a4, id, MOVIE_TITLES_FALLBACK[id]);
+}
 #define MOVIE_COST_HIT      300000   /* EXE 0xDE10=3000 x$100 */
 #define MOVIE_COST_ORDINARY 150000   /* EXE 0xDE12=1500 x$100 */
 
@@ -5316,7 +5467,7 @@ static void ti_build(const Tenant *t, TiLayout *L)
         nf++;
     } else if (inspect_is_cinema(t)) {
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Playing");
-        snprintf(f[nf].value, 40, "%s", t->movie_id < 14 ? MOVIE_TITLES[t->movie_id] : "-"); nf++;
+        snprintf(f[nf].value, 40, "%s", movie_title(t->movie_id)); nf++;
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Showing");
         inspect_showing_str(t, f[nf].value, 40); nf++;
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Today");
@@ -6155,7 +6306,7 @@ static void render_movie_chooser(void)
     SDL_RenderDrawRect(game.renderer, &d);
     stats_label(d.x + 12, d.y + 10, "Book a new movie:", ink);
     char now[64]; snprintf(now, sizeof now, "Now: %s",
-                           t->movie_id < 14 ? MOVIE_TITLES[t->movie_id] : "-");
+                           movie_title(t->movie_id));
     stats_label(d.x + 12, d.y + 32, now, ink);
 
     long money = game.tower.money;
@@ -6428,6 +6579,7 @@ static void render(void)
     render_menu_bar();         /* Win3.1 top bar + its open dropdown */
     render_dropdown();
     render_disaster_modal();   /* on top of everything — it's modal */
+    render_notice_modal();     /* resolution/VIP notices, same layer */
     render_route_confirm();    /* likewise */
     render_certificate();      /* star-promotion celebration card */
 
@@ -7043,6 +7195,32 @@ static void handle_event(SDL_Event *ev)
             break;
         case SDL_KEYDOWN:
             route_confirm_key(ev->key.keysym.sym);
+            break;
+        }
+        return;
+    }
+
+    /* Notice dialogs are modal too: OK / Enter / Esc / Space dismisses. */
+    if (game.notice_modal) {
+        switch (ev->type) {
+        case SDL_QUIT:
+            game.running = 0;
+            break;
+        case SDL_MOUSEMOTION:
+            game.mouse_x = ev->motion.x;
+            game.mouse_y = ev->motion.y;
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (ev->button.button == SDL_BUTTON_LEFT &&
+                point_in_rect(ev->button.x, ev->button.y, notice_btn_rect()))
+                notice_close();
+            break;
+        case SDL_KEYDOWN:
+            if (ev->key.keysym.sym == SDLK_RETURN ||
+                ev->key.keysym.sym == SDLK_KP_ENTER ||
+                ev->key.keysym.sym == SDLK_ESCAPE ||
+                ev->key.keysym.sym == SDLK_SPACE)
+                notice_close();
             break;
         }
         return;
@@ -7836,6 +8014,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to load %s\n", exe_path);
         return 1;
     }
+    exe_strings_init(&game.exe);   /* 0x7f06 string tables + dialog texts */
     
     /* Initialize SDL */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
@@ -8673,16 +8852,22 @@ int main(int argc, char *argv[])
             int prev_event_active = game.sim.event.active;
             game_update(&game.sim, &game.tower);
 
-            /* Fire crackle (#10009): loops while a fire burns, stops when out.
-             * The one-shot outbreak alert (#10006) fires from game.c at
-             * ignition; the explosion (#10004) at detonation. */
+            /* Loop channel: fire crackle (#10009) while a fire burns, guard
+             * search footsteps (#10014) while the bomb sweep runs. One event
+             * at a time in the EXE, so the single loop channel suffices.
+             * One-shots (outbreak #10006, explosion #10004) fire from game.c. */
             {
-                static int prev_fire = 0;
-                int fire_now = game.sim.event.active &&
-                               game.sim.event.type == EVENT_FIRE;
-                if (fire_now && !prev_fire)      audio_start_loop(SND_FIRE_LOOP, 0.5f);
-                else if (!fire_now && prev_fire) audio_stop_loop();
-                prev_fire = fire_now;
+                static int prev_loop = 0;   /* 0 none / 1 fire / 2 hunt */
+                int want = !game.sim.event.active ? 0
+                         : game.sim.event.type == EVENT_FIRE ? 1
+                         : (game.sim.event.type == EVENT_BOMB &&
+                            game.sim.event.hunt.active) ? 2 : 0;
+                if (want != prev_loop) {
+                    audio_stop_loop();
+                    if (want == 1) audio_start_loop(SND_FIRE_LOOP, 0.5f);
+                    if (want == 2) audio_start_loop(SND_GUARD_STEP, 0.5f);
+                    prev_loop = want;
+                }
             }
 
             /* A freshly proposed disaster pauses the game for the player's
@@ -8720,28 +8905,73 @@ int main(int argc, char *argv[])
                              game.sim.event.target_floor);
                 add_event_message(buf);
             } else if (!game.sim.event.active && prev_event_active) {
-                char buf[48];
-                if (game.sim.event.type == EVENT_BOMB && game.sim.event.caught)
-                    snprintf(buf, sizeof buf, "Security caught the bomb! Crisis averted.");
-                else if (game.sim.event.type == EVENT_BOMB)
+                /* Resolution: the EXE pops a one-button dialog (0xBCF
+                 * caught / 0xBD0 exploded / 0xBC5 fire out) — shown as a
+                 * notice modal with its wording and button; the feed keeps
+                 * a short log line. */
+                char buf[EVENT_MSG_LEN];
+                if (game.sim.event.type == EVENT_BOMB && game.sim.event.caught) {
+                    show_notice_modal(
+                        exe_dlg_text(0xBCF, 0,
+                                     "Security Forces found the bomb.  "
+                                     "Good work!"),
+                        exe_dlg_text(0xBCF, 1, "Thanks!"));
+                    snprintf(buf, sizeof buf,
+                             "Security caught the bomb! Crisis averted.");
+                } else if (game.sim.event.type == EVENT_BOMB) {
+                    char full[192], num[8];
+                    snprintf(num, sizeof num, "%d",
+                             game.sim.event.target_floor);
+                    str_subst(full, sizeof full,
+                              exe_dlg_text(0xBD0, 0,
+                                           "Security was not able to find "
+                                           "the bomb in time.  The bomb has "
+                                           "exploded on floor ^0!"),
+                              "^0", num);
+                    show_notice_modal(full, exe_dlg_text(0xBD0, 1, "Oh No!"));
                     snprintf(buf, sizeof buf, "BOMB EXPLODED! $%d in damage.",
                              game.sim.event.damage_cost);
-                else
+                } else {
+                    show_notice_modal(
+                        exe_dlg_text(0xBC5, 0,
+                                     "The fire was stopped.\nBecause your "
+                                     "building has emergency stairs, no one "
+                                     "was injured, but the tower is damaged."),
+                        exe_dlg_text(0xBC5, 1, "I Know"));
                     snprintf(buf, sizeof buf, "Fire extinguished on floor %d.",
                              game.sim.event.target_floor);
+                }
                 add_event_message(buf);
             }
 
-            /* VIP visit notifications (one-shot signal from the sim). The VIP
-             * is now a real star-promotion gate, so the player needs to see it. */
+            /* VIP visits: the EXE's dialogs 0xBB9 (arrival), 0xBBA (happy
+             * checkout), 0xBBB (unhappy) as notice modals — with the EXE's
+             * button labels — plus a short feed log line. */
             if (game.sim.vip_notice) {
-                /* the EXE's dialog texts (RT_DIALOG 0xBB9/0xBBA/0xBBB) */
-                if (game.sim.vip_notice == 1)
-                    add_event_message("Oh No! A VIP has arrived at your Tower.");
-                else if (game.sim.vip_notice == 2)
-                    add_event_message("Whew! The VIP has checked out after a comfortable stay!");
-                else
-                    add_event_message("Sorry! The VIP was not pleased with your tower.");
+                if (game.sim.vip_notice == 1) {
+                    show_notice_modal(
+                        exe_dlg_text(0xBB9, 1,
+                                     "A VIP has arrived at your Tower."),
+                        exe_dlg_text(0xBB9, 0, "Oh No!"));
+                    add_event_message("A VIP has arrived at your Tower.");
+                } else if (game.sim.vip_notice == 2) {
+                    char buf[192];
+                    snprintf(buf, sizeof buf, "%s\n%s",
+                             exe_dlg_text(0xBBA, 1, "The VIP has checked out."),
+                             exe_dlg_text(0xBBA, 2,
+                                          "They seem to have had a "
+                                          "comfortable stay!"));
+                    show_notice_modal(buf, exe_dlg_text(0xBBA, 0, "Whew!"));
+                    add_event_message("The VIP had a comfortable stay!");
+                } else {
+                    show_notice_modal(
+                        exe_dlg_text(0xBBB, 0,
+                                     "Sorry! The VIP seems to have had an "
+                                     "uncomfortable stay.  They are not "
+                                     "pleased with your tower."),
+                        exe_dlg_text(0xBBB, 1, "Rats!"));
+                    add_event_message("The VIP was not pleased.");
+                }
                 game.sim.vip_notice = 0;
             }
 
