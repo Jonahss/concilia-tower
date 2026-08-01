@@ -911,6 +911,76 @@ static void test_elevator_dialog(void)
           "serviced flags survived; new floor defaults on");
 }
 
+/* Modes 1/2 = one-way shuttles (FindTargetFloor raw 1322-1363/1490-1526):
+ * "Express Up" runs NONSTOP to the top, serves on the way down. And the
+ * patience dwell holds doors OPEN, only at the home floor or a lobby. */
+#define DOOR_TICKS_TEST 5   /* people.c DOOR_OPEN_TICKS */
+static void test_shuttle_and_patience(void)
+{
+    printf("shuttle modes & patience dwell:\n");
+    fresh();
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    ElevatorShaft *s = &sim.people.shafts[0];
+    int g = floor_to_index(0), f3 = floor_to_index(3), f6 = floor_to_index(6);
+
+    /* Express Up all periods; rider aboard at ground wants f3 */
+    memset(s->sched_mode, 1, sizeof s->sched_mode);
+    ElevatorCar *c = &s->car[0];
+    c->floor = c->target = (uint8_t)g;
+    c->dir = 1;
+    c->passengers = 1; c->pax[0] = 1; c->pax_dest[0] = (uint8_t)f3;
+    c->dest_count[f3] = 1; c->distinct_dests = 1;
+    sim.people.people_high = 4;
+    sim.people.people[0].home_tenant = 1;
+    sim.people.people[0].state = PERSON_RIDING;
+    sim.people.people[0].cur_floor = (uint8_t)g;
+    sim.people.people[0].dest_floor = (uint8_t)f3;
+    sim.people.people[0].leg_floor = (uint8_t)f3;
+    c->door_timer = 1;               /* closing: next tick picks a target */
+    int doors_at_f3_going_up = 0, reached_top = 0, served_f3_after = 0;
+    for (int t = 0; t < 600; t++) {
+        people_update(&sim.people, &tw, t, 1, 9,
+                      sim.reach_public, sim.reach_service);
+        if (!reached_top && c->floor == f3 && c->door_timer)
+            doors_at_f3_going_up = 1;
+        if (c->floor == f6) reached_top = 1;
+        if (reached_top && c->floor == f3 && c->passengers == 0)
+            { served_f3_after = 1; break; }
+    }
+    CHECK(reached_top, "Express Up car ran to the shaft top");
+    CHECK(!doors_at_f3_going_up, "nonstop leg skipped the rider's floor");
+    CHECK(served_f3_after, "rider delivered on the DOWN serve leg");
+
+    /* Patience dwell: doors held open at a lobby/home floor... */
+    memset(s->sched_mode, 0, sizeof s->sched_mode);
+    memset(s->sched_patience, 2, sizeof s->sched_patience); /* 60 ticks */
+    c->floor = c->target = (uint8_t)g;   /* ground = lobby (and home) */
+    c->dir = 1;
+    c->door_timer = DOOR_TICKS_TEST;     /* just opened */
+    int held = 0;
+    for (int t = 0; t < 30; t++) {
+        people_update(&sim.people, &tw, 1000 + t, 1, 9,
+                      sim.reach_public, sim.reach_service);
+        if (c->door_timer == 1) held++;
+    }
+    CHECK(held > 20, "patience holds the doors open at the lobby");
+    /* ...but NOT at an ordinary floor (ShouldTimeout: home or lobby only).
+     * Count door-open ticks only while the car is still AT f3 — once it
+     * departs it heads home, where doors legitimately reopen. */
+    c->floor = c->target = (uint8_t)f3;
+    c->door_timer = DOOR_TICKS_TEST;
+    c->hold_timer = 0;
+    int open_ticks = 0;
+    for (int t = 0; t < 30; t++) {
+        people_update(&sim.people, &tw, 2000 + t, 1, 9,
+                      sim.reach_public, sim.reach_service);
+        if (c->floor == f3 && c->door_timer) open_ticks++;
+    }
+    CHECK(open_ticks <= DOOR_TICKS_TEST,
+          "no dwell at a non-lobby, non-home floor");
+}
+
 /* Patrons visit venues and leave; housekeepers ride the service net */
 static void test_patrons_and_staff(void)
 {
@@ -1542,20 +1612,20 @@ static void test_schedules(void)
     s->car[1].dest_count[s->hi] = 0;
     people_set_num_cars(&sim.people, 0, 1);
 
-    /* shuttle mode: an idle car with no work runs to the shaft's far end
-     * instead of its home floor */
+    /* shuttle modes: a WORKLESS shuttle car parks at HOME like any other
+     * car — the EXE's no-work->home check (raw 1313-1319) precedes the
+     * mode branches. (The one-way express behavior when it HAS work is
+     * covered in test_shuttle_and_patience.) */
     s->sched_mode[0][0] = 1;
-    s->car[0].floor = s->car[0].target = s->lo;
-    s->car[0].dir = 1;
-    /* salesmen may add mid-run traffic now — assert the car REACHED the
-     * far end while idle, not that it's parked there at the cutoff */
-    int topped = 0;
+    s->car[0].floor = s->car[0].target = s->hi;
+    s->car[0].dir = 0;
+    int homed = 0;
     for (int i = 0; i < 400; i++) {
         people_update(&sim.people, &tw, i, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
-        if (s->car[0].floor == s->hi) topped = 1;
+        if (s->car[0].floor == s->home[0]) homed = 1;
     }
-    CHECK(topped, "shuttle mode: idle car ran to the top of the shaft");
+    CHECK(homed, "idle shuttle car returns HOME, not to the shaft's end");
     s->sched_mode[0][0] = 0;
 
     /* patience: workers still arrive, but cars dwell (hold_timer engages) */
@@ -2941,6 +3011,7 @@ int main(void)
     test_errand_warning_watchdog();
     test_queue_and_stress();
     test_elevator_dialog();
+    test_shuttle_and_patience();
     test_patrons_and_staff();
     test_money();
     test_retail_economy();

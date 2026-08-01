@@ -206,7 +206,7 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             s->lo = (uint8_t)lo;
             s->hi = (uint8_t)(f - 1);
             s->x = x;
-            /* group+2 from the EXE: 42 standard, 21 express/service
+            /* group+2 from the EXE: 42 express, 21 standard/service
              * (refreshed from TUNING every tick; clamped to slots) */
             s->capacity = (ty == ITEM_ELEVATOR_EXPRESS) ? 42 : 21;
             s->num_cars = 1;          /* fresh shaft; the dialog's car count is
@@ -362,6 +362,18 @@ static int queue_len(const ElevatorShaft *s, int floor, int up)
 {
     const ElevatorStop *st = &s->stop[floor];
     return up ? st->up_count : st->down_count;
+}
+
+/* Ground or sky lobby anywhere on this floor? (EXE FUN_10a0_1366 —
+ * ShouldTimeout's "may the car dwell here" test) */
+static int floor_is_lobby(const Tower *tower, int fidx)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type == ITEM_LOBBY && floor_to_index(t->floor) == fidx)
+            return 1;
+    }
+    return 0;
 }
 
 /* Does a lobby tenant on floor fidx overlap this shaft's footprint? */
@@ -782,11 +794,18 @@ static int dequeue(ElevatorShaft *s, int floor, int up)
  * pathological at fast speeds (18 frames at TURBO). Queues visibly
  * shrinking without a car IS the original's give-up mechanic. */
 
-static void bank_wait(Person *p, int frame)
+static void bank_wait(const PeopleSim *ps, Person *p, int frame)
 {
     int waited = frame - p->wait_start;
     if (waited < 0) waited = 0;
     int acc = p->wait_accum + waited;
+    /* Grand-lobby forgiveness (AddNowLobbyStress 11d8:01f1): the 25/50
+     * discount applies when banking a wait AT THE GROUND LOBBY — each
+     * such bank discounts accumulated+elapsed. Waits banked on other
+     * floors get no forgiveness (referee M4; the old whole-trip subtract
+     * at delivery let a tall lobby erase floor-40 queue pain). */
+    if (p->cur_floor == GROUND_IDX) acc -= ps->lobby_bonus;
+    if (acc < 0) acc = 0;
     p->wait_accum = (uint16_t)(acc > WAIT_CAP ? WAIT_CAP : acc);
 }
 
@@ -804,11 +823,9 @@ static void add_penalty(Person *p, int amount)
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
     Tenant *t = tower_tenant(tower, p->home_tenant);
-    /* The grand lobby forgives some waiting before it stings (WaitT). The
-     * forgiveness is what the tenant *feels*; the raw wait still feeds the
-     * elevator-performance average below. */
-    int felt = p->wait_accum - ps->lobby_bonus;
-    if (felt < 0) felt = 0;
+    /* Lobby forgiveness already happened per-bank inside bank_wait (M4);
+     * what's accumulated here is what the tenant feels. */
+    int felt = p->wait_accum;
     if ((int)(p - ps->people) == vip_watch) {      /* the VIP's own book */
         vip_stress_total += (unsigned)felt;
         vip_trips++;
@@ -922,9 +939,9 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         return;
     }
     /* Capture the felt wait BEFORE deliver_stress zeroes the accumulator —
-     * it grades the retail service score (Restaurant.c 11a8:1197). */
-    int felt = p->wait_accum - ps->lobby_bonus;
-    if (felt < 0) felt = 0;
+     * it grades the retail service score (Restaurant.c 11a8:1197).
+     * (Lobby forgiveness already applied per-bank in bank_wait.) */
+    int felt = p->wait_accum;
     deliver_stress(ps, tower, p);
     /* Sales-errand legs (UniPeple office statuses 0x40/0x61): the lobby
      * arrival parks the salesman making calls; the return leg puts him
@@ -988,6 +1005,8 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
 
 /* ---------- car state machine (ElevatorsT MoveElevator port) ---------- */
 
+static int shaft_extreme(const ElevatorShaft *s, int top);
+
 /* SCAN: nearest floor needing service in the current direction, else
  * reverse, else the bottom of the shaft (home). */
 static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci)
@@ -1002,6 +1021,37 @@ static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci)
      * full up-bound car back down: 21 hostages bouncing between ground
      * and floor 1 while floors 5+ starved (Jonah's tower, 2026-08-01). */
     int full = c->passengers >= s->capacity;
+    /* Modes 1/2 (FindTargetFloor raw 1322-1363 / 1490-1526) are one-way
+     * shuttles, not SCAN: "Express Up" (1) runs NONSTOP to the top, then
+     * serves onboard stops and its own calls of BOTH directions on the way
+     * down; "Express Down" (2) is the mirror. The no-work->home check in
+     * car_depart_or_idle already ran (raw 1313-1319 precedes these), so a
+     * workless shuttle car is parked at home, not here. */
+    if (c->schedule_index == 1 || c->schedule_index == 2) {
+        /* no-work->home runs FIRST in the EXE (raw 1313-1319 precedes the
+         * mode branches): a workless shuttle car parks at home, it does
+         * not patrol the extremes. */
+        if (!c->passengers && !c->distinct_dests && !c->assigned_calls)
+            return -1;
+        int express_up = c->schedule_index == 1;   /* nonstop leg direction */
+        if ((int)c->dir == express_up) {           /* nonstop leg */
+            int end = shaft_extreme(s, express_up);
+            if (end != c->floor) return end;
+            /* at the terminus: fall through to the serve leg */
+        }
+        int f = c->floor;                          /* serve leg */
+        while (1) {
+            f += express_up ? -1 : 1;
+            if (f < s->lo || f > s->hi) break;
+            if (c->dest_count[f]) return f;
+            if (!full && (s->up_call_car[f] == mine ||
+                          s->down_call_car[f] == mine))
+                return f;
+        }
+        /* default target = the serve leg's far end (raw 1330/1497) */
+        int end = shaft_extreme(s, !express_up);
+        return end != c->floor ? end : -1;
+    }
     for (int pass = 0; pass < 2; pass++) {
         int up = pass == 0 ? c->dir : !c->dir;
         int far_opp = -1;
@@ -1066,7 +1116,7 @@ static int board_one(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     if (pi < 0) return 0;
     Person *p = &ps->people[pi];
     if (s->type != ITEM_ELEVATOR_SERVICE)
-        bank_wait(p, frame);            /* staff never accrue wait stress */
+        bank_wait(ps, p, frame);        /* staff never accrue wait stress */
     /* in-shaft destination: leg target (dest or transfer lobby) */
     int slot = -1;
     for (int i = 0; i < CAR_SLOTS; i++) if (!c->pax[i]) { slot = i; break; }
@@ -1163,24 +1213,16 @@ static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
 
     int tgt = find_target_floor(s, c, ci);
     /* FindTargetFloor (1090:1553): a car with no work returns to its
-     * home floor (group +0xBA[8]); in shuttle mode (schedule 1, 1090:15c0)
-     * it runs to the far end of the shaft instead. */
-    if (tgt < 0 && !c->passengers) {
-        int rest = (c->schedule_index == 1)
-                       ? shaft_extreme(s, c->dir)
-                       : s->home[ci];
-        if (c->floor != rest) tgt = rest;
-    }
+     * home floor (group +0xBA[8]) — in EVERY mode; the raw no-work->home
+     * check (1313-1319) precedes the shuttle branches, so idle shuttle
+     * cars park at home, not at the shaft extremes. */
+    if (tgt < 0 && !c->passengers && c->floor != s->home[ci])
+        tgt = s->home[ci];
     if (tgt < 0) { c->target = c->floor; return; }   /* idle in place */
     c->target = (uint8_t)tgt;
     c->dir = (uint8_t)(tgt > c->floor);
     c->leg_start = c->floor;
-    /* ShouldTimeout (1090:23a5): the schedule's patience holds the car at
-     * the floor before it departs — unless it's full. */
-    if (c->passengers < s->capacity)
-        c->hold_timer = (uint8_t)(sched_patience_now(ps, s) * 30);
-    if (!c->hold_timer)
-        car_start_step(s, c);
+    car_start_step(s, c);
 }
 
 static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
@@ -1199,6 +1241,10 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
             if (c->dest_count[c->floor])
                 play_snd(SND_ELEV_DING);
             unboard_at_floor(ps, tower, s, c, frame);
+            /* ShouldTimeout (1090:23a5): arm the patience dwell as the
+             * doors open; it only ever runs its course at the car's home
+             * floor or a lobby (checked below, per FUN_10a0_1366). */
+            c->hold_timer = (uint8_t)(sched_patience_now(ps, s) * 30);
         }
         if (c->door_timer & 1) {
             if (c->door_timer == 1) {
@@ -1207,24 +1253,26 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
                 board_one(ps, tower, s, c, frame);
             }
         }
-        c->door_timer--;
-        if (c->door_timer == 0)
-            car_depart_or_idle(ps, s, c, ci);
-        return;
-    }
-
-    if (c->hold_timer) {
-        /* patience dwell: linger for stragglers; new activity at this
-         * floor reopens the doors, otherwise depart when it runs out */
-        if (queue_len(s, c->floor, 1) || queue_len(s, c->floor, 0) ||
-            c->dest_count[c->floor]) {
-            c->hold_timer = 0;
-            adopt_call_direction(s, c, ci);
-            c->door_timer = DOOR_OPEN_TICKS;
-            return;
+        /* Patience dwell, the EXE way: at the home floor or a lobby a car
+         * with patience left and room aboard HOLDS THE DOORS OPEN —
+         * MoveElevator re-arms door_timer=1 each tick (raw 743-752), so
+         * it bulk-boards stragglers every tick until the dwell runs out.
+         * A full car, or any other floor, departs immediately. */
+        if (c->door_timer == 1 && c->hold_timer &&
+            c->passengers < s->capacity &&
+            (c->floor == s->home[ci] || floor_is_lobby(tower, c->floor))) {
+            c->hold_timer--;
+            return;                         /* doors stay open */
         }
-        if (--c->hold_timer == 0 && c->target != c->floor)
-            car_start_step(s, c);
+        c->door_timer--;
+        if (c->door_timer == 0) {
+            c->hold_timer = 0;
+            car_depart_or_idle(ps, s, c, ci);
+            /* departure motor #6002 on leaving a serviced stop
+             * (StopAndDispatch raw 1181-1186; referee L6) */
+            if (c->target != c->floor)
+                play_snd(SND_ELEV_DEPART);
+        }
         return;
     }
 
@@ -1819,8 +1867,11 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
         alive++;
         switch (p->state) {
         case PERSON_PLANNING:
-            /* retry pacing so a full queue doesn't get hammered every tick */
-            if ((frame + i) % 4 == 0)
+            /* 1/16-LOD pacing (1220:0daf): the EXE touches each person
+             * every 16 frames, so a full-queue rejection costs its 5-point
+             * penalty at most once per 16 — the old %4 accrued queue-full
+             * stress 4x too fast (referee M5). */
+            if ((frame + i) % 16 == 0)
                 plan_person(ps, tower, p, i, frame);
             break;
         case PERSON_WALKING:
@@ -1834,9 +1885,10 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
             /* 300-frame watchdog (1220:1637 -> 1210:1b41 -> 1220:1aed):
              * a person stuck in a queue that long gives up — banks the
              * full wait, storms off, and rests where they stand. */
-            if (frame - p->wait_start >= 300) {
+            if (frame - p->wait_start >= WAIT_CAP) {   /* EXE reads [0xDD7A],
+                                                        * the same tuning cap */
                 queue_remove(&ps->shafts[p->shaft], p->cur_floor, p->dir, i);
-                bank_wait(p, frame);
+                bank_wait(ps, p, frame);
                 deliver_stress(ps, tower, p);
                 ps->trips_failed++;
                 if (p->errand == 1 || p->errand == 3) p->errand = 4;

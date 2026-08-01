@@ -60,5 +60,8 @@ if ! pgrep -f "websockify.*6080" >/dev/null 2>&1; then
 fi
 
 # --- Game (foreground; systemd tracks this) ---------------------------------
+# CT_AUTOLOAD: load concilliatower.sav at boot so restarts resume the
+# player's tower instead of a fresh lot (2026-08-01 lost-tower incident).
+export CT_AUTOLOAD=1
 echo "Launching ConcilliaTower on ${DISPLAY_NUM} (assets: ${EXE_PATH})"
 exec stdbuf -oL "${PROJECT_DIR}/simtower" "${EXE_PATH}" </dev/null >"${LOG}" 2>&1

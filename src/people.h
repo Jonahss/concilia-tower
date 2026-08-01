@@ -180,9 +180,12 @@ typedef struct {
     uint16_t assigned_calls;/* floor calls owned by this car (+0x2994) */
     uint8_t  schedule_index;/* mode for the current period (car+0x2998):
                              * copied from sched_mode at resets/turnarounds.
-                             * 0 normal; 1 shuttle (idle to shaft extremes);
+                             * 0 normal SCAN; 1 "Express Up" (nonstop up,
+                             * serve down); 2 "Express Down" (mirror);
                              * nonzero also = both-direction pickup */
-    uint8_t  hold_timer;    /* patience dwell before departing (x30 ticks) */
+    uint8_t  hold_timer;    /* patience dwell left: doors held open at the
+                             * home floor / a lobby (x30 ticks, armed at
+                             * door-open) */
     uint16_t pax[CAR_SLOTS];        /* person index + 1; 0 = empty */
     uint8_t  pax_dest[CAR_SLOTS];   /* destination floor per slot (+0x2A42) */
     uint8_t  dest_count[TOWER_FLOOR_COUNT]; /* requested stops (+0x2A6C) */
@@ -207,10 +210,11 @@ typedef struct {
                              * dialog's red diamond markers */
     /* Car schedules (EXE group +0x12/+0x20/+0x2e — globals.md #53), all
      * indexed [is_weekend][period 0..6]; survive rebuilds like serviced[]:
-     * mode: 0 normal SCAN, 1 shuttle, nonzero = both-direction pickup
-     * threshold: prefer an idle/home car over an approaching one unless
-     *            the approaching car is this much closer (default 5)
-     * patience: door dwell before departing = value*30 ticks (0..3) */
+     * mode: 0 normal SCAN, 1 Express Up / 2 Express Down one-way
+     *       shuttles; nonzero = both-direction pickup
+     * threshold: the WORKING car keeps a call unless it scores this many
+     *            floors worse than an idle-at-home car (default 5)
+     * patience: doors held open at home/lobby = value*30 ticks (0..3) */
     uint8_t  sched_mode[2][7];
     uint8_t  sched_threshold[2][7];
     uint8_t  sched_patience[2][7];

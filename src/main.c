@@ -8749,6 +8749,21 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Auto-load the last save at boot when CT_AUTOLOAD is set (the systemd
+     * service sets it). Without this a service restart boots a FRESH LOT
+     * even with a valid save on disk — and the F5-then-restart deploy
+     * protocol then saves the fresh lot over the player's real tower
+     * (2026-08-01 lost-tower incident; recovered from snapshot).
+     * Env-gated so CT_* verification harnesses keep their clean fixtures. */
+    if (!demo_mode && !twr_path && getenv("CT_AUTOLOAD")) {
+        FILE *sf = fopen(save_path(), "rb");
+        if (sf) {
+            fclose(sf);
+            do_load_game();
+            printf("Boot autoload: %s\n", save_path());
+        }
+    }
+
     if (getenv("CT_INSPECT")) {     /* open the tenant info dialog on a unit */
         int want = atoi(getenv("CT_INSPECT")); /* ItemType; 0 = first priced/venue */
         int skip = getenv("CT_INSPECT_SKIP") ? atoi(getenv("CT_INSPECT_SKIP")) : 0;
