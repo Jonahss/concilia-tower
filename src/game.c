@@ -665,15 +665,18 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
             
         case TENANT_MOVING_IN:
+            /* NOBODY moves into space the entrance can't reach — every
+             * unit type sits on the market until it's connected. In the
+             * EXE the demand system only lets units movers can physically
+             * reach; without this gate an unreachable office collected
+             * full quarterly rent forever (the settlement loop pays any
+             * OCCUPIED/VACANT unit) and unreachable condos printed free
+             * money at move-in. */
+            if (!reachable) break;             /* still on the market */
             /* Condos are a one-time SALE, banked when the buyer moves in
              * (res 0x3E9 condo row: $200k/$150k/$100k/$40k by rate class).
-             * A re-occupied abandoned condo is a resale to a new buyer.
-             * No buyer can move into space the entrance can't reach — the
-             * unit sits on the market (For Sale board) until it's connected.
-             * (TenantInit occupies on placement because the EXE judges
-             * reachability there; unreachable condos printed free money.) */
+             * A re-occupied abandoned condo is a resale to a new buyer. */
             if (t->type == ITEM_CONDO) {
-                if (!reachable) break;         /* still For Sale */
                 int sale = tenant_rent(ITEM_CONDO, t->rent_class);
                 income += sale;
                 fin_bank_income(sim, ITEM_CONDO, sale);
