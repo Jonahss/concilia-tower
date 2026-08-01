@@ -2138,7 +2138,7 @@ static void test_occupants(void)
     sim.time_of_day = TOD_MORNING; sim.hour = 10;
 
     /* roll every tenant once (the stagger passes each index within 16) */
-    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+    for (int f = 0; f < 64; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }  /* one full re-roll period (the 64-frame wall-clock stagger) */
 
     TenantOccupants *oo = &sim.occupants[tindex(off)];
     CHECK(oo->count == 6, "an office at work shows 6 workers");
@@ -2160,7 +2160,7 @@ static void test_occupants(void)
     /* presence gates: night office, unhosted room, closed restaurant */
     sim.time_of_day = TOD_NIGHT; sim.hour = 23;
     tw2->hosted = 0; r->retail_open = 0;
-    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+    for (int f = 0; f < 64; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }  /* one full re-roll period (the 64-frame wall-clock stagger) */
     CHECK(sim.occupants[tindex(off)].count == 0, "offices empty out at night");
     CHECK(sim.occupants[tindex(twn)].count == 0, "an unhosted room shows nobody");
     CHECK(sim.occupants[tindex(rst)].count == 0, "closed restaurants are unstaffed");
@@ -2169,7 +2169,7 @@ static void test_occupants(void)
     /* construction worker band = exactly the 6 frames of 0x85EA */
     uint16_t bld = fplace(ITEM_OFFICE, 7, 100);
     tenant(bld)->state = TENANT_CONSTRUCTION;
-    for (int f = 0; f < 16; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }
+    for (int f = 0; f < 64; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }  /* one full re-roll period (the 64-frame wall-clock stagger) */
     TenantOccupants *bo = &sim.occupants[tindex(bld)];
     CHECK(bo->count == 1 && bo->frame[0] >= 0x39 && bo->frame[0] <= 0x3E,
           "every construction site gets one worker (frames 0x39-0x3E)");

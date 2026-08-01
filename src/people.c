@@ -931,16 +931,31 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
 static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci)
 {
     uint8_t mine = (uint8_t)(ci + 1);
+    /* SCAN discipline (ElevatorsT): sweep the travel direction serving
+     * passenger stops and same-direction hall calls; a hall call for the
+     * OPPOSITE direction is only the sweep's reversal point — the deepest
+     * one ahead — never a mid-run stop. A FULL car serves only its own
+     * passengers' floors (a hall stop can't board anyone anyway). The old
+     * "any owned call, nearest first" pick let a huge lobby call yank a
+     * full up-bound car back down: 21 hostages bouncing between ground
+     * and floor 1 while floors 5+ starved (Jonah's tower, 2026-08-01). */
+    int full = c->passengers >= s->capacity;
     for (int pass = 0; pass < 2; pass++) {
         int up = pass == 0 ? c->dir : !c->dir;
+        int far_opp = -1;
         int f = c->floor;
         while (1) {
             f += up ? 1 : -1;
             if (f < s->lo || f > s->hi) break;
-            if (c->dest_count[f] ||
-                s->up_call_car[f] == mine || s->down_call_car[f] == mine)
-                return f;
+            if (c->dest_count[f]) return f;
+            if (!full) {
+                if ((up ? s->up_call_car[f] : s->down_call_car[f]) == mine)
+                    return f;
+                if ((up ? s->down_call_car[f] : s->up_call_car[f]) == mine)
+                    far_opp = f;
+            }
         }
+        if (far_opp >= 0) return far_opp;
     }
     return -1;
 }
@@ -1752,6 +1767,20 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
             queued++; break;
         case PERSON_RIDING:  riding++; break;
         case PERSON_AT_DEST:
+            /* Give-up recovery: someone who abandoned a trip (queue
+             * watchdog / no route) rests where they stand with their
+             * intent still set — dest_floor != cur_floor. Retry on the
+             * usual 1/16-LOD dice so they finish once a car frees up or
+             * new transport arrives. Without this, condo residents
+             * wedged forever: the commute window needs !going_home, the
+             * phase-flip replanner only covers offices/hotels, and the
+             * spawn dedup saw the stuck body as "already home" — whole
+             * upper floors went silent (Jonah's tower, 2026-08-01). */
+            if (!p->stay && p->dest_floor != p->cur_floor &&
+                (frame + i) % 16 == 0 && depart_roll(frame, i + 7, 12)) {
+                p->state = PERSON_PLANNING;
+                break;
+            }
             /* Office sales errand (UniPeple statuses 0/0x40/0x21/0x61):
              * members 0 and 1 of every occupied office make a midday
              * round-trip to the ground lobby. Member 0 rolls from the

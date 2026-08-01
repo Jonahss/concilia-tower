@@ -1206,6 +1206,7 @@ static void draw_shaft_digits(int tx, int ty, int w, int wf, int hot)
 static int16_t ovl_left[TOWER_FLOOR_COUNT], ovl_right[TOWER_FLOOR_COUNT];
 
 static void render_occupants(void);
+static uint8_t condo_lit[MAX_TENANTS];   /* filled by render_tower each frame */
 
 static void floor_map_extents(void)
 {
@@ -1225,8 +1226,9 @@ static void render_tower(void)
     
     /* Per-condo resident sleep census (the EXE's all-asleep check,
      * UniPeple 7100): a unit shows lit while any resident is awake and
-     * goes dark when the last one sleeps — the staggered evening look. */
-    static uint8_t condo_lit[MAX_TENANTS];
+     * goes dark when the last one sleeps — the staggered evening look.
+     * File-scope: render_occupants also reads it, so a dark unit shows
+     * no midnight pacing residents either. */
     memset(condo_lit, 0, (size_t)game.tower.tenant_count);
     for (int i = 0; i < game.sim.people.people_high; i++) {
         const Person *p = &game.sim.people.people[i];
@@ -3112,6 +3114,12 @@ static void render_occupants(void)
         TenantOccupants *o = &game.sim.occupants[i];
         if (!o->count) continue;
         Tenant *t = &game.tower.tenants[i];
+        /* A condo whose residents are all asleep draws dark and EMPTY —
+         * no one paces a pitch-black living room at 3am. */
+        if (t->type == ITEM_CONDO && !condo_lit[i] &&
+            (game.sim.time_of_day == TOD_NIGHT ||
+             game.sim.time_of_day == TOD_EVENING))
+            continue;
         for (int k = 0; k < o->count && k < OCCUPANTS_MAX; k++) {
             int frame = o->frame[k];
             Sprite *spr = NULL;

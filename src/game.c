@@ -275,10 +275,13 @@ int game_check_star_rating(GameSim *sim, Tower *tower)
                                               : STAR_POP_THRESHOLD[current];
     if (pop < need) return current;
     
-    /* Width check: underground width must be > star * 25 
-     * From seg_1148 FUN_1148_01a8 */
-    if (sim->tower_width <= current * 25) return current;
-    
+    /* NO width gate here: levelup_width_ok (1148:01a8) exists in the EXE
+     * but the full byte decode of levelup_check (referee 2026-07-09) lists
+     * ZERO width term among the promotion requirements — its 0xB922 result
+     * feeds something else. The old bolted-on "underground width > star*25"
+     * silently stranded basement-less towers at 1 star with no nag
+     * (Jonah's 1120-pop condo tower, 2026-08-01). */
+
     /* Promotion requirements check — a population-qualified tower that
      * fails a gate gets told what it's missing (res 0x3f2). */
     if (!game_check_promotion(sim, tower, next_star)) {
@@ -2868,7 +2871,11 @@ static void occ_roll_hotel(const GameSim *sim, const Tenant *t,
 void game_animate_occupants(GameSim *sim, Tower *tower)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
-        if (((sim->frame + i) & 15) != 0) continue;   /* the EXE stagger */
+        /* The EXE's &15 stagger ran at ITS ~15fps frame clock — one
+         * re-roll per tenant-second. At our 60fps the same mask re-posed
+         * everyone 4x a second and interiors looked like ant farms
+         * (Jonah, 2026-08-01); stretch the period to match wall-clock. */
+        if (((sim->frame + i * 4) & 63) != 0) continue;
         Tenant *t = &tower->tenants[i];
         TenantOccupants *o = &sim->occupants[i];
         o->count = 0;
