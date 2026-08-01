@@ -531,39 +531,79 @@ static uint8_t sched_patience_now(const PeopleSim *ps,
                                   const ElevatorShaft *s)
 { return s->sched_patience[ps->sched_day][ps->sched_period]; }
 
-/* SelectElevator, condensed to its three categories: a car already moving
- * the right way beats an idle car beats a car that must turn around —
- * except that an idle car wins unless the working car beats it by the
- * schedule's threshold (the EXE's final pick, 1090:1053-10cb). */
+/* The floor where this car's current sweep runs out of work — the EXE
+ * keeps it in car+0x2997; we recompute (furthest dest/owned call in the
+ * travel direction, else where it stands). Reversal costs route via it. */
+static int car_turnaround(const ElevatorShaft *s, const ElevatorCar *c,
+                          int ci)
+{
+    uint8_t mine = (uint8_t)(ci + 1);
+    int turn = c->floor;
+    if (c->dir) {
+        for (int f = c->floor + 1; f <= s->hi; f++)
+            if (c->dest_count[f] || s->up_call_car[f] == mine ||
+                s->down_call_car[f] == mine)
+                turn = f;
+    } else {
+        for (int f = c->floor - 1; f >= s->lo; f--)
+            if (c->dest_count[f] || s->up_call_car[f] == mine ||
+                s->down_call_car[f] == mine)
+                turn = f;
+    }
+    return turn;
+}
+
+/* SelectElevator (1090:0dfc, final pick 1053-10cb), the real three
+ * categories:
+ *  - approaching: direction matches the call and the car hasn't passed
+ *    the floor; score = directional distance;
+ *  - reversing: everything else in flight; score = distance via the
+ *    car's actual turnaround floor;
+ *  - idle: NO work, parked at its home floor, not moving.
+ * The WORKING car gets the call unless it scores >= threshold floors
+ * worse than the idle car — the original piggy-backs calls onto moving
+ * cars (that's what makes SCAN batch); a parked car is only woken when
+ * the working car is clearly worse. (The port had this backwards for
+ * weeks, preferring the parked car on every near-tie — elevator-truths
+ * referee 2026-08-01 H1.) Deliberate divergence kept: among idle cars
+ * we take the NEAREST; the EXE grabs car 0 unconditionally (raw
+ * 1093-1096), which is pure 1994 indifference. */
 static int select_car(const PeopleSim *ps, ElevatorShaft *s, int floor,
                       int up)
 {
-    int best_work = -1, work_cost = 0x7fff;
+    int best_app = -1, app_cost = 0x7fff;
+    int best_rev = -1, rev_cost = 0x7fff;
     int best_idle = -1, idle_cost = 0x7fff;
     for (int ci = 0; ci < s->num_cars; ci++) {
         ElevatorCar *c = &s->car[ci];
         if (!c->active) continue;
         int d = floor - c->floor;
         int toward = up ? d : -d;
-        int busy = c->assigned_calls || c->distinct_dests;
-        if (!busy) {
-            int cost = (d < 0 ? -d : d);                   /* idle: distance */
+        int busy = c->assigned_calls || c->distinct_dests ||
+                   c->door_timer || c->target != c->floor;
+        if (!busy && c->floor == s->home[ci]) {
+            int cost = d < 0 ? -d : d;
             if (cost < idle_cost) { idle_cost = cost; best_idle = ci; }
-            continue;
+        } else if (busy && (int)c->dir == up && toward >= 0) {
+            if (toward < app_cost) { app_cost = toward; best_app = ci; }
+        } else {
+            int turn = car_turnaround(s, c, ci);
+            int a = c->floor - turn; if (a < 0) a = -a;
+            int b = floor - turn;    if (b < 0) b = -b;
+            if (a + b < rev_cost) { rev_cost = a + b; best_rev = ci; }
         }
-        int cost;
-        if ((int)c->dir == up && toward >= 0)
-            cost = toward;                                  /* approaching */
-        else
-            cost = (d < 0 ? -d : d) + (s->hi - s->lo) + 8;  /* must reverse */
-        if (cost < work_cost) { work_cost = cost; best_work = ci; }
     }
+    /* approaching categorically outranks reversing */
+    int best_work = best_app >= 0 ? best_app : best_rev;
+    int work_cost = best_app >= 0 ? app_cost : rev_cost;
     if (best_idle < 0) return best_work;
     if (best_work < 0) return best_idle;
-    /* prefer the idle car unless the working car is threshold-better */
     int th = sched_threshold_now(ps, s);
-    return (idle_cost - work_cost >= th) ? best_work : best_idle;
+    return (work_cost - idle_cost < th) ? best_work : best_idle;
 }
+
+static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci);
+static void car_start_step(ElevatorShaft *s, ElevatorCar *c);
 
 static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
                           int up)
@@ -573,7 +613,29 @@ static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
     int ci = select_car(ps, s, floor, up);
     if (ci < 0) return;
     *slot = (uint8_t)(ci + 1);
-    s->car[ci].assigned_calls++;
+    ElevatorCar *c = &s->car[ci];
+    c->assigned_calls++;
+    /* The EXE's CallElevator ends with UpdateCarState: the chosen car
+     * re-derives its target ON THE SPOT, even mid-run — that's how an
+     * elevator stops for you on its way up instead of sailing past
+     * (elevator-truths referee H2). Mid-boarding cars finish the door
+     * cycle first; the depart path re-derives anyway. */
+    if (c->door_timer == 0) {
+        int t = find_target_floor(s, c, ci);
+        if (t >= 0) {
+            if (c->target == c->floor) {
+                /* parked: take the work and face it */
+                c->dir = (uint8_t)(t > c->floor);
+                c->target = (uint8_t)t;
+                c->leg_start = c->floor;
+                car_start_step(s, c);
+            } else if ((c->dir && t > c->floor && t < c->target) ||
+                       (!c->dir && t < c->floor && t > c->target)) {
+                /* in flight: pull the stop earlier on the same path */
+                c->target = (uint8_t)t;
+            }
+        }
+    }
 }
 
 /* ---------- queue ops (TripT 11c2/1332) ---------- */
@@ -1037,23 +1099,34 @@ static void clear_call(ElevatorShaft *s, ElevatorCar *c, int ci, int floor)
  * (type 0 — globals.md #52); standard/service get a medium band instead.
  * dist-from-start needs the run's departure floor (last_floor in the
  * EXE; leg_start here). */
-static int car_move_ticks(const ElevatorShaft *s, const ElevatorCar *c)
+/* CalcMoveSpeed (1090:209f) + StopAndDispatch execution (1090:10e4):
+ * gear 0 = 1 floor + 5-tick tail (~6 ticks/floor, the docking crawl),
+ * gear 1 = 1 floor + 2-tick tail, gear 2 = a floor EVERY tick, and the
+ * express-only gear 3 = THREE floors per tick (cur +/- 3, raw 1150-66)
+ * — the original's signature rocket. The old 5/4/3/2-tick costs ran
+ * standard cars ~3x and the express ~6x too slow (referee H3), which
+ * also made the EXE-calibrated 300-tick watchdog feel merciless.
+ * Returns the tail ticks; *stride = floors covered by this step. */
+static int car_move_ticks(const ElevatorShaft *s, const ElevatorCar *c,
+                          int *stride)
 {
     int dt = c->target - c->floor;   if (dt < 0) dt = -dt;
     int ds = c->floor - c->leg_start; if (ds < 0) ds = -ds;
+    *stride = 1;
     if (s->type == ITEM_ELEVATOR_EXPRESS) {
-        if (dt < 2 || ds < 2) return 4;   /* speed 0: crawl at the ends */
-        if (dt > 4 && ds > 4) return 1;   /* speed 3: full tilt mid-run */
-        return 2;                         /* speed 2: cruise */
+        if (dt < 2 || ds < 2) return 5;   /* gear 0 */
+        if (dt > 4 && ds > 4) { *stride = 3; return 0; }   /* gear 3 */
+        return 0;                         /* gear 2: floor per tick */
     }
-    if (dt < 2 || ds < 2) return 4;       /* speed 0 */
-    if (dt < 4 || ds < 4) return 3;       /* speed 1: medium */
-    return 2;                             /* speed 2 */
+    if (dt < 2 || ds < 2) return 5;       /* gear 0 */
+    if (dt < 4 || ds < 4) return 2;       /* gear 1 */
+    return 0;                             /* gear 2 */
 }
 
 static void car_start_step(ElevatorShaft *s, ElevatorCar *c)
 {
-    c->move_timer = (uint8_t)car_move_ticks(s, c);
+    int stride;
+    c->move_timer = (uint8_t)car_move_ticks(s, c, &stride);
     c->move_total = c->move_timer;
 }
 
@@ -1157,7 +1230,13 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
 
     if (c->target != c->floor) {
         if (c->move_timer) { c->move_timer--; return; }
-        c->floor += (c->dir ? 1 : -1);
+        {
+            int stride;
+            car_move_ticks(s, c, &stride);      /* gear for THIS step */
+            int left = c->dir ? c->target - c->floor : c->floor - c->target;
+            if (stride > left) stride = left;
+            c->floor = (uint8_t)(c->floor + (c->dir ? stride : -stride));
+        }
         if (c->floor == c->target) {
             adopt_call_direction(s, c, ci);
             c->door_timer = DOOR_OPEN_TICKS;

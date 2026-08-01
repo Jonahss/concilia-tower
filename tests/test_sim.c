@@ -1521,16 +1521,25 @@ static void test_schedules(void)
     s->car[1].dir = 1;
     s->car[1].assigned_calls = 1;       /* mark it busy */
     people_join_queue(&sim.people, 0, s->lo + 3, 1, 0);
-    CHECK(s->up_call_car[s->lo + 3] == 1,
-          "threshold 5: the idle car answers (working car only 1 closer)");
-    s->up_call_car[s->lo + 3] = 0; s->car[0].assigned_calls = 0;
-    s->stop[s->lo + 3].up_count = 0;
-    s->sched_threshold[0][0] = 1;
-    people_join_queue(&sim.people, 0, s->lo + 3, 1, 0);
+    /* EXE SelectElevator (1090:1053-10cb): the APPROACHING car takes the
+     * call unless it scores >= threshold floors worse than the idle car
+     * — calls piggy-back onto moving cars. (The old assertion here
+     * encoded the inverted pick; elevator-truths referee H1.) */
     CHECK(s->up_call_car[s->lo + 3] == 2,
-          "threshold 1: the approaching car answers");
+          "threshold 5: the approaching car answers (piggy-back)");
+    s->up_call_car[s->lo + 3] = 0;
     s->stop[s->lo + 3].up_count = 0;
-    s->down_call_car[s->lo + 3] = 0;
+    /* an idle-at-home car only wakes when the working car is clearly
+     * worse: send car1 reversing from a far dest, call at the bottom */
+    s->sched_threshold[0][0] = 1;
+    s->car[1].floor = (uint8_t)(s->lo + 4);
+    s->car[1].dest_count[s->hi] = 1;    /* sweep runs to the top first */
+    people_join_queue(&sim.people, 0, s->lo, 1, 0);
+    CHECK(s->up_call_car[s->lo] == 1,
+          "reversing car far worse than idle-at-home: idle answers");
+    s->up_call_car[s->lo] = 0;
+    s->stop[s->lo].up_count = 0;
+    s->car[1].dest_count[s->hi] = 0;
     people_set_num_cars(&sim.people, 0, 1);
 
     /* shuttle mode: an idle car with no work runs to the shaft's far end
