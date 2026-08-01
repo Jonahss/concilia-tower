@@ -8755,12 +8755,16 @@ int main(int argc, char *argv[])
      * protocol then saves the fresh lot over the player's real tower
      * (2026-08-01 lost-tower incident; recovered from snapshot).
      * Env-gated so CT_* verification harnesses keep their clean fixtures. */
+    int booted_from_save = 0;
     if (!demo_mode && !twr_path && getenv("CT_AUTOLOAD")) {
         FILE *sf = fopen(save_path(), "rb");
         if (sf) {
             fclose(sf);
             do_load_game();
-            printf("Boot autoload: %s\n", save_path());
+            booted_from_save = game.tower.tenant_count > 0;
+            printf("Boot autoload: %s (tenants=%d pop=%d money=%ld)\n",
+                   save_path(), game.tower.tenant_count,
+                   game.tower.population, (long)game.tower.money);
         }
     }
 
@@ -8805,7 +8809,11 @@ int main(int argc, char *argv[])
      * the player lays their own (lobby is a 1-star item, so it's available).
      * Skipped for Sandbox, imports, and demo scenes. */
     if (game.sim.mode == MODE_CAMPAIGN && !twr_path && !demo_mode &&
-        !getenv("COMMUTE_DEMO")) {
+        !booted_from_save && !getenv("COMMUTE_DEMO")) {
+        /* booted_from_save: the boot autoload already replaced the fresh
+         * lot with a real tower — wiping the grid here (but not money/sim)
+         * was exactly the half-loaded ghost state of the 2026-08-01
+         * lost-tower incident's second act. */
         memset(game.tower.grid, 0, sizeof(game.tower.grid));
         game.tower.tenant_count = 0;
         add_event_message("Campaign: build a lobby to begin.");
