@@ -5302,6 +5302,35 @@ static Tenant *tenant_behind_shaft_at(int fidx, int x)
     return NULL;
 }
 
+static uint16_t stair_hit_test(int floor, int cell);
+static int demolish_elevator_at(int fidx, int x);
+
+/* The full demolish-tool dispatch for a world click, EXE order (1058:0070):
+ * elevators -> stair/escalator overlays -> tenants, first-hit-wins.
+ * Shared by the SDL click handler and the DEMOLISH_CLICKS test hook. */
+static void demolish_click_grid(int floor, int cell)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
+        cell < 0 || cell >= TOWER_WIDTH) return;
+    if (demolish_elevator_at(fidx, cell)) return;
+    uint16_t stid = stair_hit_test(floor, cell);
+    TowerCell *tcell = &game.tower.grid[fidx][cell];
+    uint16_t tid = tcell->tenant_id;
+    ItemType ty = tcell->type;
+    if (stid) {
+        Tenant *st = tower_tenant(&game.tower, stid);
+        if (st) request_remove_tenant(stid, st->type);
+    } else if (tid && item_is_elevator(ty)) {
+        /* Show-Off shaft: demolish the item BEHIND the shaft, never the
+         * shaft record itself. */
+        Tenant *bt = tenant_behind_shaft_at(fidx, cell);
+        if (bt) request_remove_tenant(bt->id, bt->type);
+    } else if (tid) {
+        request_remove_tenant(tid, ty);
+    }
+}
+
 /* Bulldoze on an elevator — the EXE hit-tests elevators FIRST in the
  * demolish dispatch (1058:0070 -> 10a0:0201; elevator-demolish referee
  * 2026-08-02). Returns 1 when the click is consumed; 0 lets it fall
@@ -7832,28 +7861,7 @@ static void handle_event(SDL_Event *ev)
              * car cell = that car, motor room/pit/last car = whole shaft,
              * empty span cell = nothing (Show off exposes the item behind). */
             if (game.demolish_mode) {
-                int fidx = floor_to_index(game.mouse_floor);
-                if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
-                    game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
-                    if (demolish_elevator_at(fidx, game.mouse_cell)) break;
-                    uint16_t stid = stair_hit_test(game.mouse_floor,
-                                                   game.mouse_cell);
-                    TowerCell *cell = &game.tower.grid[fidx][game.mouse_cell];
-                    uint16_t tid = cell->tenant_id;
-                    ItemType ty = cell->type;
-                    if (stid) {
-                        Tenant *st = tower_tenant(&game.tower, stid);
-                        if (st) request_remove_tenant(stid, st->type);
-                    } else if (tid && item_is_elevator(ty)) {
-                        /* Show-Off shaft: demolish the item BEHIND the
-                         * shaft, never the shaft record itself. */
-                        Tenant *bt = tenant_behind_shaft_at(fidx,
-                                                            game.mouse_cell);
-                        if (bt) request_remove_tenant(bt->id, bt->type);
-                    } else if (tid) {
-                        request_remove_tenant(tid, ty);
-                    }
-                }
+                demolish_click_grid(game.mouse_floor, game.mouse_cell);
                 break;
             }
 
@@ -9456,6 +9464,50 @@ int main(int argc, char *argv[])
                         int hit = elv_edit_toggle_at(cx, cy);
                         printf("[test] world click %d,%d -> floor=%d cell=%d "
                                "toggled=%d\n", cx, cy, fl, cell, hit);
+                    }
+                }
+                render();
+            }
+            /* Headless test for the demolish dispatch: DEMOLISH_CLICKS =
+             * "floor,cell;..." routes each through the real bulldozer path
+             * (elevator -> stairs -> tenant), auto-answering Yes to any
+             * route-loss confirm. DEMOLISH_ADDCAR=<fidx> first gives shaft
+             * 0 a second car homed at that floor (the car-removal branch
+             * needs a bank of two). */
+            const char *dclicks = getenv("DEMOLISH_CLICKS");
+            if (dclicks) {
+                if (getenv("DEMOLISH_ADDCAR")) {
+                    int cf = atoi(getenv("DEMOLISH_ADDCAR"));
+                    PeopleSim *ps = &game.sim.people;
+                    if (ps->shaft_count > 0) {
+                        ElevatorShaft *s0 = &ps->shafts[0];
+                        people_set_num_cars(ps, 0, s0->num_cars + 1);
+                        int nci = s0->num_cars - 1;
+                        people_set_home(ps, 0, nci, cf);
+                        s0->car[nci].floor = s0->car[nci].target = (uint8_t)cf;
+                        printf("[test] addcar shaft0 fidx=%d cars=%d\n",
+                               cf, s0->num_cars);
+                    }
+                }
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s", dclicks);
+                for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+                    int df, dc;
+                    if (sscanf(tok, "%d,%d", &df, &dc) == 2) {
+                        game.demolish_mode = 1;
+                        demolish_click_grid(df, dc);
+                        if (game.route_confirm) route_confirm_yes();
+                        people_rebuild_transport(&game.sim.people, &game.tower);
+                        int nsh = game.sim.people.shaft_count;
+                        printf("[test] demolish f=%d c=%d -> shafts=%d",
+                               df, dc, nsh);
+                        for (int q = 0; q < nsh; q++) {
+                            ElevatorShaft *qs = &game.sim.people.shafts[q];
+                            printf(" [x=%d F%d..F%d cars=%d]",
+                                   qs->x, qs->lo - 10, qs->hi - 10,
+                                   qs->num_cars);
+                        }
+                        printf("\n");
                     }
                 }
                 render();
