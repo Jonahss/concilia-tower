@@ -98,6 +98,14 @@ static uint8_t noroute_latch[TOWER_FLOOR_COUNT];
 static char    noroute_msg[80];
 static int     noroute_pending;
 
+/* Nonzero while the Simulate edit mode's settle pre-sim is running
+ * (ElvEditT SnapshotAndSettleGroup 10f0:0318). The EXE nulls the pre-sim's
+ * side effects with [0xB3AE] gates in the trip code — wait-stress banking
+ * is rerouted/skipped while the flag is set (TripT #48, 10a8:0293;
+ * referee_elv_simulate_editmode_2026-08-01 §6: "zero effect on people,
+ * money, stress, time"). The port gates the same choke points on this. */
+static int     elv_settling;
+
 static void fmt_floor_name(int fidx, char *out, size_t n)
 {
     int f = index_to_floor(fidx);
@@ -108,6 +116,7 @@ static void fmt_floor_name(int fidx, char *out, size_t n)
 
 static void noroute_report(const Person *p)
 {
+    if (elv_settling) return;   /* settle pre-sim leaves no trace (§6) */
     int from = p->cur_floor;
     if (from < 0 || from >= TOWER_FLOOR_COUNT || noroute_latch[from]) return;
     noroute_latch[from] = 1;
@@ -1194,6 +1203,9 @@ static int dequeue(ElevatorShaft *s, int floor, int up)
 
 static void bank_wait(const PeopleSim *ps, Person *p, int frame)
 {
+    /* Simulate settle pre-sim: wait-stress banking is rerouted/skipped
+     * while in edit mode (the EXE's [0xB3AE] gate — TripT #48, 10a8:0293). */
+    if (elv_settling) return;
     int waited = frame - p->wait_start;
     if (waited < 0) waited = 0;
     int acc = p->wait_accum + waited;
@@ -1219,6 +1231,9 @@ static void add_penalty(Person *p, int amount)
  * (JudgeTenant 1130:@08b9-@090a; JudgeT-bars referee 2026-08-02). */
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
+    /* Simulate settle pre-sim: no stress reaches tenants or the wait
+     * averages (the EXE's [0xB3AE] reroute — referee 2026-08-01 §6). */
+    if (elv_settling) return;
     /* Staff stress is never settled — TripCompletionFinalizer skips
      * person type 0xF (deepdive_1aed; referee M3 2026-08-02). Keeps
      * housekeeping churn out of tenant judging AND the wait averages. */
@@ -1343,6 +1358,11 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
 static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
 {
     (void)frame;
+    /* Simulate settle pre-sim: an arrival must not check anyone in, park
+     * a car, count a trip, or bank stress — the person array is rewound
+     * wholesale after the settle, so parking the body AT_DEST is enough
+     * (EXE contract: zero effect on people/money/stress — referee §6). */
+    if (elv_settling) { p->state = PERSON_AT_DEST; return; }
     ps->trips_done++;
     if (p->going_home) {
         /* commuters/patrons leave at ground; staff arrive back at their
@@ -1833,6 +1853,130 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         return;
     }
     car_depart_or_idle(ps, s, c, ci);   /* schedule-aware idle targeting */
+}
+
+/* ---------- elevator "Simulate" edit mode (ElvEditT seg_10f0) ----------
+ *
+ * Sim-side half of the Simulate freeze-frame mode (the UI half lives in
+ * main.c). Byte-verified against seg_10f0 — referee_elv_simulate_editmode_
+ * 2026-08-01, three adversarial passes, zero deviations:
+ *   EnterElevatorEditMode  10f0:0000   snapshot + isolate + settle
+ *   SnapshotAndSettleGroup 10f0:0318   the invisible pre-sim
+ *   RollbackGroupKeepSettings 10f0:0719  exit: revert all but the schedule
+ *   ExitElevatorEditMode   10f0:009c   un-isolate, unfreeze
+ *
+ * All mode state is in these statics, NOT in PeopleSim — the .sav format
+ * raw-dumps GameSim and its layout is frozen. */
+static int           elv_edit_shaft = -1;      /* [0xB3A8]; -1 = not in mode */
+static ElevatorShaft elv_edit_snap;            /* [0xB3B0]: the 0x345A group copy */
+static uint8_t       elv_edit_saved_active[MAX_SHAFTS];   /* [0xB3B4] */
+/* The EXE's settle leaves person records and the stat side-channels
+ * untouched by construction (the [0xB3AE] gates above); the port's merged
+ * trip code additionally moves people between queue/car/planning states,
+ * so the same "zero effect on people" contract is implemented by rewinding
+ * the person array wholesale after the settle. */
+static Person        elv_edit_people[MAX_PEOPLE];
+
+int people_edit_shaft(void) { return elv_edit_shaft; }
+
+void people_edit_enter(PeopleSim *ps, Tower *tower, int shaft, int star,
+                       int frame)
+{
+    if (elv_edit_shaft >= 0 || shaft < 0 || shaft >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (!s->active) return;
+    elv_edit_shaft = shaft;
+
+    /* Isolation loop (10f0:0042-0074): save every group's active flag,
+     * force all but the selected to 0 — removes them from every "for each
+     * active group" iterator (draw, and routing during the settle). */
+    for (int i = 0; i < ps->shaft_count; i++) {
+        elv_edit_saved_active[i] = ps->shafts[i].active;
+        ps->shafts[i].active = (uint8_t)(i == shaft);
+    }
+
+    /* SnapshotAndSettleGroup (10f0:0318), step 1: snapshot the whole
+     * group record (memcpy of 0x345A bytes, 10f0:0327) + the port's
+     * person-array snapshot (see elv_edit_people above). */
+    elv_edit_snap = *s;
+    memcpy(elv_edit_people, ps->people,
+           (size_t)ps->people_high * sizeof(Person));
+
+    /* Step 2, the pre-sim (10f0:0349-03e4): 2*[0xDD78] iterations, where
+     * [0xDD78] is the star-scaled tuning value 150 (1-3 stars) / 200 (4+)
+     * loaded by LevelT 1140:0104-0115 — so 300-400 ticks of frame_time++
+     * then MoveElevator + Unboard/Board per active car (car_tick merges
+     * exactly those calls). Sound is muted for the duration (the EXE
+     * leaves the door-ding path ungated; referee §6 port note: mute). */
+    SoundHookFn saved_hook = g_sound_hook;
+    g_sound_hook = NULL;
+    elv_settling = 1;
+    int iters = 2 * (star >= 4 ? 200 : 150);
+    for (int t = 0; t < iters; t++)
+        for (int ci = 0; ci < s->num_cars; ci++)
+            car_tick(ps, tower, s, ci, frame + 1 + t);
+    elv_settling = 0;
+    g_sound_hook = saved_hook;
+
+    /* Step 3, restore logical state (10f0:03ee-070c): everything the
+     * settle touched EXCEPT car position/direction/door state comes back
+     * from the snapshot — per-floor call assignments (+0x2A2/+0x31A), the
+     * stop queues (the EXE restores just the 4-byte ring headers; the
+     * port's join path overwrites ring slots, so whole stop records are
+     * restored — same visible contract: queues read as at the moment
+     * Simulate was pressed), per-car scheduling fields (0x298A-0x2998),
+     * passenger refs (+0x299A) and dests (+0x2A42), per-dest counts
+     * (+0x2A6C). The cars keep the fast-forwarded arrangement — that
+     * representative mid-operation still is the point of the mode. */
+    memcpy(ps->people, elv_edit_people,
+           (size_t)ps->people_high * sizeof(Person));
+    memcpy(s->stop, elv_edit_snap.stop, sizeof(s->stop));
+    memcpy(s->up_call_car, elv_edit_snap.up_call_car,
+           sizeof(s->up_call_car));
+    memcpy(s->down_call_car, elv_edit_snap.down_call_car,
+           sizeof(s->down_call_car));
+    for (int ci = 0; ci < CARS_PER_SHAFT; ci++) {
+        ElevatorCar *live = &s->car[ci];
+        const ElevatorCar *snap = &elv_edit_snap.car[ci];
+        live->passengers     = snap->passengers;
+        live->distinct_dests = snap->distinct_dests;
+        live->assigned_calls = snap->assigned_calls;
+        live->schedule_index = snap->schedule_index;
+        live->hold_timer     = snap->hold_timer;
+        memcpy(live->pax, snap->pax, sizeof(live->pax));
+        memcpy(live->pax_dest, snap->pax_dest, sizeof(live->pax_dest));
+        memcpy(live->dest_count, snap->dest_count, sizeof(live->dest_count));
+        /* NOT restored (10f0:03ee list ends before them): floor, target,
+         * dir, door_timer, move_timer, move_total, leg_start. */
+    }
+}
+
+void people_edit_exit(PeopleSim *ps)
+{
+    if (elv_edit_shaft < 0) return;
+    ElevatorShaft *s = &ps->shafts[elv_edit_shaft];
+
+    /* RollbackGroupKeepSettings (10f0:0719): the dialog widgets that stay
+     * usable during the mode are exactly the fields preserved here — copy
+     * live -> snapshot the schedule matrices (threshold +0x12, mode +0x20,
+     * patience +0x2E, 10f0:0728-07e7) and the SHOW word (+0x3C), then
+     * restore the group wholesale (10f0:07e8). The settle's car scrambling
+     * is discarded; the frozen interval cost zero game time. (The EXE also
+     * preserves a fourth matrix at group+4 whose reader was never located
+     * — referee §8, LOW — with no port equivalent.) */
+    memcpy(elv_edit_snap.sched_mode, s->sched_mode, sizeof(s->sched_mode));
+    memcpy(elv_edit_snap.sched_threshold, s->sched_threshold,
+           sizeof(s->sched_threshold));
+    memcpy(elv_edit_snap.sched_patience, s->sched_patience,
+           sizeof(s->sched_patience));
+    elv_edit_snap.hidden = s->hidden;
+    *s = elv_edit_snap;
+
+    /* ExitElevatorEditMode (10f0:00ad-0120): restore the saved group
+     * active flags; the caller unfreezes and forces a full repaint. */
+    for (int i = 0; i < ps->shaft_count; i++)
+        ps->shafts[i].active = elv_edit_saved_active[i];
+    elv_edit_shaft = -1;
 }
 
 /* ---------- spawning (UniPeple-lite: commuters only) ---------- */

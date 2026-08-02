@@ -497,6 +497,7 @@ static Game game;
  * stop-toggle and demolish paths above them need the entry points). */
 static void request_stop_toggle(int si, int fidx);
 static int  request_remove_tenant(uint16_t tid, ItemType ty);
+static void add_event_message(const char *msg);
 
 /* Palette-cycle animation variants (the EXE's AnimeT cycles color-table
  * entries continuously; the security radar and cinema marquee live on
@@ -2418,21 +2419,36 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx)
 
 
 /* ---- Elevator "Simulate" full-screen edit mode (seg_10f0 "ElvEditT") ----
- * The EXE's Simulate button opens a separate surface: the whole tower dims to
- * a flat silhouette and only the one selected shaft (cars + queues) stays lit,
- * so its stops can be edited against the real tower at full scale. The EXE
- * suppresses the normal draw path (flag 0xB3AE) and rewinds the sim clock so
- * real time doesn't pass while you edit — we mirror that by pausing the sim on
- * enter and restoring the prior speed on exit; schedule/stop edits survive.
- * (The EXE's pre-simulation that settles the cars to a representative steady
- * state is a HYPOTHESIS-confidence cosmetic in the decomp — we simply show the
- * cars frozen where they are, which is honest and needs no invented motion.) */
+ * The EXE's Simulate button opens a FREEZE-FRAME INSPECTION surface, not a
+ * live preview (referee_elv_simulate_editmode_2026-08-01, byte-verified):
+ * the tower dims to a flat silhouette, only the selected group (shaft,
+ * cars, queues) stays lit, and the game is HARD frozen — [0x783E]=0 at
+ * 10f0:007b gates the whole per-frame tick (1258:0244-02d8), so no time,
+ * elevator, person or money simulation runs while the mode is up. Before
+ * the view opens, SnapshotAndSettleGroup (10f0:0318) snapshots the group
+ * and invisibly fast-forwards its cars 2x(150|200) ticks so they sit in a
+ * representative mid-operation arrangement, then rewinds all logical state
+ * (people.c people_edit_enter). While in the mode the tower takes NO input
+ * (the EXE disables the main/map/toolbar windows, 1098:0691-06ba); the
+ * dialog stays interactive but REFUSES stop/car-home edits with STRL 0x3EC
+ * #1 ("Cannot change settings - Click \"Resume\" button", 1098:1ff5 gate
+ * at 2129/216a). Resume — or OK, which force-exits (1098:0ed3) — rolls the
+ * group back to the enter instant, preserving only the schedule/SHOW
+ * settings (RollbackGroupKeepSettings 10f0:0719). */
 static void elv_edit_enter(void)
 {
-    if (game.elv_edit_mode || elv_dialog_shaft() < 0) return;
+    int si = elv_dialog_shaft();
+    if (game.elv_edit_mode || si < 0) return;
     game.elv_edit_mode = 1;
-    game.elv_saved_speed =
-        (game.sim.speed == SPEED_PAUSED) ? SPEED_NORMAL : game.sim.speed;
+    /* The caller saves the play flag and exit restores it VERBATIM
+     * (1098:0f6d stashes [0x783E] in [0x1FAA]; 10f0:009c consumes it) —
+     * a game paused before Simulate stays paused after Resume. */
+    game.elv_saved_speed = game.sim.speed;
+    people_edit_enter(&game.sim.people, &game.tower, si,
+                      game.tower.star_rating, game.sim.frame);
+    /* The freeze ([0x783E]=0, 10f0:007b). The main loop's tick gate on
+     * elv_edit_mode makes it HARD — a speed change mid-mode can't thaw
+     * the sim (in the EXE the speed controls are unreachable anyway). */
     game.sim.speed = SPEED_PAUSED;
 }
 
@@ -2440,30 +2456,8 @@ static void elv_edit_exit(void)
 {
     if (!game.elv_edit_mode) return;
     game.elv_edit_mode = 0;
+    people_edit_exit(&game.sim.people);
     game.sim.speed = game.elv_saved_speed;
-}
-
-/* Toggle the selected shaft's stop at the tower cell under a screen point,
- * while in edit mode. This is the edit surface's whole interaction: clicking
- * a floor of the isolated shaft adds/removes its stop there. Returns 1 if a
- * stop was toggled. */
-static int elv_edit_toggle_at(int mx, int my)
-{
-    if (!game.elv_edit_mode) return 0;
-    int si = elv_dialog_shaft();
-    if (si < 0) return 0;
-    ElevatorShaft *s = &game.sim.people.shafts[si];
-    int fl, cell;
-    screen_to_grid(mx, my, &fl, &cell);
-    int fidx = floor_to_index(fl);
-    int w = ITEM_WIDTH[s->type];
-    if (fidx >= s->lo && fidx <= s->hi &&
-        cell >= s->x && cell < s->x + w &&
-        elv_structural_stop(s, fidx)) {
-        request_stop_toggle(si, fidx);
-        return 1;
-    }
-    return 0;
 }
 
 /* Draw a small filled/outlined rect helper (dialog-local -> screen). */
@@ -2694,17 +2688,27 @@ static void render_elv_dialog_faithful(void)
         SDL_RenderFillRect(game.renderer, &m);
     }
 
-    /* Simulate button reflects edit-mode state: the art reads "Simulate"; while
-     * editing we overpaint it "Resume" and ring it so the toggle is legible. */
+    /* While in Simulate mode the bottom-left button reads "Resume": the EXE
+     * swaps in sheet 0x819A (released; 0x819B is the pressed variant),
+     * stamped into the button strip at 1098:04ab/054e. Blit the button
+     * region — DTMP 0x190 rect 2 is 17,404-83,423 — of the released sheet
+     * over the backdrop; text fallback if the art is missing. */
     if (game.elv_edit_mode) {
-        int sxb = bx + 10, syb = by + 398;
-        SDL_SetRenderDrawColor(game.renderer, 30, 60, 120, 255);
-        SDL_Rect r = { sxb, syb, 80, 22 };
-        SDL_RenderFillRect(game.renderer, &r);
-        SDL_SetRenderDrawColor(game.renderer, 230, 230, 255, 255);
-        SDL_RenderDrawRect(game.renderer, &r);
-        SDL_Color w = { 235, 235, 255, 255 };
-        stats_label(sxb + 20, syb + 5, "Resume", w);
+        Sprite *rs = sprites_find(&game.sprites, 0x819A);
+        if (rs) {
+            SDL_Rect btn = { 17, 404, 66, 19 };
+            SDL_Rect dst = { bx + btn.x, by + btn.y, btn.w, btn.h };
+            SDL_RenderCopy(game.renderer, rs->texture, &btn, &dst);
+        } else {
+            int sxb = bx + 10, syb = by + 398;
+            SDL_SetRenderDrawColor(game.renderer, 30, 60, 120, 255);
+            SDL_Rect r = { sxb, syb, 80, 22 };
+            SDL_RenderFillRect(game.renderer, &r);
+            SDL_SetRenderDrawColor(game.renderer, 230, 230, 255, 255);
+            SDL_RenderDrawRect(game.renderer, &r);
+            SDL_Color w = { 235, 235, 255, 255 };
+            stats_label(sxb + 20, syb + 5, "Resume", w);
+        }
     }
 
     /* Calibration overlay: outline every measured hit-rect so I can verify
@@ -3000,6 +3004,16 @@ static int elv_dialog_click_faithful(int mx, int my)
     }
 
     if (pt_in(mx, my, bx, by, ELV_GRID)) {
+        /* Simulate mode REFUSES shaft edits (grid handler 1098:1ff5 checks
+         * [0xB3AE] at 2129/216a): stop toggles and car-home moves are
+         * exactly the fields the exit rollback would discard, so the EXE
+         * alerts instead of accepting an edit it couldn't keep. The text
+         * is the EXE's own — STRL 0x3EC string #1. */
+        if (game.elv_edit_mode) {
+            add_event_message(exe_str(0x03ec, 0,
+                "Cannot change settings - Click \"Resume\" button"));
+            return 1;
+        }
         int gx0 = bx + 18, gy0 = by + 195;
         int col = (mx - gx0) / 13 - 1;          /* -1 = service col, 0..7 = cars */
         int r = 14 - (my - gy0) / 13;           /* row 0 = bottom */
@@ -3343,7 +3357,9 @@ static void render_elv_edit_mode(void)
     }
 
     /* The selected shaft's tube, lit (mirrors render_tower PASS 2.5), with a
-     * per-floor stop marker: green = serviced, dim = a stop you could add. */
+     * per-floor stop marker: green = serviced, dim = not. Display only —
+     * stops CANNOT be edited in this mode (the EXE refuses with STRL 0x3EC
+     * #1); the markers just make the frozen diorama legible. */
     Sprite *shaftspr = sprites_find(&game.sprites, SPR_ELEV_SHAFT);
     Sprite *ext = sprites_find(&game.sprites, SPR_ELEV_EXT);
     int tw = ITEM_WIDTH[sel->type] * CELL_W;
@@ -3381,8 +3397,8 @@ static void render_elv_edit_mode(void)
     /* Cars, queues and motor caps for the selected shaft only. */
     render_shaft(sel);
 
-    /* Banner along the bottom (clear of the map/toolbox/info windows): what this
-     * mode is and how to leave it. */
+    /* Banner along the bottom (clear of the map/toolbox/info windows): what
+     * this mode is and how to leave it. Port aid — the EXE has no banner. */
     {
         int by = game.screen_h - 22;
         SDL_SetRenderDrawColor(game.renderer, 18, 22, 34, 235);
@@ -3390,8 +3406,9 @@ static void render_elv_edit_mode(void)
         SDL_RenderFillRect(game.renderer, &band);
         SDL_Color w = { 220, 225, 240, 255 };
         stats_label(94, by + 5,
-                    "ELEVATOR EDIT \xe2\x80\x94 click a floor of this shaft to "
-                    "toggle its stop \xc2\xb7 Resume (or OK) to exit", w);
+                    "SIMULATE \xe2\x80\x94 frozen preview of this shaft "
+                    "settled under its schedule \xc2\xb7 schedule edits only "
+                    "\xc2\xb7 Resume (or OK) to exit", w);
     }
 }
 
@@ -7177,6 +7194,11 @@ static int dropdown_hit_test(int mx, int my)
 /* Save/load/export bodies shared by the F-keys and the Game menu. */
 static void do_save_game(void)
 {
+    /* Never serialize the Simulate mode's transient state (isolated shaft
+     * flags, settled car positions): resolve it first, exactly as if
+     * Resume was pressed. In the EXE this can't arise — every other
+     * window is disabled while the elevator dialog is open. */
+    elv_edit_exit();
     if (game_save(&game.sim, &game.tower, save_path()) == 0)
         add_event_message("Game saved.");
     else
@@ -7185,8 +7207,11 @@ static void do_save_game(void)
 
 static void do_load_game(void)
 {
+    /* Roll the edit mode back against the CURRENT sim before the load
+     * overwrites it — exiting afterwards would smear a stale snapshot
+     * over the freshly loaded state. */
+    elv_edit_exit();
     if (game_load(&game.sim, &game.tower, save_path()) == 0) {
-        elv_edit_exit();
         game.elv_open = 0;          /* dialog target may be gone */
         add_event_message("Game loaded.");
     } else {
@@ -7839,12 +7864,12 @@ static void handle_event(SDL_Event *ev)
              * the click is swallowed silently. */
             if (game.sim.event.active) break;
 
-            /* Simulate/edit mode: a click on the tower toggles the selected
-             * shaft's stop at that floor. The world is frozen; no building. */
-            if (game.elv_edit_mode) {
-                elv_edit_toggle_at(ev->button.x, ev->button.y);
-                break;
-            }
+            /* Simulate/edit mode: the tower is DISPLAY ONLY — the EXE
+             * disables the main/map/toolbar windows for the dialog's whole
+             * lifetime (1098:0691-06ba EnableWindow FALSE) and the build
+             * tools bail on [0xB3AE] besides (11f8:3ba3, 1058:0044).
+             * Swallow the click; all editing goes through the dialog. */
+            if (game.elv_edit_mode) break;
 
             /* Bulldozer: the EXE's demolish dispatch tries elevators, then
              * stairs, then tenants, first-nonzero-wins (1058:0070 ->
@@ -9078,8 +9103,12 @@ int main(int argc, char *argv[])
         }
 
         /* Advance simulation (halted while the Find modal is up, like
-         * the EXE's DialogBoxParam) */
-        if (!game.find_open) {
+         * the EXE's DialogBoxParam). The Simulate edit mode is a HARD
+         * freeze: the EXE's per-frame tick runs only while [0x783E]==1
+         * (1258:0244-02d8) and entering the mode clears it (10f0:007b) —
+         * gating here also keeps the paused-path transport rebuild from
+         * clobbering the mode's isolated shaft flags. */
+        if (!game.find_open && !game.elv_edit_mode) {
             int prev_hour = game.sim.hour;
             int prev_star = game.tower.star_rating;
             int prev_pop = game.tower.population;
@@ -9458,23 +9487,11 @@ int main(int argc, char *argv[])
                 }
                 render();
             }
-            /* Headless test for the edit-mode stop toggle: ELV_WORLD_CLICKS
-             * routes each point through the real world-click toggle path. */
-            const char *wclicks = getenv("ELV_WORLD_CLICKS");
-            if (wclicks && game.elv_edit_mode) {
-                char buf[256];
-                snprintf(buf, sizeof(buf), "%s", wclicks);
-                for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
-                    int cx, cy;
-                    if (sscanf(tok, "%d,%d", &cx, &cy) == 2) {
-                        int fl, cell; screen_to_grid(cx, cy, &fl, &cell);
-                        int hit = elv_edit_toggle_at(cx, cy);
-                        printf("[test] world click %d,%d -> floor=%d cell=%d "
-                               "toggled=%d\n", cx, cy, fl, cell, hit);
-                    }
-                }
-                render();
-            }
+            /* (The old ELV_WORLD_CLICKS hook drove the port's invented
+             * in-mode stop toggle; the EXE takes NO tower input during
+             * Simulate mode, so the toggle and its hook are gone. Dialog
+             * behavior — including the in-mode refusal — is still
+             * drivable through ELV_TEST_CLICKS above.) */
             /* Headless test for the demolish dispatch: DEMOLISH_CLICKS =
              * "floor,cell;..." routes each through the real bulldozer path
              * (elevator -> stairs -> tenant), auto-answering Yes to any

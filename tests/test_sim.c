@@ -928,6 +928,88 @@ static void test_elevator_dialog(void)
 
 /* Bulldozing a single car (RemoveOneCar 10a0:036e): riders evicted where
  * the car stands, its calls released, surviving owners remapped down. */
+/* Simulate edit mode (ElvEditT seg_10f0; referee 2026-08-01): entering
+ * snapshots + isolates the group and fast-forwards its cars 2x150 ticks to
+ * a settled arrangement, with ZERO effect on people, queues, stress, money
+ * or time; exiting rolls everything back to the enter instant except the
+ * schedule/SHOW settings, which survive. */
+static void test_simulate_editmode(void)
+{
+    printf("simulate edit mode (ElvEditT):\n");
+    fresh();
+    for (int f = 0; f <= 8; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 250);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.shaft_count == 2, "two shafts registered");
+    ElevatorShaft *s = &sim.people.shafts[0];
+    int g = floor_to_index(0), f3 = floor_to_index(3),
+        f5 = floor_to_index(5), f6 = floor_to_index(6);
+
+    /* car 0 homed at f5 but parked at ground; a passenger queued at f3
+     * bound for f6, so the settle has a real trip to run */
+    people_set_home(&sim.people, 0, 0, f5);
+    s->car[0].floor = s->car[0].target = (uint8_t)g;
+    sim.people.people_high = 8;
+    Person *p0 = &sim.people.people[0];
+    memset(p0, 0, sizeof(*p0));
+    p0->home_tenant = 1;
+    p0->state = PERSON_QUEUED;
+    p0->cur_floor = (uint8_t)f3;
+    p0->dest_floor = (uint8_t)f6;
+    p0->dir = 1;
+    people_join_queue(&sim.people, 0, f3, 1, 0);
+    CHECK(s->up_call_car[f3] == 1, "queued person's call assigned to car 1");
+
+    /* pre-enter reference state */
+    Person pre_p0 = *p0;
+    ElevatorStop pre_stop = s->stop[f3];
+    uint8_t pre_floor = s->car[0].floor;
+    long pre_money = tw.money;
+    long pre_wait_total = sim.people.wait_total;
+    long pre_trips = sim.people.trips_done;
+
+    people_edit_enter(&sim.people, &tw, 0, tw.star_rating, 0);
+    CHECK(people_edit_shaft() == 0, "edit mode active on shaft 0");
+    CHECK(s->active && !sim.people.shafts[1].active,
+          "other group isolated (active flag cleared)");
+    /* the settle: car served f3 -> f6, then went home to f5 — only the
+     * physics fields keep the fast-forwarded arrangement */
+    CHECK(s->car[0].floor == f5, "settle parked the idle car at its home");
+    CHECK(memcmp(p0, &pre_p0, sizeof(Person)) == 0,
+          "person record byte-identical after the settle");
+    CHECK(memcmp(&s->stop[f3], &pre_stop, sizeof(ElevatorStop)) == 0,
+          "stop queue restored to the enter instant");
+    CHECK(s->up_call_car[f3] == 1 && s->car[0].assigned_calls == 1,
+          "call assignment restored");
+    CHECK(s->car[0].passengers == 0 && s->car[0].dest_count[f6] == 0,
+          "no pre-sim passengers or dests leak into the still view");
+    CHECK(tw.money == pre_money && sim.people.wait_total == pre_wait_total &&
+          sim.people.trips_done == pre_trips,
+          "zero effect on money / stress bank / trip stats");
+
+    /* re-entering while in the mode is refused (EXE: [0xB3AE] toggle) */
+    people_edit_enter(&sim.people, &tw, 1, tw.star_rating, 0);
+    CHECK(people_edit_shaft() == 0, "nested enter refused");
+
+    /* in-mode schedule edits (the ALLOWED widgets) survive the rollback */
+    s->sched_mode[0][2] = 1;
+    s->sched_threshold[0][2] = 42;
+    s->sched_patience[0][2] = 3;
+    s->hidden = 1;
+    people_edit_exit(&sim.people);
+    CHECK(people_edit_shaft() == -1, "edit mode exited");
+    CHECK(s->car[0].floor == pre_floor,
+          "car physics rolled back to the enter instant");
+    CHECK(s->sched_mode[0][2] == 1 && s->sched_threshold[0][2] == 42 &&
+          s->sched_patience[0][2] == 3 && s->hidden == 1,
+          "schedule + SHOW edits survive the rollback");
+    CHECK(sim.people.shafts[1].active, "other group re-activated");
+    CHECK(s->stop[f3].up_count == 1 &&
+          memcmp(p0, &pre_p0, sizeof(Person)) == 0,
+          "queue and person untouched across the whole mode");
+    CHECK(s->home[0] == f5, "car home (set before entering) kept");
+}
+
 static void test_remove_car(void)
 {
     printf("car removal (demolish referee 2026-08-02):\n");
@@ -3184,6 +3266,7 @@ int main(void)
     test_errand_warning_watchdog();
     test_queue_and_stress();
     test_elevator_dialog();
+    test_simulate_editmode();
     test_remove_car();
     test_shuttle_and_patience();
     test_patrons_and_staff();

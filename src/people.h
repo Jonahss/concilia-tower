@@ -326,6 +326,21 @@ void people_remove_car(PeopleSim *ps, int shaft, int ci);
 void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on);
 void people_set_home(PeopleSim *ps, int shaft, int car, int fidx);
 
+/* Elevator "Simulate" edit mode (ElvEditT seg_10f0), sim-side half.
+ * enter = EnterElevatorEditMode 10f0:0000: snapshot the group, isolate it
+ * (other groups' active flags saved+cleared), fast-forward its cars
+ * 2x(150|200) ticks (star-scaled [0xDD78]) with sound muted, then rewind
+ * every logical field so only the car arrangement keeps the settled state.
+ * exit = RollbackGroupKeepSettings 10f0:0719 + ExitElevatorEditMode
+ * 10f0:009c: schedule/SHOW edits survive; everything else reverts to the
+ * enter instant. The caller owns the clock freeze and the in-mode UI
+ * refusals. State lives in people.c statics — never serialized (the .sav
+ * dumps GameSim wholesale; its layout is frozen). */
+void people_edit_enter(PeopleSim *ps, Tower *tower, int shaft, int star,
+                       int frame);
+void people_edit_exit(PeopleSim *ps);
+int  people_edit_shaft(void);   /* isolated shaft index; -1 = not in mode */
+
 /* Info-dialog transport-distance: nearest transport serving a floor + its
  * cell-distance. Returns 0 none / 1 walk (stairs/escalator) / 2 elevator. */
 int people_nearest_transport(PeopleSim *ps, Tower *tower, int from_fidx,
