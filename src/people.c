@@ -1181,9 +1181,17 @@ static void car_start_step(ElevatorShaft *s, ElevatorCar *c)
 }
 
 /* UpdateDirection (1090:1d2f) essence: a car that stopped to answer a call
- * it owns turns to face the call's direction before boarding. */
+ * it owns turns to face the call's direction before boarding.
+ * SCAN discipline: the flip applies only when NOTHING of the car's own
+ * work (onboard dest or owned call) remains AHEAD in its direction. A
+ * call at the current floor must never reverse a mid-sweep car —
+ * otherwise a full car livelocks between busy near floors while far
+ * passengers ride hostage forever (Jonah's tower, 2026-08-02: 17 of 21
+ * riders bound for the top floor, car ping-ponging lobby<->mid floors
+ * for whole game days). */
 static void adopt_call_direction(ElevatorShaft *s, ElevatorCar *c, int ci)
 {
+    if (car_turnaround(s, c, ci) != c->floor) return;   /* work ahead */
     uint8_t mine = (uint8_t)(ci + 1);
     if (s->up_call_car[c->floor] == mine) c->dir = 1;
     else if (s->down_call_car[c->floor] == mine) c->dir = 0;
