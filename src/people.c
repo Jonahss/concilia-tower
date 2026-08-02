@@ -673,6 +673,16 @@ static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
 {
     uint8_t *slot = up ? &s->up_call_car[floor] : &s->down_call_car[floor];
     if (*slot) return;                       /* already assigned */
+    /* SelectElevator's no-assignment path (raw 1002-1012): a stationary car
+     * already sitting at the call floor (sched != 0, or facing the call's
+     * direction) assigns NOTHING — its boarding pass just takes them.
+     * (referee L3) */
+    for (int k = 0; k < s->num_cars; k++) {
+        ElevatorCar *c0 = &s->car[k];
+        if (!c0->active || c0->floor != floor || c0->target != c0->floor)
+            continue;
+        if (c0->schedule_index || (int)c0->dir == up) return;
+    }
     int ci = select_car(ps, s, floor, up);
     if (ci < 0) return;
     *slot = (uint8_t)(ci + 1);
@@ -756,6 +766,41 @@ void people_set_num_cars(PeopleSim *ps, int shaft, int n)
         memset(c, 0, sizeof(*c));
     }
     s->num_cars = (uint8_t)n;
+}
+
+/* Bulldoze on a car (RemoveOneCar 10a0:036e, via the demolish dispatch
+ * 10a0:0201): evict its riders where it stands, release its call
+ * ownership, compact the car array (remapping surviving owners), dec the
+ * count. Orphaned queues re-press the button via the every-tick re-call
+ * sweep (the EXE re-dispatches inline at 1090:0a4c — same net effect one
+ * tick later). Never removes the last car — that's a whole-shaft demolish
+ * (10a0:0201 @023f), which the caller handles. */
+void people_remove_car(PeopleSim *ps, int shaft, int ci)
+{
+    if (shaft < 0 || shaft >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[shaft];
+    if (ci < 0 || ci >= s->num_cars || s->num_cars <= 1) return;
+    ElevatorCar *c = &s->car[ci];
+    for (int k = 0; k < CAR_SLOTS; k++) {
+        if (!c->pax[k]) continue;
+        Person *p = &ps->people[c->pax[k] - 1];
+        p->cur_floor = c->floor;
+        p->state = PERSON_PLANNING;
+    }
+    for (int f = 0; f < TOWER_FLOOR_COUNT; f++) {
+        uint8_t *slots[2] = { &s->up_call_car[f], &s->down_call_car[f] };
+        for (int d = 0; d < 2; d++) {
+            if (*slots[d] == (uint8_t)(ci + 1)) *slots[d] = 0;
+            else if (*slots[d] > (uint8_t)(ci + 1)) (*slots[d])--;
+        }
+    }
+    for (int k = ci; k < s->num_cars - 1; k++) {
+        s->car[k] = s->car[k + 1];
+        s->home[k] = s->home[k + 1];
+    }
+    memset(&s->car[s->num_cars - 1], 0, sizeof(ElevatorCar));
+    s->home[s->num_cars - 1] = s->lo;
+    s->num_cars--;
 }
 
 void people_set_home(PeopleSim *ps, int shaft, int car, int fidx)
@@ -1160,25 +1205,15 @@ static void unboard_at_floor(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     }
 }
 
-/* Board one person from the queue in the car's direction. Returns 1 if
- * someone boarded. Implements idle-direction-adoption and the
- * service-elevators-don't-bank-stress rule. */
-static int board_one(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
-                     ElevatorCar *c, int frame)
+/* Board one person from the queue in the given direction only. Returns 1
+ * if someone boarded. Implements the service-elevators-don't-bank-stress
+ * rule. */
+static int board_one_dir(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
+                         ElevatorCar *c, int frame, int up)
 {
     (void)tower;
     if (c->passengers >= s->capacity) return 0;
-    int up = c->dir;
-    if (queue_len(s, c->floor, up) == 0) {
-        if (queue_len(s, c->floor, !up) == 0) return 0;
-        if (c->schedule_index) {
-            up = !up;       /* both-direction pickup (TripT, sched != 0) */
-        } else {
-            if (c->assigned_calls || c->distinct_dests) return 0;
-            c->dir = (uint8_t)!up;      /* adopt the waiting direction */
-            up = c->dir;
-        }
-    }
+    if (queue_len(s, c->floor, up) == 0) return 0;
     int pi = dequeue(s, c->floor, up);
     if (pi < 0) return 0;
     Person *p = &ps->people[pi];
@@ -1197,14 +1232,41 @@ static int board_one(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     return 1;
 }
 
+/* Board one person, preferring the car's direction. Mode 0 adopts the
+ * waiting direction when idle with no work; sched != 0 falls back to the
+ * opposite queue (per-tick pacing for that mode lives in car_tick,
+ * referee L7 — this wrapper serves the bulk tick and mode 0). */
+static int board_one(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
+                     ElevatorCar *c, int frame)
+{
+    if (c->passengers >= s->capacity) return 0;
+    int up = c->dir;
+    if (queue_len(s, c->floor, up) == 0) {
+        if (queue_len(s, c->floor, !up) == 0) return 0;
+        if (c->schedule_index) {
+            up = !up;       /* both-direction pickup (TripT, sched != 0) */
+        } else {
+            if (c->assigned_calls || c->distinct_dests) return 0;
+            c->dir = (uint8_t)!up;      /* adopt the waiting direction */
+            up = c->dir;
+        }
+    }
+    return board_one_dir(ps, tower, s, c, frame, up);
+}
+
+/* ClearFloorCall (1090:12c9, raw 1202-1225): at mode 0 only the DEPARTING
+ * direction's slot is released (up slot when dir==up, down when dir==down);
+ * the opposite call stays assigned and is served on the return sweep.
+ * Shuttle modes (sched != 0) clear both. (referee L1) */
 static void clear_call(ElevatorShaft *s, ElevatorCar *c, int ci, int floor)
 {
     uint8_t mine = (uint8_t)(ci + 1);
-    if (s->up_call_car[floor] == mine) {
+    int sched = c->schedule_index != 0;
+    if ((sched || c->dir) && s->up_call_car[floor] == mine) {
         s->up_call_car[floor] = 0;
         if (c->assigned_calls) c->assigned_calls--;
     }
-    if (s->down_call_car[floor] == mine) {
+    if ((sched || !c->dir) && s->down_call_car[floor] == mine) {
         s->down_call_car[floor] = 0;
         if (c->assigned_calls) c->assigned_calls--;
     }
@@ -1274,11 +1336,60 @@ static int shaft_extreme(const ElevatorShaft *s, int top)
     return s->lo;
 }
 
+/* Re-derive a car's target in place (the UpdateCarState tail used by
+ * CallElevator/ReassignCalls). Mid-boarding cars finish the door cycle
+ * first; an in-flight car can only pull its stop EARLIER on the same
+ * path — the depart path re-derives everything else at the next stop. */
+static void car_retarget(ElevatorShaft *s, ElevatorCar *c, int ci)
+{
+    if (c->door_timer) return;
+    int tgt = find_target_floor(s, c, ci);
+    if (tgt < 0 && !c->passengers && c->floor != s->home[ci])
+        tgt = s->home[ci];
+    if (tgt < 0) { if (c->target == c->floor) return; tgt = c->floor; }
+    if (tgt == c->target) return;
+    if (c->target == c->floor) {
+        if (tgt == c->floor) return;
+        c->dir = (uint8_t)(tgt > c->floor);
+        c->target = (uint8_t)tgt;
+        c->leg_start = c->floor;
+        car_start_step(s, c);
+    } else if ((c->dir && tgt > c->floor && tgt < c->target) ||
+               (!c->dir && tgt < c->floor && tgt > c->target)) {
+        c->target = (uint8_t)tgt;
+    }
+}
+
+/* ReassignCalls (1090:13cc): when a car opens its doors, any call at this
+ * floor still assigned to a DIFFERENT car is stolen — this car is here and
+ * will board them — and the robbed car retargets on the spot (DecrementWait
+ * 1090:151c). Kills the stale-assignment busy-score skew in multi-car
+ * banks. (referee L2) */
+static void reassign_calls(ElevatorShaft *s, ElevatorCar *c, int ci)
+{
+    uint8_t mine = (uint8_t)(ci + 1);
+    for (int d = 0; d < 2; d++) {
+        uint8_t *slot = d ? &s->down_call_car[c->floor]
+                          : &s->up_call_car[c->floor];
+        if (!*slot || *slot == mine) continue;
+        ElevatorCar *oc = &s->car[*slot - 1];
+        int oci = *slot - 1;
+        if (oc->assigned_calls) oc->assigned_calls--;
+        *slot = mine;
+        c->assigned_calls++;
+        car_retarget(s, oc, oci);
+    }
+}
+
 static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
                                ElevatorCar *c, int ci)
 {
-    /* turnaround = where the EXE refreshes schedule_index (1090:08e7) */
-    c->schedule_index = sched_mode_now(ps, s);
+    /* Mode refresh (referee L9): the EXE re-reads the schedule table only
+     * during a door cycle at the shaft's top/bottom (raw 692-700) — a
+     * departure decision at an extreme is the tail of such a cycle. Mode
+     * changes elsewhere wait for the next turnaround. */
+    if (c->floor == s->lo || c->floor == s->hi)
+        c->schedule_index = sched_mode_now(ps, s);
     clear_call(s, c, ci, c->floor);
     /* people still queued here with no assigned car press the button again */
     if (queue_len(s, c->floor, 1) && !s->up_call_car[c->floor])
@@ -1308,6 +1419,14 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
 
     if (c->door_timer) {
         if (c->door_timer == DOOR_OPEN_TICKS) {
+            /* ReassignCalls runs as the doors open (referee L2) */
+            reassign_calls(s, c, ci);
+            /* Schedule refresh cadence (referee L9): the EXE re-reads the
+             * mode table only at ResetOneCar and when opening doors at the
+             * shaft's top/bottom (raw 692-700) — mode changes take effect
+             * at the next turnaround, not mid-sweep. */
+            if (c->floor == s->lo || c->floor == s->hi)
+                c->schedule_index = sched_mode_now(ps, s);
             /* Arrival "ding" (#6001): the EXE gates on the car's requested-stop
              * byte [bx+0x2A6C] for this floor (our dest_count), read before
              * unboarding clears it — so a car dings once on arriving at a
@@ -1324,6 +1443,11 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         if (c->door_timer & 1) {
             if (c->door_timer == 1) {
                 while (board_one(ps, tower, s, c, frame)) {}
+            } else if (c->schedule_index) {
+                /* sched != 0 boards one from EACH direction per odd tick
+                 * (TripT raw 1210:0351 second loop — referee L7) */
+                board_one_dir(ps, tower, s, c, frame, c->dir);
+                board_one_dir(ps, tower, s, c, frame, !c->dir);
             } else {
                 board_one(ps, tower, s, c, frame);
             }
@@ -1370,11 +1494,19 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         return;
     }
 
-    /* idle at a floor: serve it if anyone wants on/off */
+    /* idle at a floor: the EXE's parked cars rest DOORS OPEN and re-run
+     * the open-door pass every tick (MoveElevator idle branch raw 684-711,
+     * referee L8) — so a walk-up boards straight away (no full open cycle,
+     * which only exists to unboard, and an idle car carries no one) and a
+     * car parked at the shaft's top/bottom keeps re-reading the mode table
+     * (referee L9). */
+    if (c->floor == s->lo || c->floor == s->hi)
+        c->schedule_index = sched_mode_now(ps, s);
     if (c->dest_count[c->floor] ||
         queue_len(s, c->floor, 1) || queue_len(s, c->floor, 0)) {
+        reassign_calls(s, c, ci);
         adopt_call_direction(s, c, ci);
-        c->door_timer = DOOR_OPEN_TICKS;
+        c->door_timer = c->dest_count[c->floor] ? DOOR_OPEN_TICKS : 1;
         return;
     }
     car_depart_or_idle(ps, s, c, ci);   /* schedule-aware idle targeting */

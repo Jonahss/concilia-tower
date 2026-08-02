@@ -322,6 +322,7 @@ int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
  * set_serviced: toggles a floor stop; turning it off flushes that floor's
  * queues (riders already aboard still get dropped there). */
 void people_set_num_cars(PeopleSim *ps, int shaft, int n);
+void people_remove_car(PeopleSim *ps, int shaft, int ci);
 void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on);
 void people_set_home(PeopleSim *ps, int shaft, int car, int fidx);
 

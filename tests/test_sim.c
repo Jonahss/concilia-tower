@@ -842,7 +842,17 @@ static void test_queue_and_stress(void)
     for (int i = 0; i < 60; i++)
         joined += people_join_queue(&sim.people, 0, g, 1, i);
     CHECK(joined == 40, "queue caps at 40 per direction");
-    CHECK(s->up_call_car[g] != 0, "first joiner pressed the call button");
+    /* SelectElevator's no-assignment path (raw 1002-1012, referee L3):
+     * the car is parked right here facing up, so the button assigns
+     * NOTHING — the parked car's boarding pass takes the queue. */
+    CHECK(s->up_call_car[g] == 0,
+          "parked car at the call floor: no call assigned");
+    people_update(&sim.people, &tw, 1, 1, 9, sim.reach_public,
+                  sim.reach_service);
+    people_update(&sim.people, &tw, 2, 1, 9, sim.reach_public,
+                  sim.reach_service);
+    CHECK(s->car[0].passengers > 0,
+          "parked car boarded walk-ups without a call");
 }
 
 /* The elevator dialog's controls: per-floor stop toggles + car count */
@@ -909,6 +919,43 @@ static void test_elevator_dialog(void)
     CHECK(s->num_cars == 2, "car count survived the rebuild");
     CHECK(!s->serviced[f3] && s->serviced[g] && s->serviced[s->hi],
           "serviced flags survived; new floor defaults on");
+}
+
+/* Bulldozing a single car (RemoveOneCar 10a0:036e): riders evicted where
+ * the car stands, its calls released, surviving owners remapped down. */
+static void test_remove_car(void)
+{
+    printf("car removal (demolish referee 2026-08-02):\n");
+    fresh();
+    for (int f = 0; f <= 6; f++) place(ITEM_ELEVATOR_SHAFT, f, 196);
+    people_rebuild_transport(&sim.people, &tw);
+    ElevatorShaft *s = &sim.people.shafts[0];
+    people_set_num_cars(&sim.people, 0, 3);
+    int f2 = floor_to_index(2), f5 = floor_to_index(5);
+
+    sim.people.people_high = 4;
+    sim.people.people[0].home_tenant = 1;
+    sim.people.people[0].state = PERSON_RIDING;
+    s->car[1].floor = (uint8_t)f2;
+    s->car[1].passengers = 1;
+    s->car[1].pax[0] = 1;                     /* person 0 rides car 1 */
+    s->car[1].assigned_calls = 1;
+    s->up_call_car[f5] = 2;                   /* car 1 owns f5's call */
+    s->car[2].assigned_calls = 1;
+    s->up_call_car[f2] = 3;                   /* car 2 owns f2's call */
+
+    people_remove_car(&sim.people, 0, 1);
+    CHECK(s->num_cars == 2, "car count decremented");
+    CHECK(s->up_call_car[f5] == 0, "removed car's call released");
+    CHECK(s->up_call_car[f2] == 2, "surviving owner remapped down");
+    CHECK(s->car[1].assigned_calls == 1, "surviving car compacted in place");
+    CHECK(sim.people.people[0].state == PERSON_PLANNING &&
+          sim.people.people[0].cur_floor == f2,
+          "rider evicted where the car stood");
+
+    people_remove_car(&sim.people, 0, 0);
+    people_remove_car(&sim.people, 0, 0);
+    CHECK(s->num_cars == 1, "last car can never be removed here");
 }
 
 /* Modes 1/2 = one-way shuttles (FindTargetFloor raw 1322-1363/1490-1526):
@@ -1600,15 +1647,17 @@ static void test_schedules(void)
     s->up_call_car[s->lo + 3] = 0;
     s->stop[s->lo + 3].up_count = 0;
     /* an idle-at-home car only wakes when the working car is clearly
-     * worse: send car1 reversing from a far dest, call at the bottom */
+     * worse: send car1 reversing from a far dest. The call goes to lo+1,
+     * NOT the idle car's own floor — a call at a parked car's floor now
+     * assigns nothing at all (referee L3). */
     s->sched_threshold[0][0] = 1;
     s->car[1].floor = (uint8_t)(s->lo + 4);
     s->car[1].dest_count[s->hi] = 1;    /* sweep runs to the top first */
-    people_join_queue(&sim.people, 0, s->lo, 1, 0);
-    CHECK(s->up_call_car[s->lo] == 1,
+    people_join_queue(&sim.people, 0, s->lo + 1, 1, 0);
+    CHECK(s->up_call_car[s->lo + 1] == 1,
           "reversing car far worse than idle-at-home: idle answers");
-    s->up_call_car[s->lo] = 0;
-    s->stop[s->lo].up_count = 0;
+    s->up_call_car[s->lo + 1] = 0;
+    s->stop[s->lo + 1].up_count = 0;
     s->car[1].dest_count[s->hi] = 0;
     people_set_num_cars(&sim.people, 0, 1);
 
@@ -3011,6 +3060,7 @@ int main(void)
     test_errand_warning_watchdog();
     test_queue_and_stress();
     test_elevator_dialog();
+    test_remove_car();
     test_shuttle_and_patience();
     test_patrons_and_staff();
     test_money();

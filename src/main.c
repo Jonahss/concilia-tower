@@ -5117,11 +5117,15 @@ static void route_confirm_close(void)
     game.sim.speed = game.route_saved_speed;
 }
 
+static void remove_shaft_now(int si);
+
 static void route_confirm_yes(void)
 {
     if (game.route_confirm_kind == 1) {
         people_set_serviced(&game.sim.people, game.route_confirm_shaft,
                             game.route_confirm_fidx, 0);
+    } else if (game.route_confirm_kind == 3) {
+        remove_shaft_now(game.route_confirm_shaft);
     } else if (tower_remove(&game.tower, game.route_confirm_tid)) {
         play_snd(SND_DELETE);
     }
@@ -5231,6 +5235,124 @@ static int request_remove_tenant(uint16_t tid, ItemType ty)
             add_event_message(tower_reject_reason());
     }
     return 1;
+}
+
+/* Demolish a whole elevator group (10a0:0201 whole-shaft path @0287):
+ * clear every tenant record of the column, then sweep any grid cells the
+ * records didn't cover (cap-drag extensions stamp cells recordless) back
+ * to deck/dirt. NO refund — the EXE's path makes zero MoneyT calls. */
+static void remove_shaft_now(int si)
+{
+    PeopleSim *ps = &game.sim.people;
+    if (si < 0 || si >= ps->shaft_count) return;
+    ElevatorShaft *s = &ps->shafts[si];
+    int w = ITEM_WIDTH[s->type];
+
+    uint16_t ids[TOWER_FLOOR_COUNT];
+    int n = 0;
+    for (int i = 0; i < game.tower.tenant_count && n < TOWER_FLOOR_COUNT; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type != s->type || t->x != s->x) continue;
+        int tlo = floor_to_index(t->floor);
+        if (tlo + t->height <= s->lo || tlo > s->hi) continue;
+        ids[n++] = t->id;   /* only records inside THIS shaft's span
+                             * (a second same-type shaft stacked in the
+                             * column keeps its records) */
+    }
+    for (int i = 0; i < n; i++) tower_remove(&game.tower, ids[i]);
+    for (int f = s->lo; f <= s->hi; f++) {
+        for (int cx = s->x; cx < s->x + w; cx++) {
+            TowerCell *cell = &game.tower.grid[f][cx];
+            if (cell->type != s->type) continue;
+            uint8_t keep_overlay = cell->flags & CELL_TRANSPORT_OVERLAY;
+            if (f >= floor_to_index(0)) {
+                cell->type = ITEM_FLOOR;
+                cell->tenant_id = 0;
+                cell->cell_index = 0;
+                cell->flags = keep_overlay | CELL_OCCUPIED;
+            } else {
+                memset(cell, 0, sizeof(*cell));
+                cell->flags = keep_overlay;
+            }
+        }
+    }
+    play_snd(SND_DELETE);
+    printf("Demolish: entire %s shaft x=%d (F%d..F%d)\n",
+           tower_item_name(s->type), s->x, s->lo - 10, s->hi - 10);
+}
+
+/* The facility BEHIND a shaft at a cell (shafts stamp the grid, so the
+ * cell's tenant_id is the shaft's own record): footprint search over real
+ * facilities — no elevators, no stair/escalator overlays (those get their
+ * own hit-test), no floor decks (the EXE's deck extents aren't tenant
+ * records and can't be bulldozed out from under a shaft). */
+static Tenant *tenant_behind_shaft_at(int fidx, int x)
+{
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type == ITEM_NONE || t->type == ITEM_FLOOR ||
+            item_is_elevator(t->type) ||
+            t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR)
+            continue;
+        int lo = floor_to_index(t->floor);
+        if (fidx < lo || fidx >= lo + t->height) continue;
+        if (x < t->x || x >= t->x + t->width) continue;
+        return t;
+    }
+    return NULL;
+}
+
+/* Bulldoze on an elevator — the EXE hit-tests elevators FIRST in the
+ * demolish dispatch (1058:0070 -> 10a0:0201; elevator-demolish referee
+ * 2026-08-02). Returns 1 when the click is consumed; 0 lets it fall
+ * through to stairs/tenants (only possible over a Show-Off shaft). */
+static int demolish_elevator_at(int fidx, int x)
+{
+    PeopleSim *ps = &game.sim.people;
+    for (int si = 0; si < ps->shaft_count; si++) {
+        ElevatorShaft *s = &ps->shafts[si];
+        if (!s->active) continue;
+        int w = ITEM_WIDTH[s->type];
+        if (x < s->x || x >= s->x + w) continue;
+
+        if (fidx >= s->lo && fidx <= s->hi) {
+            /* a car parked/stopped here? that car is the target (@0349) */
+            int ci = -1;
+            for (int k = 0; k < s->num_cars; k++)
+                if (s->car[k].active && s->car[k].floor == fidx) {
+                    ci = k;
+                    break;
+                }
+            if (ci >= 0) {
+                if (s->num_cars <= 1)
+                    goto whole_shaft;   /* last car = shaft demolish @023f */
+                people_remove_car(ps, si, ci);
+                play_snd(SND_DELETE);
+                printf("Removed car %d from shaft x=%d (now %d cars)\n",
+                       ci, s->x, s->num_cars);
+                return 1;
+            }
+            /* empty in-span cell: nothing demolishes, EVER (@0270-0284).
+             * Show on = click consumed; Show off = falls through to the
+             * item behind the shaft. */
+            return s->hidden ? 0 : 1;
+        }
+
+        if (fidx == s->hi + 1 || fidx == s->lo - 1) {
+            /* motor room / pit rows (hit span [bottom-1, top+1] @1431) */
+        whole_shaft:
+            for (int f = s->lo; f <= s->hi; f++) {
+                if (!s->serviced[f]) continue;
+                if (game_remove_route_loss(&game.sim, &game.tower, si, f)) {
+                    route_confirm_open(ROUTE_MSGS[3], 3, si, f, 0);
+                    return 1;
+                }
+            }
+            remove_shaft_now(si);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* Fire-glow: a warm, pulsing tint washed over the scene while a fire burns.
@@ -7704,14 +7826,31 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
 
-            /* Bulldozer: remove the facility under the cursor. */
+            /* Bulldozer: the EXE's demolish dispatch tries elevators, then
+             * stairs, then tenants, first-nonzero-wins (1058:0070 ->
+             * 10a0:0201 -> 10c0:04e0 -> 11f8:0793). A shaft never splits:
+             * car cell = that car, motor room/pit/last car = whole shaft,
+             * empty span cell = nothing (Show off exposes the item behind). */
             if (game.demolish_mode) {
                 int fidx = floor_to_index(game.mouse_floor);
                 if (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                     game.mouse_cell >= 0 && game.mouse_cell < TOWER_WIDTH) {
-                    uint16_t tid = game.tower.grid[fidx][game.mouse_cell].tenant_id;
-                    if (tid) {
-                        ItemType ty = game.tower.grid[fidx][game.mouse_cell].type;
+                    if (demolish_elevator_at(fidx, game.mouse_cell)) break;
+                    uint16_t stid = stair_hit_test(game.mouse_floor,
+                                                   game.mouse_cell);
+                    TowerCell *cell = &game.tower.grid[fidx][game.mouse_cell];
+                    uint16_t tid = cell->tenant_id;
+                    ItemType ty = cell->type;
+                    if (stid) {
+                        Tenant *st = tower_tenant(&game.tower, stid);
+                        if (st) request_remove_tenant(stid, st->type);
+                    } else if (tid && item_is_elevator(ty)) {
+                        /* Show-Off shaft: demolish the item BEHIND the
+                         * shaft, never the shaft record itself. */
+                        Tenant *bt = tenant_behind_shaft_at(fidx,
+                                                            game.mouse_cell);
+                        if (bt) request_remove_tenant(bt->id, bt->type);
+                    } else if (tid) {
                         request_remove_tenant(tid, ty);
                     }
                 }
