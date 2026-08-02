@@ -4026,6 +4026,28 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &dot);
     }
 
+    /* Elevator group lines from the LIVE shaft structs, drawn over the
+     * per-floor tenant rows: cap-drag extensions add grid cells without
+     * fresh tenant records, which left gaps in the tenant-driven 1px
+     * lines (Jonah's map report, 2026-08-02). The shaft struct's lo..hi
+     * is the authoritative span. */
+    for (int si = 0; si < game.sim.people.shaft_count; si++) {
+        ElevatorShaft *s = &game.sim.people.shafts[si];
+        if (!s->active) continue;
+        int fl_lo = s->lo + TOWER_MIN_FLOOR;
+        int fl_hi = s->hi + TOWER_MIN_FLOOR;
+        int ty = (int)(ground_line - (fl_hi + 1) * pf);
+        int by = (int)(ground_line - fl_lo * pf);
+        int tx = map_x + (s->x * map_w / TOWER_WIDTH);
+        int tw = map_x + ((s->x + 4) * map_w / TOWER_WIDTH) - tx;
+        uint8_t r, g, b;
+        if (game.map_mode == 0) item_fallback_color(s->type, &r, &g, &b);
+        else { r = 70; g = 70; b = 70; }        /* shell in overlays */
+        SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
+        SDL_Rect line = { tx + tw / 2, ty, 1, by - ty };
+        SDL_RenderFillRect(game.renderer, &line);
+    }
+
     /* Legend strip (the EXE blits bitmap 0x138+mode over the map). Anchor it to
      * the TOP of the map (sky) rather than the bottom — the lowest floors
      * (lobby + basements) are the densest part of the silhouette and the legend
