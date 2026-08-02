@@ -18,10 +18,11 @@
  *     -> arrival delivers banked frustration to the home tenant
  *
  * Simplifications vs the EXE (documented, to revisit):
- *   - walk chains are approximated by "walk hop toward a lobby that has
- *     a connecting elevator" instead of precomputed chain/slot tables
  *   - cars use a flat ticks-per-floor speed instead of the 4-level
  *     accel curve
+ * (The chain/slot transfer tables are the EXE's own since 2026-08-02 —
+ * see the TransferT block below; routing consumes them one transfer
+ * deep, exactly as deep as the tables themselves go.)
  */
 #include <string.h>
 #include <stdio.h>
@@ -166,6 +167,285 @@ static int shaft_serves(const ElevatorShaft *s, int fidx)
     return wf <= 0 || (wf % 15) == 0;    /* basements, ground, sky lobbies */
 }
 
+/* ---------- transfer chain/slot tables (TransferT seg_11b0, low half) ----
+ *
+ * The EXE's three precomputed routing structures (transfer-tables referee
+ * 2026-08-02, byte-verified):
+ *   WALK CHAINS     8 x 0x1e4 @DS:0xBFF1  (BuildWalkChains 11b0:06a4)
+ *   ROUTING SLOTS   16 x 6    @DS:0xDB9C  (BuildRoutingSlots 11b0:049f)
+ *   TRANSFER TABLES u32[120] per transport (BuildAllTransferTables 11b0:00f2)
+ *
+ * Transport ids: bits 0..23 = elevator shafts, bits 24..31 = chains.
+ * A CHAIN is a walkable zone anchored at the lobby grid, acting as a
+ * virtual transport with its own transfer table; a SLOT is a lobby-floor
+ * transfer point holding the mask of transports that physically touch
+ * that lobby.
+ *
+ * The EXE dual-encodes ttable[f]: floor NOT served -> MASK of co-located
+ * transports that reach f directly; floor served -> slot index + 1. The
+ * port splits the encoding into xfer_mask[] + slot_at[] per transport —
+ * same content, no packing.
+ *
+ * These live in a STATIC struct, NOT in PeopleSim: game_save raw-dumps
+ * GameSim (which embeds PeopleSim), so PeopleSim's layout is frozen. The
+ * EXE re-derives slots+ttables on load anyway (FileT seg27:0a8e), so the
+ * tables are rebuilt on demand whenever they fall behind the sim's
+ * layout_stamp (which now folds in serviced flags and lobby spans). */
+
+#define MAX_CHAINS 8
+#define MAX_SLOTS  16
+#define SHAFT_BIT(i) (1u << (i))
+#define CHAIN_BIT(k) (1u << (24 + (k)))
+
+typedef struct {            /* one walkable zone anchored at the lobby grid */
+    uint8_t  active;
+    uint8_t  top;           /* chain+1: up-reach floor index (byte truth —
+                             * the old annotation had top/bottom swapped;
+                             * erratum in the 2026-08-02 referee) */
+    uint8_t  bottom;        /* chain+2: down-reach floor index */
+    uint32_t xfer_mask[TOWER_FLOOR_COUNT];  /* floor not covered */
+    uint8_t  slot_at[TOWER_FLOOR_COUNT];    /* floor covered: slot idx+1 */
+} WalkChain;
+
+typedef struct {            /* one lobby-floor transfer point */
+    uint32_t mask;          /* +0: transports touching this lobby */
+    int16_t  floor;         /* +4: floor index; -1 = unused (EXE 0xFF) */
+} RoutingSlot;
+
+typedef struct {            /* per-shaft transfer table (EXE group+0xC2) */
+    uint32_t xfer_mask[TOWER_FLOOR_COUNT];
+    uint8_t  slot_at[TOWER_FLOOR_COUNT];
+} ShaftTTable;
+
+static struct {
+    uint32_t stamp;         /* ps->layout_stamp the tables were built for */
+    uint8_t  dirty;         /* forced invalidation (serviced toggles) */
+    int      slot_count;
+    WalkChain   chains[MAX_CHAINS];
+    RoutingSlot slots[MAX_SLOTS];
+    ShaftTTable shaft_tt[MAX_SHAFTS];
+} XFER;
+
+static int chain_covers(int k, int f)   /* ChainCovers 11b0:08f2 (090a-0920) */
+{
+    const WalkChain *c = &XFER.chains[k];
+    return c->active && f >= c->bottom && f <= c->top;
+}
+
+/* WalkReach (11b0:0763): scan gaps outward from the anchor through the
+ * per-gap walk map; stop at the first empty gap (0786/07c6); a gap
+ * without the escalator bit sets a stairs flag (078f-0796/07cf-07d6),
+ * and once set, reach is clamped to anchor+/-3 (07a1-07a8/07e1-07ea);
+ * otherwise anchor+/-6 (07b1-07bd/07f2-07f9). Same 6/3 budget as
+ * CanWalkPublic, applied per direction — a chain can be asymmetric. */
+static int walk_reach(const uint8_t *gap, int anchor, int up)
+{
+    int reach = anchor, stairs_seen = 0;
+    for (int i = 1; i <= TUNING.walk_floors_esc; i++) {
+        int f = up ? anchor + i : anchor - i;
+        int g = up ? f - 1 : f;             /* the gap crossed to reach f */
+        if (f < 0 || f >= TOWER_FLOOR_COUNT) break;
+        uint8_t bits = gap[g];
+        if (!bits) break;                   /* first empty gap ends the zone */
+        if (!(bits & 1)) stairs_seen = 1;   /* stairs-only gap */
+        if (stairs_seen && i > TUNING.walk_floors_stair) break;
+        reach = f;
+    }
+    return reach;
+}
+
+/* BuildWalkChains (11b0:06a4): anchors are the ground floor plus every
+ * sky-lobby GRID floor 15/30/../90 (06bc anchors idx 10, then 0705-0754
+ * step 0xf while <= 0x6d). The anchor is the FLOOR NUMBER — no check
+ * that a sky lobby is actually built there. Emit {top,bottom} only if
+ * bottom < top (06e0-06e3): no walkable gap adjacent to the anchor means
+ * no chain. Cap 8 records (7 anchors possible, the cap never binds). */
+static void build_walk_chains(const uint8_t *gap)
+{
+    memset(XFER.chains, 0, sizeof(XFER.chains));
+    int n = 0;
+    for (int a = 0; a <= 6 && n < MAX_CHAINS; a++) {
+        int fidx = (a == 0) ? GROUND_IDX : floor_to_index(a * 15);
+        if (fidx >= TOWER_FLOOR_COUNT) break;
+        int bot = walk_reach(gap, fidx, 0);
+        int top = walk_reach(gap, fidx, 1);
+        if (bot >= top) continue;
+        WalkChain *c = &XFER.chains[n++];
+        c->active = 1;
+        c->top    = (uint8_t)top;
+        c->bottom = (uint8_t)bot;
+    }
+}
+
+/* BuildRoutingSlots (11b0:049f): floor-ascending scan over LOBBY tenants.
+ * Shaft footprint width for the lobby-overlap test is 6 cells for the
+ * express, 4 for standard/service (Ghidra 275-280; transport-choice
+ * referee L1). Same-floor mask-intersect MERGE (297-304) — disjoint
+ * lobby clusters on one floor stay separate slots. Grand-lobby upper
+ * stories are skipped (EXE floor idx 0xB/0xC — moot with the port's
+ * single-story lobby tenants, guard kept for later). Service shafts DO
+ * enter slot masks; they are excluded at ttable time. */
+static void build_routing_slots(const PeopleSim *ps, const Tower *tower)
+{
+    memset(XFER.slots, 0, sizeof(XFER.slots));
+    for (int j = 0; j < MAX_SLOTS; j++) XFER.slots[j].floor = -1;
+    XFER.slot_count = 0;
+
+    for (int f = 0; f < TOWER_FLOOR_COUNT; f++) {
+        if (f == GROUND_IDX + 1 || f == GROUND_IDX + 2) continue;
+        for (int ti = 0; ti < tower->tenant_count; ti++) {
+            const Tenant *t = &tower->tenants[ti];
+            if (t->type != ITEM_LOBBY || floor_to_index(t->floor) != f)
+                continue;
+            uint32_t mask = 0;
+            for (int i = 0; i < ps->shaft_count; i++) {
+                const ElevatorShaft *s = &ps->shafts[i];
+                if (!s->active || !shaft_serves(s, f)) continue;
+                int width = (s->type == ITEM_ELEVATOR_EXPRESS) ? 6 : 4;
+                if (s->x < t->x + t->width && s->x + width > t->x)
+                    mask |= SHAFT_BIT(i);
+            }
+            if (!mask) continue;
+            int n = XFER.slot_count;
+            if (n > 0 && XFER.slots[n - 1].floor == (int16_t)f &&
+                (XFER.slots[n - 1].mask & mask)) {
+                XFER.slots[n - 1].mask |= mask;     /* same-floor merge */
+                continue;
+            }
+            /* HARD CAP QUIRK (Ghidra 292-294): when the 17th slot would
+             * be emitted the EXE RETURNS — skipping the remaining floors
+             * AND the chain pass below, so in a >16-slot tower chains
+             * silently stop participating in transfers. Reproduced
+             * verbatim (flagged EXE bug candidate, not judged). */
+            if (n == MAX_SLOTS) return;
+            XFER.slots[n].mask  = mask;
+            XFER.slots[n].floor = (int16_t)f;
+            XFER.slot_count = n + 1;
+        }
+    }
+
+    /* Chain pass (tail, Ghidra 311-324): each active chain joins every
+     * slot on a floor it covers. */
+    for (int k = 0; k < MAX_CHAINS; k++) {
+        if (!XFER.chains[k].active) continue;
+        for (int j = 0; j < XFER.slot_count; j++)
+            if (chain_covers(k, XFER.slots[j].floor))
+                XFER.slots[j].mask |= CHAIN_BIT(k);
+    }
+}
+
+/* The alternatives reachable from a set of co-located transports: for
+ * each transport in coloc, set its bit iff it reaches f DIRECTLY —
+ * service shafts excluded (nobody transfers into a service car; 00f2
+ * Ghidra 140-158). No transitive closure: the table is exactly one
+ * transfer deep by construction. */
+static uint32_t coloc_reach_mask(const PeopleSim *ps, uint32_t coloc, int f)
+{
+    uint32_t m = 0;
+    for (int h = 0; h < ps->shaft_count; h++) {
+        if (!(coloc & SHAFT_BIT(h))) continue;
+        const ElevatorShaft *hs = &ps->shafts[h];
+        if (!hs->active || hs->type == ITEM_ELEVATOR_SERVICE) continue;
+        if (shaft_serves(hs, f)) m |= SHAFT_BIT(h);
+    }
+    for (int c = 0; c < MAX_CHAINS; c++)
+        if ((coloc & CHAIN_BIT(c)) && chain_covers(c, f))
+            m |= CHAIN_BIT(c);
+    return m;
+}
+
+/* Slot index + 1 of the slot at floor f containing this transport, else
+ * 0 (the served side of the dual encoding, 00f2 Ghidra 161-169/215-223). */
+static uint8_t slot_index_at(uint32_t mybit, int f)
+{
+    for (int j = 0; j < XFER.slot_count; j++)
+        if (XFER.slots[j].floor == (int16_t)f && (XFER.slots[j].mask & mybit))
+            return (uint8_t)(j + 1);
+    return 0;
+}
+
+/* BuildAllTransferTables (11b0:00f2): per transport, coloc = OR of the
+ * masks of every slot containing it, minus its own bit (Ghidra 123-132 /
+ * 181-190); then per floor, the dual encoding. Service groups are
+ * excluded BOTH ways (140-149): their masks stay empty and nothing
+ * transfers into them — service trips never transfer. */
+static void build_transfer_tables(const PeopleSim *ps)
+{
+    memset(XFER.shaft_tt, 0, sizeof(XFER.shaft_tt));
+
+    for (int i = 0; i < ps->shaft_count; i++) {
+        const ElevatorShaft *s = &ps->shafts[i];
+        ShaftTTable *tt = &XFER.shaft_tt[i];
+        if (!s->active) continue;
+        uint32_t coloc = 0;
+        for (int j = 0; j < XFER.slot_count; j++)
+            if (XFER.slots[j].mask & SHAFT_BIT(i)) coloc |= XFER.slots[j].mask;
+        coloc &= ~SHAFT_BIT(i);
+        for (int f = 0; f < TOWER_FLOOR_COUNT; f++) {
+            if (shaft_serves(s, f))
+                tt->slot_at[f] = slot_index_at(SHAFT_BIT(i), f);
+            else if (s->type != ITEM_ELEVATOR_SERVICE)
+                tt->xfer_mask[f] = coloc_reach_mask(ps, coloc, f);
+        }
+    }
+
+    /* The chain half symmetrically links co-located elevators serving f
+     * and other co-located chains covering f (196-213) — chain-to-chain
+     * transfers are representable. */
+    for (int k = 0; k < MAX_CHAINS; k++) {
+        WalkChain *c = &XFER.chains[k];
+        memset(c->xfer_mask, 0, sizeof(c->xfer_mask));
+        memset(c->slot_at, 0, sizeof(c->slot_at));
+        if (!c->active) continue;
+        uint32_t coloc = 0;
+        for (int j = 0; j < XFER.slot_count; j++)
+            if (XFER.slots[j].mask & CHAIN_BIT(k)) coloc |= XFER.slots[j].mask;
+        coloc &= ~CHAIN_BIT(k);
+        for (int f = 0; f < TOWER_FLOOR_COUNT; f++) {
+            if (chain_covers(k, f))
+                c->slot_at[f] = slot_index_at(CHAIN_BIT(k), f);
+            else
+                c->xfer_mask[f] = coloc_reach_mask(ps, coloc, f);
+        }
+    }
+}
+
+/* Rebuild the static tables when they fall behind the sim. EXE pipeline
+ * order preserved: chains (06a4) -> slots (049f, which zeroes ttables +
+ * slots first) -> ttables (00f2). */
+static void xfer_ensure(const PeopleSim *ps, const Tower *tower)
+{
+    if (!XFER.dirty && XFER.stamp == ps->layout_stamp) return;
+    build_walk_chains(ps->gap_map);
+    build_routing_slots(ps, tower);
+    build_transfer_tables(ps);
+    XFER.stamp = ps->layout_stamp;
+    XFER.dirty = 0;
+}
+
+/* ResolveViaSlot (11b0:092f, byte-verified end to end): re-derive the
+ * in-shaft ride target at BOARD time — the choice-time verdict may have
+ * gone stale while the person queued. Returns the ride floor, or -1 =
+ * boarding failure (layout changed: penalty [0xDD7E], re-plan). */
+static int resolve_via_slot(const PeopleSim *ps, int shaft, int floor,
+                            int dest, int up)
+{
+    const ElevatorShaft *s = &ps->shafts[shaft];
+    if (shaft_serves(s, dest)) return dest;              /* 094b-0955 */
+    uint32_t want = XFER.shaft_tt[shaft].xfer_mask[dest];
+    if (!want) return -1;                                /* 0962-0971 */
+    for (int j = 0; j < XFER.slot_count; j++) {
+        const RoutingSlot *sl = &XFER.slots[j];
+        if (!(sl->mask & SHAFT_BIT(shaft))) continue;    /* 0988 */
+        if (sl->floor == (int16_t)floor) continue;       /* 099a-09a2 */
+        if (!((sl->mask & ~SHAFT_BIT(shaft)) & want)) continue; /* 09b3-09df */
+        if ((sl->floor > floor) != (up != 0)) continue;  /* direction gate
+                                                          * 09e1-09fb */
+        return sl->floor;                                /* 09fd-0a08 */
+    }
+    return -1;                                           /* 0a15 */
+}
+
 /* Rebuild gap map + shaft list. Cars and queues reset only when the
  * transport layout actually changed (the EXE rebuild pipeline also resets
  * ElvPeple state on stair/elevator placement). */
@@ -220,20 +500,10 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
         }
     }
 
-    /* Layout stamp: FNV over gap map + shaft extents */
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) { h ^= gap[i]; h *= 16777619u; }
-    for (int i = 0; i < count; i++) {
-        uint32_t v = (uint32_t)(fresh[i].type | fresh[i].lo << 8 |
-                                fresh[i].hi << 16) ^ (uint32_t)fresh[i].x << 20;
-        h ^= v; h *= 16777619u;
-    }
-    if (h == ps->layout_stamp) return;
-    ps->layout_stamp = h;
-
     /* Default all stops on, then carry dialog settings (car count,
      * serviced flags) across the rebuild — shafts matched by column+type
-     * so extending a shaft doesn't wipe its configuration. */
+     * so extending a shaft doesn't wipe its configuration. Runs BEFORE
+     * the stamp because the serviced flags are part of it now. */
     for (int i = 0; i < count; i++) {
         ElevatorShaft *ns = &fresh[i];
         for (int f = ns->lo; f <= ns->hi; f++) ns->serviced[f] = 1;
@@ -264,6 +534,35 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             break;
         }
     }
+
+    /* Layout stamp: FNV over gap map + shaft extents + per-floor serviced
+     * flags + lobby tenant spans. Serviced flags and lobby geometry are
+     * folded in because slot geometry and the ttables depend on both —
+     * the EXE rebuilds slots+ttables on any stop toggle (ElevatorUI
+     * seg21:0138) and on lobby placement (tenant.c finalizer seg64:0e8f,
+     * type table includes 0x18). Note the port's stamp-change rebuild is
+     * coarser than the EXE's 049f+00f2 (it also resets cars/queues); the
+     * common toggle path avoids that via XFER.dirty in
+     * people_set_serviced. */
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < TOWER_FLOOR_COUNT; i++) { h ^= gap[i]; h *= 16777619u; }
+    for (int i = 0; i < count; i++) {
+        uint32_t v = (uint32_t)(fresh[i].type | fresh[i].lo << 8 |
+                                fresh[i].hi << 16) ^ (uint32_t)fresh[i].x << 20;
+        h ^= v; h *= 16777619u;
+        for (int f = fresh[i].lo; f <= fresh[i].hi; f++) {
+            h ^= fresh[i].serviced[f]; h *= 16777619u;
+        }
+    }
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_LOBBY) continue;
+        uint32_t v = (uint32_t)floor_to_index(t->floor) |
+                     (uint32_t)t->x << 8 | (uint32_t)t->width << 20;
+        h ^= v; h *= 16777619u;
+    }
+    if (h == ps->layout_stamp) return;
+    ps->layout_stamp = h;
 
     memcpy(ps->gap_map, gap, sizeof(gap));
     memcpy(ps->shafts, fresh, sizeof(fresh));
@@ -376,18 +675,6 @@ static int floor_is_lobby(const Tower *tower, int fidx)
     return 0;
 }
 
-/* Does a lobby tenant on floor fidx overlap this shaft's footprint? */
-static int lobby_overlaps_shaft(Tower *tower, int fidx, const ElevatorShaft *s)
-{
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_LOBBY) continue;
-        if (floor_to_index(t->floor) != fidx) continue;
-        if (s->x < t->x + t->width && s->x + 4 > t->x) return 1;
-    }
-    return 0;
-}
-
 /* Routing verdict for one leg */
 typedef struct {
     enum { ROUTE_NONE, ROUTE_ARRIVED, ROUTE_WALK, ROUTE_ELEVATOR } kind;
@@ -405,6 +692,7 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
     Route r = { ROUTE_NONE, -1, -1, -1, -1 };
     if (from == to) { r.kind = ROUTE_ARRIVED; return r; }
     int up = to > from;
+    xfer_ensure(ps, tower);      /* chains/slots/ttables current */
 
     /* 1. Walking, if the whole remaining climb is within budget */
     int walk_score = COST_NO_ROUTE, walk_stair = -1, walk_hop = from;
@@ -425,43 +713,39 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
         return r;
     }
 
-    /* 1b. Walk chains (FindTransport 0fbe-10e3 + ScoreWalkChain 0843-085c):
-     * when no direct hop early-accepted, a lobby-anchored walk zone —
-     * contiguous walkable gaps through a lobby floor, anchor +/- 6 —
-     * covering `from` routes the trip: if the zone also covers `to`, the
-     * whole trip is a legal in-zone walk (free in the EXE, up to ~12
-     * floors through the anchor); otherwise, if the anchor has a shaft to
-     * `to`, walk toward the anchor. An escalator chain hop (< 640) wins
-     * outright without scoring elevators; a stairs hop just becomes the
-     * incumbent the shaft loop must beat. (Zone shape is a port
-     * simplification of the EXE's 8 precomputed chain slots.) */
+    /* 1b. Walk chains (FindTransport 0fbe-10e3, ScoreWalkChain 11b0:0805,
+     * ChainTransferCheck 0ad4), consulted only when no direct hop early-
+     * accepted (transport-choice referee H4: chains run BEFORE the shaft
+     * loop). The score is binary: a chain covering both ends makes the
+     * in-zone walk free (0843-085c — up to anchor-6..anchor+6 through
+     * the lobby grid, beyond CanWalkPublic's own budget); a chain
+     * covering `from` whose transfer table reaches `to` walks toward the
+     * shared slot lobby. Either way the verdict executes as the single
+     * stair hop toward the target (109a-10d4): an escalator hop < 640
+     * returns outright without scoring elevators, a stairs hop becomes
+     * the incumbent the shaft loop must beat. */
     if (!service && (walk_stair < 0 || walk_score >= COST_STAIR_BASE)) {
-        /* Zone gaps must be ESCALATORS (gap_map bit 0): the EXE's chain
-         * example is an all-escalator run; stairs keep their hard
-         * 3-flight budget regardless of chains. */
         int target = -1;
-        for (int A = 0; A < TOWER_FLOOR_COUNT && target < 0; A++) {
-            if (!floor_is_lobby(tower, A)) continue;
-            int da = A > from ? A - from : from - A;
-            if (da > 6) continue;
-            int ok = 1;
-            for (int f = from < A ? from : A; f < (from < A ? A : from); f++)
-                if (!(ps->gap_map[f] & 1)) { ok = 0; break; }
-            if (!ok) continue;
-            int dz = to > A ? to - A : A - to;
-            if (dz <= 6) {                       /* (a) zone covers `to` */
-                int okt = 1;
-                for (int f = to < A ? to : A; f < (to < A ? A : to); f++)
-                    if (!(ps->gap_map[f] & 1)) { okt = 0; break; }
-                if (okt) target = to;
-            }
-            if (target < 0) {                    /* (b) anchor rides to `to` */
-                for (int i = 0; i < ps->shaft_count; i++) {
-                    ElevatorShaft *s = &ps->shafts[i];
-                    if (s->active && s->type != ITEM_ELEVATOR_SERVICE &&
-                        shaft_serves(s, A) && shaft_serves(s, to) &&
-                        lobby_overlaps_shaft(tower, A, s)) { target = A; break; }
-                }
+        for (int k = 0; k < MAX_CHAINS && target < 0; k++) {
+            const WalkChain *chn = &XFER.chains[k];
+            if (!chn->active || !chain_covers(k, from)) continue;
+            if (chain_covers(k, to)) { target = to; break; }  /* free walk */
+            uint32_t want = chn->xfer_mask[to];
+            if (!want) continue;
+            /* Redundancy gate (0805:0876-08c8): the slot where you stand
+             * already holds EVERY transport that finishes the trip — the
+             * walk would be pointless, fail the chain. */
+            int sa = chn->slot_at[from];
+            if (sa && (XFER.slots[sa - 1].mask & want) == want) continue;
+            /* ChainTransferCheck (0ad4): first slot shared with a
+             * finishing transport, away from `from`. */
+            for (int j = 0; j < XFER.slot_count; j++) {
+                const RoutingSlot *sl = &XFER.slots[j];
+                if (!(sl->mask & CHAIN_BIT(k))) continue;
+                if (sl->floor == (int16_t)from) continue;
+                if (!((sl->mask & ~CHAIN_BIT(k)) & want)) continue;
+                target = sl->floor;
+                break;
             }
         }
         if (target >= 0 && target != from) {
@@ -501,34 +785,47 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
                 best_score = sc; best_shaft = i; best_ride = to;
             }
         } else if (!service) {
-            /* one transfer: ride to a lobby floor this shaft serves that
-             * x-overlaps a second shaft serving `to`. Scored with the
-             * direct formulas on the 3000 base (11b0:13cd-1410), queue
-             * read toward the transfer LOBBY, not the final destination
-             * (ElevTransferCheck 0aa7). */
-            for (int L = s->lo; L <= s->hi && best_score > COST_TRANSFER; L++) {
-                if (L == from || !shaft_serves(s, L)) continue;
-                if (!lobby_overlaps_shaft(tower, L, s)) continue;
-                for (int j = 0; j < ps->shaft_count; j++) {
-                    if (j == i) continue;
-                    ElevatorShaft *s2 = &ps->shafts[j];
-                    if (!s2->active || !shaft_serves(s2, L) ||
-                        !shaft_serves(s2, to)) continue;
-                    if (s2->type == ITEM_ELEVATOR_SERVICE) continue;
-                    if (!lobby_overlaps_shaft(tower, L, s2)) continue;
-                    int upL = L > from;
-                    int fullL = queue_len(s, from, upL) >= QUEUE_CAP;
-                    int sc;
-                    if (s->type == ITEM_ELEVATOR_EXPRESS)
-                        sc = queue_len(s, from, upL) + COST_TRANSFER;
-                    else
-                        sc = 8 * xd + (fullL ? COST_TRANSFER_FULL
-                                             : COST_TRANSFER);
-                    if (sc < best_score) {
-                        best_score = sc; best_shaft = i; best_ride = L;
-                    }
-                    break;
-                }
+            /* One transfer via the routing slots (ScoreElevator transfer
+             * branch 11b0:12d7-1410): ttable[to] must name a co-located
+             * transport that reaches `to` DIRECTLY — the mask is one
+             * transfer deep by construction, so a two-transfer
+             * destination falls through to no-route. Chain bits in
+             * ttable[to] are the ride-then-walk finishes: ride to the
+             * chain-covered slot floor, walk the zone from there (the
+             * referee's floor-17 example the old geometry re-scan could
+             * not represent). Scored with the direct formulas on the
+             * 3000/6000 base (13cd-1410), queue read toward the transfer
+             * LOBBY, not the final destination (ElevTransferCheck 0aa7,
+             * dir = slot.floor > from). */
+            uint32_t want = XFER.shaft_tt[i].xfer_mask[to];
+            if (!want) continue;
+            /* Redundancy gate (12f4-135e): the slot right here already
+             * holds every finishing transport — you could board the
+             * finisher directly, no transfer offer via this shaft. */
+            int sa = XFER.shaft_tt[i].slot_at[from];
+            if (sa && (XFER.slots[sa - 1].mask & want) == want) continue;
+            /* ElevTransferCheck (0a21): first slot containing this
+             * shaft, away from `from`, sharing a finishing transport. */
+            int L = -1;
+            for (int j = 0; j < XFER.slot_count; j++) {
+                const RoutingSlot *sl = &XFER.slots[j];
+                if (!(sl->mask & SHAFT_BIT(i))) continue;
+                if (sl->floor == (int16_t)from) continue;
+                if (!((sl->mask & ~SHAFT_BIT(i)) & want)) continue;
+                L = sl->floor;
+                break;
+            }
+            if (L < 0) continue;
+            int upL = L > from;
+            int fullL = queue_len(s, from, upL) >= QUEUE_CAP;
+            int sc;
+            if (s->type == ITEM_ELEVATOR_EXPRESS)
+                sc = queue_len(s, from, upL) + COST_TRANSFER;
+            else
+                sc = 8 * xd + (fullL ? COST_TRANSFER_FULL
+                                     : COST_TRANSFER);
+            if (sc < best_score) {
+                best_score = sc; best_shaft = i; best_ride = L;
             }
         }
     }
@@ -818,6 +1115,11 @@ void people_set_serviced(PeopleSim *ps, int shaft, int fidx, int on)
     ElevatorShaft *s = &ps->shafts[shaft];
     if (fidx < s->lo || fidx > s->hi) return;
     s->serviced[fidx] = on ? 1 : 0;
+    /* The EXE rebuilds slots+ttables on ANY stop toggle (ElevatorUI
+     * seg21:0138/013d -> 049f+00f2). Invalidate so the next route
+     * re-derives; the layout stamp folds serviced flags too, so a later
+     * people_rebuild_transport re-stamps as well. */
+    XFER.dirty = 1;
     if (on) return;
 
     /* Stop disabled: flush its queues to replan; riders already aboard
@@ -1219,7 +1521,6 @@ static void unboard_at_floor(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
 static int board_one_dir(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
                          ElevatorCar *c, int frame, int up)
 {
-    (void)tower;
     if (c->passengers >= s->capacity) return 0;
     if (queue_len(s, c->floor, up) == 0) return 0;
     int pi = dequeue(s, c->floor, up);
@@ -1227,14 +1528,28 @@ static int board_one_dir(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
     Person *p = &ps->people[pi];
     if (s->type != ITEM_ELEVATOR_SERVICE)
         bank_wait(ps, p, frame);        /* staff never accrue wait stress */
-    /* in-shaft destination: leg target (dest or transfer lobby) */
+    /* The in-shaft destination is re-resolved AT BOARD time (the EXE's
+     * BoardOnePerson 1210:0f0e calls ResolveViaSlot at all five call
+     * paths), not trusted from choice time: serves dest -> dest, else
+     * the first shared slot in the riding direction, else failure. */
+    xfer_ensure(ps, tower);
+    int target = resolve_via_slot(ps, (int)(s - ps->shafts), c->floor,
+                                  p->dest_floor, up);
+    if (target < 0) {
+        /* Layout changed while queued: the EXE charges [0xDD7E] (= 0 in
+         * the tuning resource, nothing to add) and re-dispatches the
+         * person to re-plan from where they stand. */
+        p->state = PERSON_PLANNING;
+        return 1;                       /* the door tick was spent */
+    }
     int slot = -1;
     for (int i = 0; i < CAR_SLOTS; i++) if (!c->pax[i]) { slot = i; break; }
     if (slot < 0) return 0;
+    p->leg_floor = (uint8_t)target;
     c->pax[slot] = (uint16_t)(pi + 1);
-    c->pax_dest[slot] = p->leg_floor;
-    if (c->dest_count[p->leg_floor] == 0) c->distinct_dests++;
-    if (c->dest_count[p->leg_floor] < 255) c->dest_count[p->leg_floor]++;
+    c->pax_dest[slot] = (uint8_t)target;
+    if (c->dest_count[target] == 0) c->distinct_dests++;
+    if (c->dest_count[target] < 255) c->dest_count[target]++;
     c->passengers++;
     p->state = PERSON_RIDING;
     return 1;

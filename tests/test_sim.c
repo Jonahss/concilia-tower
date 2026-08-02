@@ -837,6 +837,11 @@ static void test_queue_and_stress(void)
     for (int i = 0; i < 60; i++) {
         sim.people.people[i].home_tenant = 1;  /* fake but nonzero */
         sim.people.people[i].state = PERSON_QUEUED;
+        sim.people.people[i].cur_floor = (uint8_t)g;
+        /* a real served destination: boarding re-resolves the in-shaft
+         * target via ResolveViaSlot (11b0:092f) and refuses riders whose
+         * dest the shaft can't reach (the old code trusted leg_floor) */
+        sim.people.people[i].dest_floor = (uint8_t)floor_to_index(3);
     }
     int joined = 0;
     for (int i = 0; i < 60; i++)
@@ -3034,6 +3039,123 @@ static void test_deck_economics(void)
           "10 new lobby cells (gap included) = $50,000");
 }
 
+/* Transfer chain/slot tables (TransferT seg_11b0 low half, referee
+ * 2026-08-02): slot-resolved transfers at a sky lobby, ride-then-walk
+ * chain finishes, the one-transfer depth limit, and the rebuild stamp
+ * folding serviced flags + lobby spans. */
+static void test_transfer_tables(void)
+{
+    printf("transfer chain/slot tables (TransferT 11b0):\n");
+
+    /* (a) ride -> transfer at the sky lobby -> ride, via routing slots:
+     * express ground..15 and standard 15..20, a sky-lobby tenant
+     * overlapping both (width test: 6 express / 4 standard), office on
+     * 18. Ground commuters must ride the express to 15, re-plan at the
+     * transfer lobby, and finish on the standard shaft. */
+    fresh();
+    tower_import_item(&tw, ITEM_LOBBY, 15, 195, 30);
+    for (int f = 0; f <= 15; f++) place(ITEM_ELEVATOR_EXPRESS, f, 200);
+    for (int f = 15; f <= 20; f++) place(ITEM_ELEVATOR_SHAFT, f, 220);
+    uint16_t office = fplace(ITEM_OFFICE, 18, 230);
+    CHECK(office != 0, "office on 18 placed");
+    force_occupied(office);
+    game_update_reachability(&sim, &tw);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.shaft_count == 2, "express + standard collected");
+    int f18 = floor_to_index(18);
+    int arrived = 0;
+    for (int frame = 0; frame < 8000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        arrived = people_at(office, f18, PERSON_AT_DEST);
+        if (arrived > 0 && sim.people.queued_now == 0 &&
+            sim.people.riding_now == 0) break;
+    }
+    CHECK(arrived > 0, "ground -> express -> sky lobby -> standard -> f18");
+    CHECK(sim.people.trips_failed == 0, "no failed trips on the slot route");
+
+    /* Toggling the standard shaft's transfer stop OFF must rebuild the
+     * tables (EXE: any serviced change -> 049f+00f2) and sever the
+     * route home: the standard shaft leaves the sky-lobby slot, its
+     * transfer mask empties, and floor-18 workers are stranded. */
+    people_set_serviced(&sim.people, 1, floor_to_index(15), 0);
+    long failed0 = sim.people.trips_failed;
+    for (int frame = 8000; frame < 10000; frame++)
+        people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
+                      sim.reach_public, sim.reach_service);
+    CHECK(sim.people.trips_failed > failed0,
+          "toggled-off transfer stop severs the route home");
+
+    /* (b) ride-then-walk finish through a chain zone: office on 17,
+     * express only (NO shaft serves 17), escalators 15->16->17. The
+     * chain anchored at the 15-grid covers 15..17 and shares the
+     * sky-lobby slot with the express, so the express transfer table
+     * carries the chain bit at floor 17: ride to 15, walk the zone up.
+     * (The referee's floor-17 example — the old port demanded a second
+     * SHAFT serving `to` and could not route this at all.) */
+    fresh();
+    tower_import_item(&tw, ITEM_LOBBY, 15, 195, 30);
+    for (int f = 0; f <= 15; f++) place(ITEM_ELEVATOR_EXPRESS, f, 200);
+    fplace(ITEM_ESCALATOR, 15, 226);
+    fplace(ITEM_ESCALATOR, 16, 226);
+    office = fplace(ITEM_OFFICE, 17, 210);
+    force_occupied(office);
+    game_update_reachability(&sim, &tw);
+    people_rebuild_transport(&sim.people, &tw);
+    int f17 = floor_to_index(17);
+    arrived = 0;
+    for (int frame = 0; frame < 8000; frame++) {
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+        arrived = people_at(office, f17, PERSON_AT_DEST);
+        if (arrived > 0) break;
+    }
+    CHECK(arrived > 0, "ride-then-walk: express to 15, chain walk to 17");
+    CHECK(sim.people.trips_failed == 0, "chain finish is a real route");
+
+    /* (c) two transfers = no-route (the tables are one transfer deep by
+     * construction; the EXE has no transitive closure). Express 0..15,
+     * standard 15..30, standard 30..45, sky lobbies at 15 and 30, office
+     * on 40: ground -> 40 needs express -> B -> C, refused with the
+     * 300-stress no-route verdict. */
+    fresh();
+    tower_import_item(&tw, ITEM_LOBBY, 15, 195, 30);
+    tower_import_item(&tw, ITEM_LOBBY, 30, 214, 34);
+    for (int f = 0; f <= 15; f++) place(ITEM_ELEVATOR_EXPRESS, f, 200);
+    for (int f = 15; f <= 30; f++) place(ITEM_ELEVATOR_SHAFT, f, 220);
+    for (int f = 30; f <= 45; f++) place(ITEM_ELEVATOR_SHAFT, f, 240);
+    office = fplace(ITEM_OFFICE, 40, 250);
+    force_occupied(office);
+    game_update_reachability(&sim, &tw);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.shaft_count == 3, "three shafts collected");
+    CHECK(sim.reach_public[floor_to_index(40)],
+          "floor 40 is CONNECTED (reachability is transitive)...");
+    (void)people_take_noroute_msg();               /* drain the latch */
+    for (int frame = 0; frame < 1500; frame++)
+        people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
+                      sim.reach_public, sim.reach_service);
+    CHECK(people_at(office, floor_to_index(40), PERSON_AT_DEST) == 0,
+          "...but nobody arrives: two transfers exceed the depth limit");
+    CHECK(sim.people.trips_failed > 0, "two-transfer trips fail as no-route");
+    const char *msg = people_take_noroute_msg();
+    CHECK(msg != NULL, "no-route complaint latched for the floor pair");
+
+    /* (d) rebuild triggers: the layout stamp folds per-floor serviced
+     * flags and lobby tenant spans, so a stop toggle or a lobby
+     * placement re-stamps (and the tables re-derive from the stamp). */
+    uint32_t stamp0 = sim.people.layout_stamp;
+    people_set_serviced(&sim.people, 1, floor_to_index(20), 0);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.layout_stamp != stamp0,
+          "serviced toggle changes the layout stamp");
+    stamp0 = sim.people.layout_stamp;
+    tower_import_item(&tw, ITEM_LOBBY, 45, 195, 20);
+    people_rebuild_transport(&sim.people, &tw);
+    CHECK(sim.people.layout_stamp != stamp0,
+          "lobby placement changes the layout stamp");
+}
+
 int main(void)
 {
     test_stairs();
@@ -3058,6 +3180,7 @@ int main(void)
     test_condo_cycle();
     test_medical_trip();
     test_walk_rules();
+    test_transfer_tables();
     test_errand_warning_watchdog();
     test_queue_and_stress();
     test_elevator_dialog();
