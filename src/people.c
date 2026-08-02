@@ -417,18 +417,81 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
         r.hop_to = walk_hop;
         return r;
     }
+    /* Staff take any matching stair hop unconditionally (11b0:1139-1151):
+     * the EXE scans staff elevators only when NO stair matched. */
+    if (service && walk_stair >= 0) {
+        r.kind = ROUTE_WALK; r.stair = walk_stair;
+        r.hop_to = walk_hop;
+        return r;
+    }
 
-    /* 2. Elevators: direct, then one transfer at a lobby */
+    /* 1b. Walk chains (FindTransport 0fbe-10e3 + ScoreWalkChain 0843-085c):
+     * when no direct hop early-accepted, a lobby-anchored walk zone —
+     * contiguous walkable gaps through a lobby floor, anchor +/- 6 —
+     * covering `from` routes the trip: if the zone also covers `to`, the
+     * whole trip is a legal in-zone walk (free in the EXE, up to ~12
+     * floors through the anchor); otherwise, if the anchor has a shaft to
+     * `to`, walk toward the anchor. An escalator chain hop (< 640) wins
+     * outright without scoring elevators; a stairs hop just becomes the
+     * incumbent the shaft loop must beat. (Zone shape is a port
+     * simplification of the EXE's 8 precomputed chain slots.) */
+    if (!service && (walk_stair < 0 || walk_score >= COST_STAIR_BASE)) {
+        /* Zone gaps must be ESCALATORS (gap_map bit 0): the EXE's chain
+         * example is an all-escalator run; stairs keep their hard
+         * 3-flight budget regardless of chains. */
+        int target = -1;
+        for (int A = 0; A < TOWER_FLOOR_COUNT && target < 0; A++) {
+            if (!floor_is_lobby(tower, A)) continue;
+            int da = A > from ? A - from : from - A;
+            if (da > 6) continue;
+            int ok = 1;
+            for (int f = from < A ? from : A; f < (from < A ? A : from); f++)
+                if (!(ps->gap_map[f] & 1)) { ok = 0; break; }
+            if (!ok) continue;
+            int dz = to > A ? to - A : A - to;
+            if (dz <= 6) {                       /* (a) zone covers `to` */
+                int okt = 1;
+                for (int f = to < A ? to : A; f < (to < A ? A : to); f++)
+                    if (!(ps->gap_map[f] & 1)) { okt = 0; break; }
+                if (okt) target = to;
+            }
+            if (target < 0) {                    /* (b) anchor rides to `to` */
+                for (int i = 0; i < ps->shaft_count; i++) {
+                    ElevatorShaft *s = &ps->shafts[i];
+                    if (s->active && s->type != ITEM_ELEVATOR_SERVICE &&
+                        shaft_serves(s, A) && shaft_serves(s, to) &&
+                        lobby_overlaps_shaft(tower, A, s)) { target = A; break; }
+                }
+            }
+        }
+        if (target >= 0 && target != from) {
+            int cs, ch, hop_up = target > from;
+            int cst = find_stair_hop(tower, from, hop_up, x, service, &cs, &ch);
+            if (cst >= 0) {
+                if (cs < COST_STAIR_BASE) {      /* escalator: outright win */
+                    r.kind = ROUTE_WALK; r.stair = cst; r.hop_to = ch;
+                    return r;
+                }
+                if (cs < walk_score) {           /* stairs: new incumbent */
+                    walk_stair = cst; walk_score = cs; walk_hop = ch;
+                }
+            }
+        }
+    }
+
+    /* 2. Elevators: direct, then one transfer at a lobby.
+     * Staff network = SERVICE elevators only (ScoreElevator gate
+     * 11b0:11f0-1201), and service groups have no transfer tables
+     * (00f2) — staff trips never transfer. */
     int best_score = walk_score, best_shaft = -1, best_ride = -1;
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
         if (!s->active || !shaft_serves(s, from)) continue;
-        if (service ? 0 : (s->type == ITEM_ELEVATOR_SERVICE)) continue;
-        if (service && s->type != ITEM_ELEVATOR_SERVICE &&
-            s->type != ITEM_ELEVATOR_SHAFT) continue;
+        if (service ? (s->type != ITEM_ELEVATOR_SERVICE)
+                    : (s->type == ITEM_ELEVATOR_SERVICE)) continue;
         int xd = s->x - x; if (xd < 0) xd = -xd;
-        int full = queue_len(s, from, up) >= QUEUE_CAP;
         if (shaft_serves(s, to)) {
+            int full = queue_len(s, from, up) >= QUEUE_CAP;
             int sc;
             if (s->type == ITEM_ELEVATOR_EXPRESS)
                 sc = queue_len(s, from, up) + COST_ELEV_BASE;
@@ -437,9 +500,12 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
             if (sc < best_score) {
                 best_score = sc; best_shaft = i; best_ride = to;
             }
-        } else {
+        } else if (!service) {
             /* one transfer: ride to a lobby floor this shaft serves that
-             * x-overlaps a second shaft serving `to` */
+             * x-overlaps a second shaft serving `to`. Scored with the
+             * direct formulas on the 3000 base (11b0:13cd-1410), queue
+             * read toward the transfer LOBBY, not the final destination
+             * (ElevTransferCheck 0aa7). */
             for (int L = s->lo; L <= s->hi && best_score > COST_TRANSFER; L++) {
                 if (L == from || !shaft_serves(s, L)) continue;
                 if (!lobby_overlaps_shaft(tower, L, s)) continue;
@@ -448,9 +514,16 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
                     ElevatorShaft *s2 = &ps->shafts[j];
                     if (!s2->active || !shaft_serves(s2, L) ||
                         !shaft_serves(s2, to)) continue;
-                    if (!service && s2->type == ITEM_ELEVATOR_SERVICE) continue;
+                    if (s2->type == ITEM_ELEVATOR_SERVICE) continue;
                     if (!lobby_overlaps_shaft(tower, L, s2)) continue;
-                    int sc = full ? COST_TRANSFER_FULL : COST_TRANSFER;
+                    int upL = L > from;
+                    int fullL = queue_len(s, from, upL) >= QUEUE_CAP;
+                    int sc;
+                    if (s->type == ITEM_ELEVATOR_EXPRESS)
+                        sc = queue_len(s, from, upL) + COST_TRANSFER;
+                    else
+                        sc = 8 * xd + (fullL ? COST_TRANSFER_FULL
+                                             : COST_TRANSFER);
                     if (sc < best_score) {
                         best_score = sc; best_shaft = i; best_ride = L;
                     }
@@ -467,28 +540,6 @@ static Route find_transport(PeopleSim *ps, Tower *tower, int from, int to,
         r.kind = ROUTE_WALK; r.stair = walk_stair;
         r.hop_to = walk_hop;
         return r;
-    }
-
-    /* 3. Walk-chain fallback: hop toward a walkable lobby floor that has a
-     * connecting elevator (approximates the EXE's chain transfer tables) */
-    for (int L = 0; L < TOWER_FLOOR_COUNT; L++) {
-        if (L == from || !can_walk(ps, from, L, service)) continue;
-        int has_lobby = 0;
-        for (int i = 0; i < ps->shaft_count && !has_lobby; i++) {
-            ElevatorShaft *s = &ps->shafts[i];
-            if (s->active && shaft_serves(s, L) && shaft_serves(s, to) &&
-                !(service ? 0 : s->type == ITEM_ELEVATOR_SERVICE) &&
-                lobby_overlaps_shaft(tower, L, s))
-                has_lobby = 1;
-        }
-        if (!has_lobby) continue;
-        int sc, hp, hop_up = L > from;
-        int st = find_stair_hop(tower, from, hop_up, x, service, &sc, &hp);
-        if (st >= 0) {
-            r.kind = ROUTE_WALK; r.stair = st;
-            r.hop_to = hp;
-            return r;
-        }
     }
     return r;   /* ROUTE_NONE */
 }
@@ -822,6 +873,10 @@ static void add_penalty(Person *p, int amount)
  * 2026-07-09. The office/condo-side consumers remain unverified. */
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
+    /* Staff stress is never settled — TripCompletionFinalizer skips
+     * person type 0xF (deepdive_1aed; referee M3 2026-08-02). Keeps
+     * housekeeping churn out of tenant judging AND the wait averages. */
+    if (p->service) { p->wait_accum = 0; return; }
     Tenant *t = tower_tenant(tower, p->home_tenant);
     /* Lobby forgiveness already happened per-bank inside bank_wait (M4);
      * what's accumulated here is what the tenant feels. */
@@ -873,10 +928,15 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
          * — a tall grand-lobby unit charges its whole rise at entry. */
         int span_pen = (st->type == ITEM_STAIRS) ? PENALTY_STAIR_SPAN
                                                  : PENALTY_ESC_SPAN;
-        add_penalty(p, span_pen * rise);
-        int xd = st->x - p->x; if (xd < 0) xd = -xd;
-        if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
-        else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
+        /* Staff trips are never charged: the EXE's charge flag IS the
+         * network selector (1210:0054) — staff run with charge=0 for
+         * every penalty gate (referee M3, 2026-08-02). */
+        if (!p->service) {
+            add_penalty(p, span_pen * rise);
+            int xd = st->x - p->x; if (xd < 0) xd = -xd;
+            if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
+            else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
+        }
         p->state = PERSON_WALKING;
         p->leg_floor = (uint8_t)r.hop_to;
         p->walk_stair = st->id;
@@ -890,10 +950,15 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
         ElevatorShaft *s = &ps->shafts[r.shaft];
         int up = r.ride_to > p->cur_floor;
         if (!join_queue(ps, s, p->cur_floor, up, pi)) {
-            add_penalty(p, PENALTY_QUEUE_FULL);
+            if (!p->service) add_penalty(p, PENALTY_QUEUE_FULL);
             break;                       /* stays PLANNING, retries */
         }
-        if (s->type != ITEM_ELEVATOR_SHAFT) {
+        /* Walk-to-shaft penalty charges STANDARD + service riders and
+         * exempts the EXPRESS (TryStartTrip 1210:02d8-02e7, type != 0 —
+         * consistent with express choice-scoring ignoring distance).
+         * The port had the polarity inverted (referee H3, 2026-08-02).
+         * Staff are exempt regardless (charge=0, referee M3). */
+        if (!p->service && s->type != ITEM_ELEVATOR_EXPRESS) {
             int xd = s->x - p->x; if (xd < 0) xd = -xd;
             if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
             else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
@@ -909,10 +974,12 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
         trip_arrived(ps, tower, p, frame);
         break;
     default:
-        add_penalty(p, PENALTY_NO_ROUTE);   /* = 300: instant cap-out */
-        deliver_stress(ps, tower, p);
+        if (!p->service) {
+            add_penalty(p, PENALTY_NO_ROUTE);   /* = 300: instant cap-out */
+            deliver_stress(ps, tower, p);
+            noroute_report(p);   /* "People on Floor X need a path to Floor Y" */
+        }
         ps->trips_failed++;
-        noroute_report(p);   /* "People on Floor X need a path to Floor Y" */
         p->state = PERSON_AT_DEST;          /* gives up where they stand */
         break;
     }
