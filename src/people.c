@@ -912,10 +912,9 @@ static void add_penalty(Person *p, int amount)
 }
 
 /* Deliver banked frustration to the home tenant on arrival.
- * Thresholds 150/200 come from the tuning resource (0xDD8A/0xDD8E). One
- * consumer is now byte-verified: the hotel demand bar [0xDD78] is this
- * same pair, star-selected (150 at stars 1-3, 200 at 4+) — R4 referee
- * 2026-07-09. The office/condo-side consumers remain unverified. */
+ * Thresholds 150/200 come from the tuning resource (0xDD8A/0xDD8E) and are
+ * byte-verified as ONE shared pair for hotels, offices and condos alike
+ * (JudgeTenant 1130:@08b9-@090a; JudgeT-bars referee 2026-08-02). */
 static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 {
     /* Staff stress is never settled — TripCompletionFinalizer skips
@@ -930,24 +929,33 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
         vip_stress_total += (unsigned)felt;
         vip_trips++;
     }
+    if (t && t->state == TENANT_ABANDONED) {
+        /* A failed attempt to reach a VACANT unit WIPES the person's
+         * stress history instead of banking it (UniPeple verdict tables
+         * @2612/2638/265f, cut-off referee 2026-08-02) — so a severed
+         * vacant unit judges content, stays armed, and retries daily
+         * forever rather than souring its own pool. */
+        p->wait_accum = 0;
+        return;
+    }
     if (t) {
-        if (felt >= TUNING.judge_stressed)      t->stress += 15;
-        else if (felt >= TUNING.judge_moderate) t->stress += 5;
-        if (t->stress > 100) t->stress = 100;
         /* Hotel rooms, offices and condos bank the raw felt stress for
          * their demand verdicts — the 5PM pass for rooms, the daily
-         * 4:59AM judge for the others. The EXE keeps this per-person as
-         * total(+0x0E) / PERIODS LIVED(+0x09) — JudgeT 1130:0360 — not
-         * per-trip: an office worker banks 2 trips' stress but lives ~6
-         * periods a day, so the divisor grows 3 per arrival. A hotel
-         * guest's stay spans about as many periods as trips, so rooms
-         * keep the 1:1 divisor (their live-verified behavior). */
+         * 4:59AM judge for the others. The EXE's "period" (+0x09) is ONE
+         * JOURNEY: it increments only in AddTotalStress 11d8:0000, whose
+         * callers are trip completions/failures (divisor referee
+         * 2026-08-02 — the old +3-per-arrival "periods lived" model was
+         * refuted). Residual divergence, documented: the EXE averages
+         * per-person (total/count), then over the unit's fixed headcount
+         * (0630 loop) — the pooled ratio here matches it exactly when the
+         * unit's people travel equally, and skips the zero-journey
+         * dilution. */
         if ((item_is_hotel_room(t->type) || t->type == ITEM_OFFICE ||
              t->type == ITEM_CONDO) &&
             t->pool_stress_trips < 0xFFF0) {
             unsigned tot = t->pool_stress_total + (unsigned)felt;
             t->pool_stress_total = (uint16_t)(tot > 0xFFFF ? 0xFFFF : tot);
-            t->pool_stress_trips += item_is_hotel_room(t->type) ? 1 : 3;
+            t->pool_stress_trips += 1;
         }
     }
     ps->wait_total += p->wait_accum;

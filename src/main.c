@@ -1743,11 +1743,6 @@ static void render_tower(void)
                      * (The old extra worker loop here sliced the 16px-frame
                      * sheet at 32px and stretched it — the flashing
                      * half-workers bug.) */
-                } else if (tenant->state == TENANT_STRESSED) {
-                    /* No unit tint: the EXE shows stress on the WAITING
-                     * PEOPLE (queue silhouettes shade pink->red — drawn in
-                     * render_shaft) and in the eval views, never as a red
-                     * wash over the unit art. (The old pulse was invented.) */
                 } else if (tenant->state == TENANT_VACANT || tenant->state == TENANT_EMPTY) {
                     SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 60);
                     SDL_Rect overlay = { tx, draw_y, tw, draw_h };
@@ -2047,9 +2042,9 @@ static void render_tower(void)
                 snprintf(info, sizeof(info), "%s [%s %dt] cap:0x%02X",
                          tower_item_name(t->type), sn, t->construction, t->capacity);
             } else {
-                snprintf(info, sizeof(info), "%s [%s] cap:0x%02X pop:%d str:%d z%d",
+                snprintf(info, sizeof(info), "%s [%s] cap:0x%02X pop:%d cat:%d",
                          tower_item_name(t->type), sn, t->capacity, t->population,
-                         t->stress, t->zone);
+                         t->demand_category);
             }
             
             SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, info, yellow);
@@ -3976,35 +3971,25 @@ static void render_minimap(void)
         if (game.map_mode == 0) {
             if (t->type == ITEM_FLOOR) { r = 70; g = 70; b = 70; }
             else item_fallback_color(t->type, &r, &g, &b);
-            if (t->state == TENANT_STRESSED) { r = 255; g = 50; b = 50; }
-            else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
+            if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
             else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
         } else if (is_shell) {
             r = 70; g = 70; b = 70;        /* shell only in overlay modes */
         } else if (game.map_mode == 1) {
-            /* Eval reads the JUDGE'S verdict where one exists — the same
-             * demand categories that drive move-outs, re-lets, and hotel
-             * booking (2 content cyan / 1 middle yellow / 0 stressed
-             * red). ABANDONED stays red: it's the rescue target the map
-             * is for. Types without a judge fall back to live stress. */
-            int judged = (t->type == ITEM_OFFICE || t->type == ITEM_CONDO ||
-                          t->type == ITEM_SHOP ||
-                          t->type == ITEM_RESTAURANT ||
-                          t->type == ITEM_FAST_FOOD ||
-                          item_is_hotel_room(t->type)) &&
-                         t->demand_category != 0xFF;
+            /* Eval = the JUDGE'S verdict byte, exactly like the EXE
+             * (FUN_11d0_0363 switches on +0x15): 0 red / 1 yellow / 2-3
+             * cyan / 0xFF or never-judged = NO tint. The old live-stress
+             * fallback tiers were invented (legacy-stress referee
+             * 2026-08-02). ABANDONED keeps a dim red as the port's
+             * rescue-target readability aid. */
             if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
                 { r = g = b = 200; }
-            else if (judged) {
-                if (t->demand_category == 0)      { r = 230; g = 40; b = 40; }
-                else if (t->demand_category == 1) { r = 220; g = 210; b = 40; }
-                else                              { r = 60; g = 220; b = 230; }
-            }
-            else if (t->state == TENANT_VACANT) { r = g = b = 200; }
-            else if (t->stress >= 67 || t->state == TENANT_STRESSED ||
-                     t->state == TENANT_ABANDONED) { r = 230; g = 40; b = 40; }
-            else if (t->stress >= 34) { r = 220; g = 210; b = 40; }
-            else { r = 60; g = 220; b = 230; }
+            else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
+            else if (t->demand_category == 0)      { r = 230; g = 40; b = 40; }
+            else if (t->demand_category == 1) { r = 220; g = 210; b = 40; }
+            else if (t->demand_category == 2 || t->demand_category == 3)
+                { r = 60; g = 220; b = 230; }
+            else { r = g = b = 200; }          /* 0xFF / unjudged: no tint */
         } else if (game.map_mode == 2) {
             switch (t->rent_class) {
             case 0:  r = 230; g = 40;  b = 40;  break;   /* High */
@@ -7138,8 +7123,14 @@ static int minimap_click(int mx, int my)
         int m = (mx - map_x) / (map_w / 4);
         if (m >= 0 && m <= 3 &&
             (m < 3 || game.tower.star_rating >= 2 ||
-             game.sim.mode == MODE_SANDBOX))
+             game.sim.mode == MODE_SANDBOX)) {
+            /* Opening the EVAL overlay re-judges everything first, so the
+             * verdict colors are fresh (11d0:0000 lcalls JudgeAllTenants
+             * 1130:00b5 when mode==1; legacy-stress referee 2026-08-02). */
+            if (m == 1 && game.map_mode != 1)
+                game_judge_daily(&game.sim, &game.tower);
             game.map_mode = m;
+        }
         return 1;
     }
     return 0;
@@ -9094,7 +9085,23 @@ int main(int argc, char *argv[])
             int prev_pop = game.tower.population;
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
+            int prev_day = game.tower.day;
             game_update(&game.sim, &game.tower);
+
+            /* Daily autosave, service instances only (CT_AUTOLOAD marks
+             * them): a crash or restart can never cost more than one game
+             * day again (2026-08-02 lost-morning incident). Never saves an
+             * empty lot over a real tower — that guard is the 2026-08-01
+             * lesson in code. */
+            if (game.tower.day != prev_day && getenv("CT_AUTOLOAD") &&
+                game.tower.tenant_count > 0) {
+                if (game_save(&game.sim, &game.tower, save_path()) == 0)
+                    printf("Autosave: day %d (tenants=%d pop=%d money=%ld)\n",
+                           game.tower.day, game.tower.tenant_count,
+                           game.tower.population, (long)game.tower.money);
+                else
+                    printf("Autosave FAILED on day %d\n", game.tower.day);
+            }
 
             /* Loop channel: fire crackle (#10009) while a fire burns, guard
              * search footsteps (#10014) while the bomb sweep runs. One event

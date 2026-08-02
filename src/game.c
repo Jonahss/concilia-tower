@@ -97,13 +97,11 @@ int game_calc_population(GameSim *sim, Tower *tower)
         /* Check if this tenant type is active at current time of day */
         int type_idx = (int)t->type;
         int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
-        /* Office headcount scales with established occupancy (cap_peak):
-         * a thriving office (0x40) holds twice a new one's (0x20) staff.
-         * Hotels are excluded — a room's guest count is fixed by room
-         * type (1/2/3); their cap_peak growth shows up in revenue, not
-         * heads (and 1-3 guests can't scale meaningfully in ints). */
-        if (t->type == ITEM_OFFICE && t->cap_peak > CAP_PEAK_LOW)
-            base_pop = base_pop * t->cap_peak / CAP_PEAK_LOW;
+        /* No capacity-byte scaling: an EXE office is always exactly 6
+         * people and pays flat 0x3E9 rent — the "thriving office ×2"
+         * multiplier was fabricated (economy referee 2026-08-02:
+         * OfficeRentIncome 1178:0cb4 uses constant population delta;
+         * JudgeT walks exactly 6 office persons at 1130:03f4). */
         /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
         if (t->state == 1) base_pop /= 2;  /* moving in */
 
@@ -621,7 +619,15 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
             reachable = (fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
                          (is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx]));
-            if (!reachable) is_active = 0;
+            /* Post-move-in reachability loss does NOT idle a unit: the EXE
+             * keeps severed units running — commuters no-route, bank full
+             * 300-stress periods, and the judge + 3rd-day move-out evict
+             * within days; rent has no reachability check anywhere
+             * (cut-off-units referee 2026-08-02). Pre-move-in states and
+             * hotels keep the gate (a room the elevator can't reach can't
+             * seat a check-in; hotel corner left open by the referee). */
+            if (!reachable && (is_hotel || t->state < TENANT_OCCUPIED))
+                is_active = 0;
             /* Hotel rooms only open for the night if the demand pass armed
              * them; hosted guests ride out their stay regardless. */
             if (is_hotel && !t->demand_armed && !t->hosted) is_active = 0;
@@ -697,36 +703,17 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             if (is_active) {
                 /* Advance capacity animation (3-phase daily cycle) */
                 update_capacity(sim, t, sim->time_of_day, reachable);
-                
-                /* Per-tick income is now ONLY the parking approximation —
-                 * every other income is event-driven: offices/shops bank
-                 * quarterly lumps, hotels at checkout, condos at move-in,
-                 * cinemas/party halls at show close, restaurants/fast
-                 * food at their nightly settle (all byte-verified). */
-                int base_income = (type_idx < ITEM_TYPE_COUNT)
-                                    ? TENANT_INCOME[type_idx] : 0;
 
-                /* Rent scales with established occupancy (cap_peak): a thriving,
-                 * grown office (0x40) pays ~2× a fresh one (0x20); an upgraded
-                 * hotel/suite earns more than a new room. This is what makes the
-                 * growth / gentrification / room-upgrade mechanics economically
-                 * real instead of a sprite-frame change. (Decomp: TenantBehavior
-                 * keys hotel revenue off the capacity byte too.) */
-                {
-                    uint8_t cbase = cap_base_peak(t->type);
-                    if (cbase && t->cap_peak > cbase)
-                        base_income = base_income * t->cap_peak / cbase;
-                }
-                if (base_income > 0 && sim->ticks_per_quarter > 0) {
-                    if (sim->tick % 60 == 0) {
-                        int pay = base_income / (sim->ticks_per_quarter / 60);
-                        income += pay;
-                        fin_bank_income(sim, t->type, pay);   /* parking -> Other */
-                    }
-                }
-                
-                /* Stress management — from MainteT */
-                if (t->stress > 0) t->stress--;
+                /* NO per-tick income exists in the EXE at all: every income
+                 * is event-driven — offices/shops bank quarterly lumps,
+                 * hotels at checkout, condos at move-in, venues at show
+                 * close, restaurants/FF at their nightly settle. Parking is
+                 * a pure cost center (InParkingCar 1198:031a makes zero
+                 * MoneyT calls; economy referee 2026-08-02 — the old drip
+                 * block here was dead code over an all-zero table). The
+                 * same referee refuted income/population scaling by the
+                 * capacity byte: offices are always 6 people, flat 0x3E9
+                 * rent. */
 
                 /* Hotel guests staying the night leave a room to clean */
                 if (is_hotel && sim->time_of_day == TOD_NIGHT) t->hosted = 1;
@@ -776,34 +763,14 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
             
         case TENANT_STRESSED:
-            /* From MainteT: 3-strike system */
-            if (t->stress > 100) {
-                t->complaints++;
-                if (t->complaints >= 3) {
-                    if (t->type == ITEM_OFFICE) {
-                        /* Offices have no abandon path in the original (MainteT
-                         * OfficeStressCheck): an unhappy office just rides it
-                         * out — the firm stays put. Being stressed RESETS its
-                         * growth timer (the old office-growth mechanic won't grow a
-                         * stressed office), so stress only ever *delays* growth;
-                         * it is never rewarded for it. So: clear and persist. */
-                        t->stress = 0;
-                        t->complaints = 0;
-                        t->state = TENANT_OCCUPIED;
-                    } else {
-                        t->state = TENANT_ABANDONED;
-                        t->capacity = CAP_EMPTY;
-                        printf("⚠ %s on F%d abandoned! (stress=%d, %d complaints)\n",
-                               tower_item_name(t->type), t->floor, t->stress, t->complaints);
-                    }
-                } else {
-                    t->stress = 60;  /* Reset after complaint */
-                }
-            } else if (t->stress < 50) {
-                t->state = TENANT_OCCUPIED;
-            }
+            /* RETIRED state (legacy-stress referee 2026-08-02: no such
+             * machine in the EXE — the only auto move-out is the daily
+             * 4:59AM judge + every-3rd-day StressedTenantMoveOut, both
+             * ported). game_load migrates old saves away; nothing enters
+             * this state anymore. */
+            t->state = TENANT_OCCUPIED;
             break;
-            
+
         case TENANT_ABANDONED:
             /* Dead tenant — stays until demolished */
             t->population = 0;
@@ -1094,7 +1061,6 @@ static void infest_room(Tenant *v)
     v->condition = ROOM_INFESTED;
     v->demand_armed = 0;
     v->demand_category = 0;
-    v->stress = 100;
 }
 
 /* Guest-stress bar that disarms a room: EXE tuning [0xDD78], star-scaled —
@@ -1200,7 +1166,6 @@ void game_hotel_demand_pass(GameSim *sim, Tower *tower)
                 t->tenure++;
                 if (t->tenure == 3) {
                     t->condition = ROOM_INFESTED;
-                    t->stress = 100;
                     printf("🪳 Cockroaches! Room on floor %d was left dirty "
                            "3 days (day %d)\n", t->floor, tower->day);
                 }
@@ -1542,11 +1507,9 @@ void game_update(GameSim *sim, Tower *tower)
         game_calc_population(sim, tower);
     }
     
-    /* Zone-based stress evaluation — every 120 ticks (~2 seconds)
-     * From JudgeT: commercial tenants accumulate stress from competition */
-    if (sim->tick % 120 == 0 && sim->tick > 0) {
-        game_judge_tenants(sim, tower);
-    }
+    /* (No zone office-overcrowding stressor exists in the EXE — zones are
+     * 15-floor commercial routing bands only. Legacy-stress referee
+     * 2026-08-02; the every-120-tick game_judge_tenants pass is gone.) */
 
     /* The 10AM disaster dispatch: a fire every 84th day, a bomb threat
      * every 60th (TimeT ft 0xF0 block; latched once per day). */
@@ -1817,36 +1780,6 @@ const char *game_quarter_name(Quarter q)
     };
     if (q >= 0 && q < QUARTER_COUNT) return names[q];
     return "???";
-}
-
-/* ================================================================
- * Zone-based commercial satisfaction (from JudgeT seg_11a8)
- * ================================================================
- * Tower is divided into 7 zones of 15 floors each.
- * Too many competitors in the same zone = unhappy tenants.
- * This is THE core balance mechanic of SimTower. */
-
-void game_calc_zones(GameSim *sim, Tower *tower)
-{
-    /* Reset all zone counts */
-    memset(sim->zones, 0, sizeof(sim->zones));
-    
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->state == TENANT_ABANDONED || t->state == TENANT_EMPTY ||
-            t->state == TENANT_CONSTRUCTION) continue;
-        
-        int z = floor_to_zone(t->floor);
-        ZoneData *zd = &sim->zones[z];
-        
-        switch (t->type) {
-        case ITEM_RESTAURANT:  zd->restaurant_count++; zd->total_commercial++; break;
-        case ITEM_FAST_FOOD:   zd->fastfood_count++;   zd->total_commercial++; break;
-        case ITEM_SHOP:        zd->shop_count++;        zd->total_commercial++; break;
-        case ITEM_OFFICE:      zd->office_count++;      break;
-        default: break;
-        }
-    }
 }
 
 /* Starting persistent peak for a freshly-built unit (TenantMake MakeTenant:
@@ -2279,7 +2212,6 @@ void game_judge_daily(GameSim *sim, Tower *tower)
          * at 4:59AM every healthy office is in it, so the judge must
          * treat it as occupied or it would never judge anything. */
         if (!vacant && t->state != TENANT_OCCUPIED &&
-            t->state != TENANT_STRESSED &&
             t->state != TENANT_VACANT) continue;
         if (vacant && t->demand_armed && t->type != ITEM_SHOP) continue;
         judge_one_unit(sim, tower, t);
@@ -2314,7 +2246,7 @@ void game_stressed_moveout(GameSim *sim, Tower *tower)
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_OFFICE && t->type != ITEM_CONDO &&
             t->type != ITEM_SHOP) continue;
-        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED &&
+        if (t->state != TENANT_OCCUPIED &&
             t->state != TENANT_VACANT)   /* leased-but-closed-overnight */
             continue;
         if (t->demand_category != 0) continue;
@@ -2364,50 +2296,6 @@ void game_stressed_moveout(GameSim *sim, Tower *tower)
                 t->pool_stress_total = 0;
                 t->pool_stress_trips = 0;
                 break;
-            }
-        }
-    }
-}
-
-void game_judge_tenants(GameSim *sim, Tower *tower)
-{
-    /* Recalculate zones first */
-    game_calc_zones(sim, tower);
-    
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *t = &tower->tenants[i];
-        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED) continue;
-        
-        int z = floor_to_zone(t->floor);
-        ZoneData *zd = &sim->zones[z];
-        int stress_add = 0;
-
-        /* Retail zone-competition stress REMOVED (2026-07-11 referee):
-         * it was an invention. Real competition is emergent — customers
-         * pick one random same-kind venue per zone, so clustering thins
-         * each venue's customers and the nightly income ladder does the
-         * punishing. (Also: it's SHOPS whose satisfaction is pinned 0 in
-         * the EXE — they earn rent, not patron sales — not fast food;
-         * the old comment repeated a type-ID swap.) */
-        switch (t->type) {
-        case ITEM_OFFICE:
-            /* Offices don't compete by zone, but overcrowding matters */
-            if (zd->office_count > ZONE_MAX_OFFICES)
-                stress_add += (zd->office_count - ZONE_MAX_OFFICES) * 2;
-            break;
-        default: break;
-        }
-        
-        /* Apply stress */
-        if (stress_add > 0) {
-            t->stress += stress_add;
-            if (t->stress > 70 && t->state == TENANT_OCCUPIED) {
-                t->state = TENANT_STRESSED;
-                /* Only print first time */
-                if (t->stress < 75) {
-                    printf("😰 %s on F%d stressed! (zone %d competition, stress=%d)\n",
-                           tower_item_name(t->type), t->floor, z, t->stress);
-                }
             }
         }
     }
@@ -2911,7 +2799,7 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
             continue;
         }
 
-        if (t->state != TENANT_OCCUPIED && t->state != TENANT_STRESSED)
+        if (t->state != TENANT_OCCUPIED)
             continue;
 
         /* A unit whose occupancy byte has drained to empty (unreachable,
@@ -3599,7 +3487,15 @@ void game_update_santa(GameSim *sim)
 
 int game_save(const GameSim *sim, const Tower *tower, const char *path)
 {
-    FILE *f = fopen(path, "wb");
+    /* Write to a temp file first, then rotate generations and rename into
+     * place — a crash mid-write can never truncate the only good save,
+     * and three prior generations survive (2026-08-02 incident). */
+    char tmp[512], gen1[512], gen2[512], gen3[512];
+    snprintf(tmp,  sizeof tmp,  "%s.tmp", path);
+    snprintf(gen1, sizeof gen1, "%s.1", path);
+    snprintf(gen2, sizeof gen2, "%s.2", path);
+    snprintf(gen3, sizeof gen3, "%s.3", path);
+    FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
     uint32_t hdr[5] = { SAVE_MAGIC, SAVE_VERSION,
                         (uint32_t)sizeof(Tower), (uint32_t)sizeof(GameSim),
@@ -3608,8 +3504,14 @@ int game_save(const GameSim *sim, const Tower *tower, const char *path)
              fwrite(tower, sizeof(*tower), 1, f) == 1 &&
              fwrite(sim, sizeof(*sim), 1, f) == 1 &&
              fwrite(&TUNING, sizeof(TUNING), 1, f) == 1;
-    fclose(f);
-    return ok ? 0 : -1;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) { remove(tmp); return -1; }
+    remove(gen3);
+    rename(gen2, gen3);
+    rename(gen1, gen2);
+    rename(path, gen1);
+    if (rename(tmp, path) != 0) return -1;
+    return 0;
 }
 
 int game_load(GameSim *sim, Tower *tower, const char *path)
@@ -3636,5 +3538,12 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
      * before deserializing; the counters are not in the file) — the
      * per-tenant styles it stamped survive in the records. */
     if (ok) memset(tower->style_ctr, 0, sizeof tower->style_ctr);
+    /* Migration: TENANT_STRESSED was retired 2026-08-02 (invented layer
+     * deleted) — saves may still carry it; those tenants are just
+     * occupied units now. */
+    if (ok)
+        for (int i = 0; i < tower->tenant_count; i++)
+            if (tower->tenants[i].state == TENANT_STRESSED)
+                tower->tenants[i].state = TENANT_OCCUPIED;
     return ok ? 0 : -1;
 }

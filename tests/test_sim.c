@@ -713,14 +713,14 @@ static void test_walk_rules(void)
     force_occupied(office);
     people_rebuild_transport(&sim.people, &tw);
     Tenant *t = tenant(office);
-    int before = t->stress;
     for (int frame = 0; frame < 600; frame++)
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
                       sim.reach_public, sim.reach_service);
     CHECK(people_at(office, f5, PERSON_AT_DEST) == 0,
           "5 stair flights exceed the walk budget");
     CHECK(sim.people.trips_failed > 0, "failed trips recorded");
-    CHECK(t->stress > before, "no-route frustration reached the tenant");
+    CHECK(t->pool_stress_total >= 300 && t->pool_stress_trips > 0,
+          "no-route banks a full closed 300-stress period (1210:0090+00a9)");
 }
 
 /* Sales errand (UniPeple 0/0x40/0x21/0x61), route warning (STRL 0x2CD),
@@ -1902,25 +1902,26 @@ static void test_stressed_moveout(void)
     Tenant *off = &tw.tenants[tw.tenant_count++];
     *off = (Tenant){0};
     off->type = ITEM_OFFICE; off->floor = 3; off->x = 100; off->width = 9;
-    off->state = TENANT_STRESSED; off->stress = 90;
+    off->state = TENANT_OCCUPIED;
     off->demand_category = 0;              /* the judge's verdict */
 
     Tenant *neigh = &tw.tenants[tw.tenant_count++];
     *neigh = (Tenant){0};
     neigh->type = ITEM_OFFICE; neigh->floor = 3; neigh->x = 110; neigh->width = 9;
-    neigh->state = TENANT_OCCUPIED; neigh->stress = 0;
+    neigh->state = TENANT_OCCUPIED;
     neigh->demand_category = 2;                          /* content */
 
     Tenant *condo = &tw.tenants[tw.tenant_count++];
     *condo = (Tenant){0};
     condo->type = ITEM_CONDO; condo->floor = 4; condo->x = 100; condo->width = 16;
-    condo->state = TENANT_STRESSED; condo->rent_class = 1;
+    condo->state = TENANT_OCCUPIED; condo->rent_class = 1;
     condo->demand_category = 0;
 
     Tenant *hotel = &tw.tenants[tw.tenant_count++];
     *hotel = (Tenant){0};
     hotel->type = ITEM_HOTEL_TWIN; hotel->floor = 5; hotel->x = 100; hotel->width = 6;
-    hotel->state = TENANT_STRESSED; hotel->condition = ROOM_CLEAN;
+    hotel->state = TENANT_OCCUPIED; hotel->condition = ROOM_CLEAN;
+    hotel->demand_category = 0;            /* even a damned verdict is exempt */
 
     long money0 = tw.money;
     game_stressed_moveout(&sim, &tw);
@@ -1930,7 +1931,7 @@ static void test_stressed_moveout(void)
     CHECK(condo->state == TENANT_ABANDONED, "stressed condo moves out");
     CHECK(tw.money == money0 - tenant_rent(ITEM_CONDO, 1),
           "the condo departure charges the rate-class buy-back ($150k avg)");
-    CHECK(hotel->state == TENANT_STRESSED,
+    CHECK(hotel->state == TENANT_OCCUPIED,
           "hotel rooms are exempt (their lifecycle is the 5PM pass)");
     CHECK(neigh->state == TENANT_OCCUPIED && neigh->demand_category == 1,
           "decline drags a content floor-mate to the middle band");
@@ -1941,7 +1942,7 @@ static void test_stressed_moveout(void)
     Tenant *ok = &tw.tenants[tw.tenant_count++];
     *ok = (Tenant){0};
     ok->type = ITEM_OFFICE; ok->floor = 3; ok->x = 100; ok->width = 9;
-    ok->state = TENANT_OCCUPIED; ok->stress = 0; ok->cap_peak = CAP_PEAK_LOW;
+    ok->state = TENANT_OCCUPIED; ok->cap_peak = CAP_PEAK_LOW;
     ok->demand_category = 2;
     game_stressed_moveout(&sim, &tw);
     CHECK(ok->state == TENANT_OCCUPIED && ok->cap_peak == CAP_PEAK_LOW,

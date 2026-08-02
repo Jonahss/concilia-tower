@@ -78,7 +78,10 @@ typedef enum {
     TENANT_OCCUPIED,        /* Active and generating income/population */
     TENANT_CLOSING,         /* End of day, closing up */
     TENANT_VACANT,          /* Temporarily empty (night for offices, day for hotels) */
-    TENANT_STRESSED,        /* High stress — may leave! */
+    TENANT_STRESSED,        /* RETIRED (legacy-stress referee 2026-08-02:
+                             * no such machine in the EXE). Never entered;
+                             * kept so saved state values keep meaning —
+                             * game_load migrates it to OCCUPIED. */
     TENANT_ABANDONED,       /* Left the tower (stress too high) */
 } TenantState;
 
@@ -348,17 +351,26 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
     /* NONE */           {0, 0, 0, 0, 0},
     /* LOBBY */          {1, 1, 1, 1, 1},
     /* FLOOR */          {0, 0, 0, 0, 0},
-    /* OFFICE */         {0, 1, 1, 0, 0},  /* Morning + afternoon only */
+    /* OFFICE */         {0, 1, 1, 1, 0},  /* arrive ~9AM, leave 5-9PM
+                                            * (status-5 arm 1220:235f) —
+                                            * evening presence is real;
+                                            * weekday gate in game.c */
     /* CONDO */          {1, 1, 1, 1, 1},  /* Always occupied */
     /* HOTEL_SINGLE */   {1, 0, 0, 1, 1},  /* Evening → morning */
     /* HOTEL_TWIN */     {1, 0, 0, 1, 1},
     /* HOTEL_SUITE */    {1, 0, 0, 1, 1},
-    /* RESTAURANT */     {0, 1, 1, 1, 0},  /* Lunch through evening */
+    /* RESTAURANT */     {0, 0, 0, 1, 1},  /* real hours 5-11PM — dinner
+                                            * venue, NOT lunch (economy
+                                            * referee 2026-08-02) */
     /* FAST_FOOD */      {0, 1, 1, 1, 0},
     /* SHOP */           {0, 1, 1, 1, 0},
     /* CINEMA */         {0, 0, 1, 1, 0},  /* Afternoon + evening */
-    /* PARTY_HALL */     {0, 0, 0, 1, 1},  /* Evening + night */
-    /* METRO */          {1, 1, 1, 1, 0},  /* Daytime */
+    /* PARTY_HALL */     {0, 0, 1, 0, 0},  /* 1-5PM afternoon event,
+                                            * income at the 5PM close
+                                            * (economy referee) */
+    /* METRO */          {0, 1, 1, 0, 0},  /* 10AM-5PM (economy referee;
+                                            * pre-10AM commuter injection
+                                            * is a separate mechanic) */
     /* PARKING */        {1, 1, 1, 1, 0},
     /* CATHEDRAL */      {0, 1, 1, 0, 0},
     /* MEDICAL */        {1, 1, 1, 1, 1},  /* 24/7 */
@@ -379,11 +391,9 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
 #define NUM_ZONES       7
 #define FLOORS_PER_ZONE 15
 
-/* Zone office-crowding threshold. (The old retail thresholds are gone:
- * the 2026-07-11 referee proved retail competition is EMERGENT — each
- * customer picks one random same-kind venue in their zone, so clustering
- * starves venues through the patron flow, not through a formula.) */
-#define ZONE_MAX_OFFICES      8
+/* (ZONE_MAX_OFFICES is gone: no zone office-count stressor exists in the
+ * EXE — zones are 15-floor commercial routing bands only. Legacy-stress
+ * referee 2026-08-02.) */
 
 static inline int floor_to_zone(int floor) {
     if (floor < 0) return 0;
@@ -391,7 +401,9 @@ static inline int floor_to_zone(int floor) {
     return (z >= NUM_ZONES) ? NUM_ZONES - 1 : z;
 }
 
-/* Zone data — tracked per zone */
+/* DEAD since 2026-08-02 (zone stressor deleted) — the type and the
+ * GameSim.zones field below stay only to freeze the .sav layout; remove
+ * both at the next save-version bump. */
 typedef struct {
     int restaurant_count;
     int fastfood_count;
@@ -765,11 +777,9 @@ int game_fin_expense_cat(ItemType t);
 /* --- Zone system (JudgeT) --- */
 
 /* Recalculate zone competition data from all tenants */
-void game_calc_zones(GameSim *sim, Tower *tower);
 
 /* Apply zone-based stress to office overcrowding. (Retail zone stress
  * removed 2026-07-11: it was an invention — see game_retail_hourly.) */
-void game_judge_tenants(GameSim *sim, Tower *tower);
 
 
 
