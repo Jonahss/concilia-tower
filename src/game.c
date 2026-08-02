@@ -1871,8 +1871,9 @@ int game_tenant_eval_metric(GameSim *sim, Tower *tower, const Tenant *t)
     else if (t->rent_class == 2) metric -= 30;
     else if (t->rent_class == 3) metric = 0;
     if (has_noisy_neighbor(tower, t)) metric += 60;
+    /* seg_1130:068a clamps at >= 0 only — no upper cap, so class+noise can
+     * push the judged metric past 300 (gauge saturates at draw time). */
     if (metric < 0) metric = 0;
-    if (metric > 300) metric = 300;
     return metric;
 }
 
