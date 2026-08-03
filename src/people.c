@@ -2054,8 +2054,11 @@ static int find_dirty_room_floor_for(Tower *tower, int member)
 
 static int tenant_commuters(const Tenant *t)
 {
-    int n = TENANT_POPULATION[t->type];
-    return n > 8 ? 8 : n;       /* cap per tenant to keep entity counts sane */
+    /* Straight per-type count — the EXE's spawner loops to
+     * GetConstructionTime(type) (1220:0b01). The old 8-per-tenant safety
+     * cap bound nothing (every commuter type is <=6; retail/venues/metro
+     * ride their own quota caps) — spawn-counts referee 2026-08-03. */
+    return TENANT_POPULATION[t->type];
 }
 
 /* Staggered-departure dice. The EXE doesn't hold a spawn-rate table: in the
@@ -2329,14 +2332,15 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         /* Cars (UseCarPerson 1198:06e7, byte-verified 2026-07-11): at
          * star>=3, REAL suite guests and office worker #2 of offices
          * where (floor + person_id) % 4 == 1 drive in, entering at
-         * their parked car's floor. A suite guest who can't park
-         * CANCELS the visit (the EXE voids a pending VIP visit the
-         * same way) — with no parking, suites host only their carless
-         * first guest. PROXY: person ids = spawn order. The old
+         * their parked car's floor. BOTH suite guests drive (the EXE's
+         * 2 travelers each own a car — spawn-counts referee 2026-08-03);
+         * a suite guest who can't park CANCELS the visit (the EXE voids
+         * a pending VIP visit the same way), so with no parking suites
+         * host nobody. PROXY: person ids = spawn order. The old
          * "alternate commuters drive" rule was the port's invention. */
         int entry = GROUND_IDX, cat = 0;
         if (inbound && tower->star_rating >= 3) {
-            if (t->type == ITEM_HOTEL_SUITE && ps->spawned[i] >= 1) {
+            if (t->type == ITEM_HOTEL_SUITE) {
                 int park = people_parking_assign(tower, reach_public, 1, frame + i);
                 if (park < 0) continue;       /* visit canceled */
                 entry = park; cat = 2;
@@ -2592,13 +2596,16 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                 break;
             }
             /* Office sales errand (UniPeple statuses 0/0x40/0x21/0x61):
-             * members 0 and 1 of every occupied office make a midday
-             * round-trip to the ground lobby. Member 0 rolls from the
-             * morning (deterministic after noon); member 1 goes in the
-             * early afternoon; both return during 13:00-17:00. Anyone
-             * still at the lobby at 17:00 just heads home from there
-             * (the evening phase flip already handles that). */
-            if (!p->stay && !p->going_home && p->member <= 1 &&
+             * ONLY worker 0 of an occupied office makes the midday
+             * round-trip to the ground lobby (status 0 @29e2); workers
+             * 1..5 are the fast-food lunch rush, modeled as the
+             * aggregated spawn block below (spawn-counts referee
+             * 2026-08-03 — the old member-1 lobby errand was invented).
+             * Rolls from the morning, deterministic after noon; returns
+             * during 13:00-17:00. Anyone still at the lobby at 17:00
+             * just heads home from there (the evening phase flip
+             * already handles that). */
+            if (!p->stay && !p->going_home && p->member == 0 &&
                 hour >= 7 && hour < 17) {
                 Tenant *ht = tower_tenant(tower, p->home_tenant);
                 if (ht && ht->type == ITEM_OFFICE && (frame + i) % 16 == 0) {
@@ -2606,9 +2613,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                      * LOD, 1220:0daf) — pace the dice the same way */
                     int hf = floor_to_index(ht->floor);
                     if (p->errand == 0 && p->cur_floor == (uint8_t)hf) {
-                        int go = (p->member == 0)
-                            ? (hour >= 12 || depart_roll(frame, i + 77, 12))
-                            : (hour >= 13 && depart_roll(frame, i + 77, 12));
+                        int go = (hour >= 12 || depart_roll(frame, i + 77, 12));
                         if (go) {
                             p->errand = 1;
                             p->dest_floor = (uint8_t)GROUND_IDX;

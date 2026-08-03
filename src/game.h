@@ -352,7 +352,10 @@ static const int TENANT_POPULATION[] = {
                                  * 2026-08-01; the old 4 overcounted pop) */
     [ITEM_HOTEL_SINGLE] = 1,
     [ITEM_HOTEL_TWIN] = 2,
-    [ITEM_HOTEL_SUITE] = 3,
+    [ITEM_HOTEL_SUITE] = 2,     /* 3 person records but slot 0 is a reserved
+                                 * non-traveling marker (1220:0bd6) — 2 real
+                                 * guests; check-in pop delta +2 (spawn-counts
+                                 * referee 2026-08-03) */
     [ITEM_RESTAURANT] = 10,     /* Staff + diners at peak */
     [ITEM_FAST_FOOD] = 5,
     [ITEM_SHOP] = 3,
@@ -369,7 +372,10 @@ static const int TENANT_POPULATION[] = {
     [ITEM_ELEVATOR_SHAFT] = 0,
     [ITEM_ELEVATOR_SERVICE] = 0,
     [ITEM_ELEVATOR_EXPRESS] = 0,
-    [ITEM_HOUSEKEEPING] = 3,    /* Cleaning staff on shift */
+    [ITEM_HOUSEKEEPING] = 6,    /* 6 maids per unit (spawner loop bound =
+                                 * GetConstructionTime, 1220:0b01; MainteT
+                                 * partitions floors by member%6 — the port's
+                                 * old 3 fielded half the EXE's maids) */
 };
 
 /* Which times of day each tenant type is active */
