@@ -9115,7 +9115,16 @@ int main(int argc, char *argv[])
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
             int prev_day = game.tower.day;
-            game_update(&game.sim, &game.tower);
+            /* The day is ALWAYS 2600 ticks (authentic TimeT clock);
+             * speed multiplies sim steps per rendered frame — the EXE
+             * model, where "Fast Mode" just runs more frame-times per
+             * wall second. NORMAL 1x, FAST 2x, TURBO (legacy saves) 6x. */
+            {
+                int steps = (game.sim.speed == SPEED_FAST)  ? 2
+                          : (game.sim.speed == SPEED_TURBO) ? 6 : 1;
+                for (int s = 0; s < steps; s++)
+                    game_update(&game.sim, &game.tower);
+            }
 
             /* Daily autosave, service instances only (CT_AUTOLOAD marks
              * them): a crash or restart can never cost more than one game
@@ -9357,8 +9366,10 @@ int main(int argc, char *argv[])
             }
 
             /* Day-clock chimes (referee_ambient_timing Q2). The EXE fires these
-             * at exact times of day; the port's clock is uniform with real
-             * minutes, so fire on the minute we cross each target. The 8:00 and
+             * at exact times of day; the port's clock now runs the authentic
+             * non-uniform table, so fire on the minute we cross each target
+             * (hour*60+minute is monotonic within a day — the 7AM tick-wrap
+             * is continuous on the dial, only midnight resets it). The 8:00 and
              * 8:30 fanfares only ring on a "special day" = every 8th day while
              * below 5 stars (the rainy-morning flag). The dawn jingle is 5:30 AM
              * (not 7:00), with a day%5==4 variant. */

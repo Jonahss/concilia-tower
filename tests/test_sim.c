@@ -118,8 +118,9 @@ static void test_elevators(void)
 
 static void run_days(int days)
 {
-    sim.speed = SPEED_TURBO;   /* 120 ticks/quarter -> 480/day */
-    for (int i = 0; i < 480 * days; i++)
+    /* The day is always GAME_DAY_TICKS (2600) — speed no longer changes
+     * day length (authentic TimeT model, 2026-08-02 re-pace). */
+    for (int i = 0; i < GAME_DAY_TICKS * days; i++)
         game_update(&sim, &tw);
 }
 
@@ -158,7 +159,7 @@ static void test_housekeeping(void)
     Tenant *hku = tenant(hk);
     int saw_cleaned = 0, saw_hosted_again = 0;
     run_days(1);
-    for (int i = 0; i < 480 * 4; i++) {
+    for (int i = 0; i < GAME_DAY_TICKS * 4; i++) {
         game_update(&sim, &tw);
         if (hku->cleaned_today > 0) saw_cleaned = 1;
         if (saw_cleaned && room->state == TENANT_OCCUPIED &&
@@ -182,7 +183,7 @@ static void test_housekeeping(void)
             }
         hkt->type = ITEM_NONE;
     }
-    for (int i = 0; i < 480 * 2; i++) game_update(&sim, &tw);
+    for (int i = 0; i < GAME_DAY_TICKS * 2; i++) game_update(&sim, &tw);
     CHECK(room->condition != ROOM_CLEAN,
           "without housekeeping the room stays dirty");
     CHECK(!room->demand_armed, "dirty room is closed for booking");
@@ -1691,10 +1692,12 @@ static void test_infra_upkeep(void)
     rp->width = 16; rp->state = TENANT_OCCUPIED;
 
     sim.speed = SPEED_NORMAL;
+    /* Park one tick before the 4:59AM settle row (ft 0x9E5 = 2533):
+     * the next update lands exactly on it. The day was already bumped
+     * at the ft-2300 midnight row, so set a settlement day directly. */
     sim.quarter = 3;
-    sim.tick = 719;   /* normal speed = 720 ticks/quarter: next update
-                       * crosses the boundary */
-    tw.day = 2;                          /* -> day 3, a settlement day */
+    sim.tick = FT_DAILY_SETTLE % GAME_TICKS_PER_QUARTER - 1;
+    tw.day = 3;                          /* day%3==0: a settlement day */
     long money0 = tw.money;
     game_update(&sim, &tw);
     CHECK(tw.money == money0 - 110000,
@@ -2151,14 +2154,13 @@ static void test_fire_spread(void)
     CHECK(sim.event.target_slot == 104, "floor 5 extent [100,136): ignition at 104");
 
     game_event_proceed(&sim, &tw);        /* let it burn */
-    sim.hour = 11;                        /* pre-1PM pace: 320 frames/hour */
 
-    game_update_event(&sim, &tw);         /* one tick ~ 2.7 frames (320/hr, 120 ticks/hr) */
+    game_update_event(&sim, &tw);         /* 1 tick = 1 EXE frame, raw */
     CHECK(tenant(off5a) != NULL, "sanity: origin-floor office exists");
     CHECK(sim.event.fire_left[fi6] < 0 && sim.event.fire_right[fi6] < 0,
           "floor above not yet ignited");
 
-    for (int i = 0; i < 35; i++) game_update_event(&sim, &tw);   /* past frame 80 */
+    for (int i = 0; i < 85; i++) game_update_event(&sim, &tw);   /* past frame 80 */
     CHECK(sim.event.fire_left[fi6] >= 0 || sim.event.fire_right[fi6] >= 0,
           "floor above ignites on the 80-frame schedule");
     CHECK(sim.event.fire_left[fi4] < 0 && sim.event.fire_right[fi4] < 0,
@@ -2456,10 +2458,14 @@ static void test_guard_hunt(void)
               "guards 0-2 take the office floor, 3-5 the floor below");
         CHECK(o->g[0].x == 134, "guards materialize at right extent - 2");
     }
+    /* Put the sim clock at 10AM for real (ft 240) — fresh() seeds the
+     * EXE new-game start 4:59AM (ft 2533), from where a 4PM jump would
+     * be backward and refused. */
     sim.hour = 10;
+    sim.quarter = 0; sim.tick = game_clock_to_tick(10, 0);
     sim.income_this_quarter = 777;    /* proves the jump closes the books */
     int caught_at = -1;
-    for (int t = 0; t < 100 && caught_at < 0; t++) {
+    for (int t = 0; t < 150 && caught_at < 0; t++) {
         game_update_event(&sim, &tw);
         if (sim.event.caught) caught_at = t;
     }
@@ -3238,6 +3244,180 @@ static void test_transfer_tables(void)
           "lobby placement changes the layout stamp");
 }
 
+/* The authentic non-uniform day clock (TimeT seg 65, byte-verified
+ * referee 2026-08-02): 2600-tick day, period = ft/400, boundaries at
+ * 7:00AM / 12:00 / 12:30 / 1:00PM / 5:00PM / 9:00PM / 1:00AM. */
+static void check_clock(int ft, int want_h, int want_m, const char *msg)
+{
+    int h, m;
+    game_tick_clock(ft, &h, &m);
+    if (h == want_h && m == want_m) printf("  ok   %s\n", msg);
+    else {
+        printf("  FAIL %s (ft %d -> %d:%02d, want %d:%02d)\n",
+               msg, ft, h, m, want_h, want_m);
+        fails++;
+    }
+}
+
+static void test_authentic_clock(void)
+{
+    printf("authentic TimeT clock (2600-tick day, non-uniform table):\n");
+
+    /* Every period boundary (the CS:0x720 jump table rows) + day wrap */
+    check_clock(0,    7,  0, "ft 0    -> 7:00AM (period 0 opens the day)");
+    check_clock(400,  12, 0, "ft 400  -> 12:00 (lunch, 800 ft/hr begins)");
+    check_clock(800,  12, 30, "ft 800  -> 12:30 (second lunch period)");
+    check_clock(1200, 13, 0, "ft 1200 -> 1:00PM (100 ft/hr afternoon)");
+    check_clock(1600, 17, 0, "ft 1600 -> 5:00PM (business close row)");
+    check_clock(2000, 21, 0, "ft 2000 -> 9:00PM (fire hard-stop row)");
+    check_clock(2400, 1,  0, "ft 2400 -> 1:00AM (33.3 ft/hr night)");
+    check_clock(2600, 7,  0, "ft 2600 wraps to 7:00AM (0xA28 wrap)");
+    /* Dispatcher-row anchors re-verified in the referee dis16 */
+    check_clock(240,  10, 0, "ft 0xF0  = 240  -> 10:00AM (judging/disasters)");
+    check_clock(1500, 16, 0, "ft 0x5DC = 1500 -> 4:00PM (EventCleanup jump)");
+    check_clock(2200, 23, 0, "ft 0x898 = 2200 -> 11:00PM");
+    check_clock(2300, 0,  0, "ft 0x8FC = 2300 -> 0:00 (midnight day++)");
+    check_clock(2500, 4,  0, "ft 0x9C4 = 2500 -> 4:00AM (population reset)");
+    check_clock(2533, 4,  59, "ft 0x9E5 = 2533 -> 4:59AM (finance row + new-game start)");
+    check_clock(2599, 6,  58, "ft 2599 -> 6:58AM (last tick of the day)");
+
+    /* Inverse mapping is exact at every hour anchor */
+    int inv_ok = 1;
+    static const int anchors[][2] = {
+        {7, 0}, {8, 80}, {9, 160}, {10, 240}, {11, 320}, {12, 400},
+        {13, 1200}, {14, 1300}, {15, 1400}, {16, 1500}, {17, 1600},
+        {18, 1700}, {19, 1800}, {20, 1900}, {21, 2000}, {22, 2100},
+        {23, 2200}, {0, 2300}, {1, 2400}, {4, 2500},
+    };
+    for (unsigned i = 0; i < sizeof anchors / sizeof anchors[0]; i++)
+        if (game_clock_to_tick(anchors[i][0], 0) != anchors[i][1]) inv_ok = 0;
+    CHECK(inv_ok, "game_clock_to_tick hits every hour anchor exactly");
+
+    /* Decode->inverse round trip never drifts more than a tick */
+    int rt_ok = 1;
+    for (int ft = 0; ft < GAME_DAY_TICKS; ft++) {
+        int h, m;
+        game_tick_clock(ft, &h, &m);
+        int back = game_clock_to_tick(h, m);
+        int d = back - ft; if (d < 0) d = -d;
+        /* period granularity: 80 ft/hr = 1.33 ft/min, lunch 13.3 ft/min */
+        int tol = (ft >= 400 && ft < 1200) ? 14 : (ft >= 2400) ? 7 : 3;
+        if (d > tol) { rt_ok = 0; break; }
+    }
+    CHECK(rt_ok, "clock round-trip stays within one displayed minute");
+
+    /* Period-gate spot check: the office departure window (people.c:
+     * hour >= 17 && hour < 21) spans EXACTLY ft 1600..1999 — 400 raw
+     * ticks, the EXE's 100 ft/hr evening. */
+    int lo = -1, hi = -1, count = 0;
+    for (int ft = 0; ft < GAME_DAY_TICKS; ft++) {
+        int h, m;
+        game_tick_clock(ft, &h, &m);
+        if (h >= 17 && h < 21) {
+            if (lo < 0) lo = ft;
+            hi = ft;
+            count++;
+        }
+    }
+    CHECK(lo == 1600 && hi == 1999 && count == 400,
+          "office departure window (5-9PM) = ft [1600,2000) exactly");
+
+    /* game_update wiring: period crossing, midnight day++, 7AM wrap */
+    fresh();
+    sim.quarter = 0; sim.tick = 399;             /* one tick before noon */
+    game_update(&sim, &tw);
+    CHECK(sim.people.sched_period == 1 && sim.hour == 12,
+          "crossing ft 400 flips [0xB3A1] period 0 -> 1 at 12:00");
+
+    fresh();
+    int day0 = tw.day;
+    sim.quarter = FT_MIDNIGHT / GAME_TICKS_PER_QUARTER;
+    sim.tick = FT_MIDNIGHT % GAME_TICKS_PER_QUARTER - 1;
+    game_update(&sim, &tw);
+    CHECK(tw.day == day0 + 1 && sim.hour == 0,
+          "day++ fires at ft 2300 = midnight (TimeT 1200:04ab)");
+
+    fresh();
+    day0 = tw.day;
+    sim.quarter = 3; sim.tick = GAME_TICKS_PER_QUARTER - 1;
+    game_update(&sim, &tw);
+    CHECK(sim.quarter == 0 && sim.tick == 0 && sim.hour == 7,
+          "tick wrap at ft 2600 lands on 7:00AM, quarter resets");
+    CHECK(tw.day == day0, "the 7AM wrap does NOT bump the day (midnight did)");
+}
+
+/* Load renormalization: a v14 (uniform 5AM-anchored clock) save resumes
+ * at the same wall-clock time on the authentic table; a save sitting in
+ * the 0:00-5:00AM window gets its day bumped so the judge/settlement
+ * cadence matches what the old scheme would have run. */
+static void write_v14_save(const char *path, const GameSim *s, const Tower *t)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    uint32_t hdr[5] = { 0x52575443u, 14u, (uint32_t)sizeof(Tower),
+                        (uint32_t)sizeof(GameSim), (uint32_t)sizeof(Tuning) };
+    fwrite(hdr, sizeof hdr, 1, f);
+    fwrite(t, sizeof *t, 1, f);
+    fwrite(s, sizeof *s, 1, f);
+    fwrite(&TUNING, sizeof TUNING, 1, f);
+    fclose(f);
+}
+
+static void test_load_renormalize(void)
+{
+    printf("v14 save clock renormalization:\n");
+    const char *path = "/tmp/ct_test_v14.sav";
+
+    /* Daytime case: old NORMAL clock at half day = 5AM + 12h = 5:00PM */
+    fresh();
+    tw.day = 7;
+    sim.ticks_per_quarter = 720;         /* the old SPEED_NORMAL */
+    sim.quarter = 2; sim.tick = 0;       /* old tick-in-day 1440/2880 */
+    write_v14_save(path, &sim, &tw);
+    tower_init(&tw); game_init(&sim);
+    CHECK(game_load(&sim, &tw, path) == 0, "v14 save still loads");
+    CHECK(sim.hour == 17 && sim.minute == 0,
+          "old 5:00PM resumes at 5:00PM on the authentic table");
+    CHECK((int)sim.quarter * GAME_TICKS_PER_QUARTER + sim.tick == 1600,
+          "5:00PM lands on ft 1600 exactly");
+    CHECK(sim.ticks_per_quarter == GAME_TICKS_PER_QUARTER,
+          "ticks_per_quarter renormalized to 650");
+    CHECK(tw.day == 7, "daytime resume keeps the day number");
+
+    /* Small-hours case: old TURBO clock at 2AM -> ft 2433, day bumped
+     * (the new scheme already incremented at the ft-2300 midnight) */
+    fresh();
+    tw.day = 7;
+    sim.speed = SPEED_TURBO;
+    sim.ticks_per_quarter = 120;         /* the old SPEED_TURBO */
+    /* 2AM = 21h past 5AM: tick-in-day = 21/24 * 480 = 420 */
+    sim.quarter = 3; sim.tick = 60;
+    write_v14_save(path, &sim, &tw);
+    tower_init(&tw); game_init(&sim);
+    CHECK(game_load(&sim, &tw, path) == 0, "v14 TURBO save still loads");
+    /* 2AM sits at ft 2433 1/3 on the real table (33 1/3 ft/hr night) —
+     * the integer tick decodes to 1:59, one displayed minute shy. */
+    CHECK((int)sim.quarter * GAME_TICKS_PER_QUARTER + sim.tick == 2433,
+          "old 2AM resumes at ft 2433 (the 2AM anchor, floored)");
+    CHECK(sim.hour == 2 || (sim.hour == 1 && sim.minute == 59),
+          "resumed clock within one displayed minute of 2AM");
+    CHECK(tw.day == 8, "post-midnight resume bumps the day (settlement cadence)");
+    CHECK(sim.speed <= SPEED_FAST, "TURBO stays clamped to FAST");
+
+    /* A v15 save (current format) must NOT be renormalized */
+    fresh();
+    tw.day = 3;
+    sim.quarter = 1; sim.tick = 100;     /* ft 750, mid-lunch */
+    CHECK(game_save(&sim, &tw, path) == 0, "v15 save writes");
+    tower_init(&tw); game_init(&sim);
+    CHECK(game_load(&sim, &tw, path) == 0, "v15 save loads");
+    CHECK((int)sim.quarter * GAME_TICKS_PER_QUARTER + sim.tick == 750 &&
+          tw.day == 3,
+          "v15 tick/day pass through untouched");
+    remove(path);
+    remove("/tmp/ct_test_v14.sav");
+}
+
 int main(void)
 {
     test_stairs();
@@ -3288,6 +3468,8 @@ int main(void)
     test_twr_export();
     test_wedding();
     test_save_load();
+    test_authentic_clock();
+    test_load_renormalize();
     test_schedules();
     test_infra_upkeep();
     test_occupancy_lifecycle();

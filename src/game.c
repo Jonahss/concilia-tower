@@ -5,7 +5,7 @@
  *   - Star rating: seg_1140 (LevelT) FUN_1140_0411
  *   - Promotion:   seg_1148 (LevelUp) FUN_1148_0000
  *   - Population:  seg_1060 (CountT)
- *   - Time:        seg_11d8 (TimeT) / seg_1020 (AnimeT)
+ *   - Time:        seg_1200 (TimeT, seg 65) / seg_1020 (AnimeT)
  */
 #include "game.h"
 #include "sound_hook.h"
@@ -16,28 +16,63 @@
 /* Forward declarations */
 static int calc_lobby_maintenance(Tower *tower);
 
-/* Ticks per quarter at each speed */
-static const int TICKS_PER_QUARTER[] = {
-    [SPEED_PAUSED] = 0,
-    [SPEED_NORMAL] = 720,    /* ~12 seconds at 60fps */
-    [SPEED_FAST]   = 360,    /* ~6 seconds */
-    [SPEED_TURBO]  = 120,    /* ~2 seconds */
-};
+/* --- The authentic day clock (TimeT seg 65, byte-verified referee
+ * 2026-08-02) ---
+ * A day is exactly GAME_DAY_TICKS = 2600 frame-times (wrap at 0xA28,
+ * 1200:01d1); the day is NOT speed-dependent — game speed multiplies
+ * sim steps per rendered frame in main.c, exactly the EXE model where
+ * frame_time += 1 once per rendered frame (WinMain idle pump) and
+ * "Fast Mode" just skips the 6ms wall throttle. */
 
-/* Time of day boundaries (tick within a full day = 4 quarters) */
-#define TICKS_PER_DAY(speed) (TICKS_PER_QUARTER[speed] * 4)
-
-/* Map tick position within a day to hour (0-23) */
-static void tick_to_time(int tick_in_day, int ticks_total, int *hour, int *minute)
+/* FrameTimeToClock (TimeT FUN_1200_058D). Period = ft/400 ([0xB3A1]);
+ * per-period hour math re-dumped from the CS:0x720 jump table:
+ *   period 0 (ft    0- 399): h = pos*5/400 + 7      -> 7:00AM-12:00, 80 ft/hr
+ *   period 1 (ft  400- 799): h = 12, m = pos*60/800 -> 12:00-12:30, 800 ft/hr
+ *   period 2 (ft  800-1199): h = 12, m = pos*60/800+30 -> 12:30-1PM, 800 ft/hr
+ *   period 3 (ft 1200-1599): h = pos*4/400 + 13     -> 1PM-5PM,   100 ft/hr
+ *   period 4 (ft 1600-1999): h = pos*4/400 + 17     -> 5PM-9PM,   100 ft/hr
+ *   period 5 (ft 2000-2399): h = pos*4/400 + 21 (wrap) -> 9PM-1AM, 100 ft/hr
+ *   period 6 (ft 2400-2599): h = pos*12/400 + 1     -> 1AM-7AM, 33.3 ft/hr
+ * Hour anchors: 0x8FC=2300 -> 0:00 (day++), 0x9E5=2533 -> 4:59AM.
+ * GAP (marked): the referee report pins minute math only for the lunch
+ * periods (pos*60/800); for the others we interpolate minutes linearly
+ * inside the hour, which reproduces the EXE hour decode exactly and
+ * clamps minute to 59 as the EXE does (@06f4-0701). */
+void game_tick_clock(int tick_in_day, int *hour, int *minute)
 {
-    if (ticks_total <= 0) { *hour = 12; *minute = 0; return; }
-    /* Day runs 5:00 → 5:00 (24 hours) */
-    int minutes_in_day = 24 * 60;
-    int elapsed_min = (tick_in_day * minutes_in_day) / ticks_total;
-    int h = 5 + elapsed_min / 60;  /* Start at 5am */
+    int ft = tick_in_day % GAME_DAY_TICKS;
+    if (ft < 0) ft += GAME_DAY_TICKS;
+    int period = ft / 400;              /* [0xB3A1], 0..6 */
+    int pos = ft - period * 400;
+    int h, m;
+    switch (period) {
+    case 0:  { int t = pos * 300 / 400; h = 7  + t / 60; m = t % 60; } break;
+    case 1:  h = 12; m = pos * 60 / 800;      break;
+    case 2:  h = 12; m = pos * 60 / 800 + 30; break;
+    case 3:  { int t = pos * 240 / 400; h = 13 + t / 60; m = t % 60; } break;
+    case 4:  { int t = pos * 240 / 400; h = 17 + t / 60; m = t % 60; } break;
+    case 5:  { int t = pos * 240 / 400; h = 21 + t / 60; m = t % 60; } break;
+    default: { int t = pos * 720 / 400; h = 1  + t / 60; m = t % 60; } break;
+    }
     if (h >= 24) h -= 24;
+    if (m > 59) m = 59;                 /* EXE clamp @06f4-0701 */
     *hour = h;
-    *minute = elapsed_min % 60;
+    *minute = m;
+}
+
+/* Piecewise inverse of game_tick_clock: clock -> tick-in-day. Exact at
+ * every hour anchor (7AM=0, noon=400, 1PM=1200, 5PM=1600, 9PM=2000,
+ * 0:00=2300, 1AM=2400, 4AM=2500, 7AM wraps to 0). */
+int game_clock_to_tick(int hour, int minute)
+{
+    int h = ((hour % 24) + 24) % 24;
+    int m = minute < 0 ? 0 : minute > 59 ? 59 : minute;
+    if (h >= 7 && h < 12)  return (h - 7) * 80 + m * 80 / 60;
+    if (h == 12)           return 400 + m * 800 / 60;
+    if (h >= 13)           return 1200 + (h - 13) * 100 + m * 100 / 60;
+    if (h == 0)            return 2300 + m * 100 / 60;
+    /* 1AM-6:59AM: 200 ticks over 6 hours */
+    return 2400 + ((h - 1) * 60 + m) * 400 / 720;
 }
 
 static TimeOfDay hour_to_tod(int hour)
@@ -53,9 +88,14 @@ void game_init(GameSim *sim)
 {
     memset(sim, 0, sizeof(*sim));
     sim->speed = SPEED_NORMAL;
-    sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_NORMAL];
-    sim->hour = 7;  /* Start at 7am */
-    sim->time_of_day = TOD_MORNING;
+    sim->ticks_per_quarter = GAME_TICKS_PER_QUARTER;
+    /* New games start at ft 0x9E5 = 2533 = 4:59AM, exactly the EXE's
+     * InitTime (1200:0000) seed — dawn breaks a minute after you take
+     * the keys. */
+    sim->quarter = (Quarter)(FT_DAILY_SETTLE / GAME_TICKS_PER_QUARTER);
+    sim->tick = FT_DAILY_SETTLE % GAME_TICKS_PER_QUARTER;
+    game_tick_clock(FT_DAILY_SETTLE, &sim->hour, &sim->minute);
+    sim->time_of_day = TOD_NIGHT;
     sim->hotel_pass_day = -1;   /* so the day-0 5PM pass still fires */
     sim->disaster_sched_day = -1;
     people_init(&sim->people);
@@ -1324,19 +1364,21 @@ static void quarter_closeout(GameSim *sim, Tower *tower)
  * rows between the old and new frame_time are skipped. */
 void game_clock_jump(GameSim *sim, Tower *tower, int hour)
 {
-    int day_ticks = TICKS_PER_DAY(sim->speed);
-    if (day_ticks <= 0 || hour <= 5) return;
-    /* The day runs 5:00 -> 5:00 (tick_to_time above). */
-    int target = (hour - 5) * 60 * day_ticks / (24 * 60);
-    int now = sim->quarter * sim->ticks_per_quarter + sim->tick;
+    /* Only same-day daytime targets (7AM..11PM) — a jump must never
+     * skip the ft-2300 day++ or the 4:59AM settle row. The EXE's only
+     * jump target is 4:00 PM, and 0x5DC = 1500 is byte-identical to
+     * game_clock_to_tick(16, 0) on the authentic table. */
+    if (hour < 7 || hour > 23) return;
+    int target = game_clock_to_tick(hour, 0);
+    int now = (int)sim->quarter * GAME_TICKS_PER_QUARTER + sim->tick;
     if (target <= now) return;              /* never jump backward */
-    int tq = target / sim->ticks_per_quarter;
+    int tq = target / GAME_TICKS_PER_QUARTER;
     while ((int)sim->quarter < tq) {
         sim->quarter++;
         quarter_closeout(sim, tower);
     }
-    sim->tick = target % sim->ticks_per_quarter;
-    tick_to_time(target, day_ticks, &sim->hour, &sim->minute);
+    sim->tick = target % GAME_TICKS_PER_QUARTER;
+    game_tick_clock(target, &sim->hour, &sim->minute);
     sim->time_of_day = hour_to_tod(sim->hour);
 }
 
@@ -1355,8 +1397,8 @@ void game_update(GameSim *sim, Tower *tower)
     }
 
     if (sim->speed == SPEED_PAUSED) return;
-    
-    sim->ticks_per_quarter = TICKS_PER_QUARTER[sim->speed];
+
+    sim->ticks_per_quarter = GAME_TICKS_PER_QUARTER;
     sim->frame++;
     sim->tick++;
 
@@ -1388,19 +1430,23 @@ void game_update(GameSim *sim, Tower *tower)
         }
     }
 
-    /* Calculate time of day */
-    int day_ticks = TICKS_PER_DAY(sim->speed);
-    int tick_in_day = 0;
-    if (day_ticks > 0) {
-        /* Quarter 0 = first quarter of the day, etc. */
-        tick_in_day = (sim->quarter * sim->ticks_per_quarter) + sim->tick;
-        tick_to_time(tick_in_day, day_ticks, &sim->hour, &sim->minute);
-        sim->time_of_day = hour_to_tod(sim->hour);
-    }
-    
-    /* Star evaluation, hourly — the weekday-evening window inside
-     * game_check_promotion picks WHICH hours a 3->4/4->5 can land on. */
-    if (day_ticks >= 24 && tick_in_day % (day_ticks / 24) == 0) {
+    /* Calculate time of day — the authentic non-uniform decode. sim->tick
+     * may sit at 650 until the wrap logic at the bottom of this function
+     * runs; game_tick_clock wraps ft 2600 -> 0 itself. */
+    int tick_in_day = (int)sim->quarter * GAME_TICKS_PER_QUARTER + sim->tick;
+    game_tick_clock(tick_in_day, &sim->hour, &sim->minute);
+    sim->time_of_day = hour_to_tod(sim->hour);
+
+    /* Star evaluation, hourly — fires on every displayed-hour change
+     * (stateless edge against the previous tick's decode; on the
+     * non-uniform clock, hours are 80 ticks apart in the morning, 800
+     * across the noon-1PM lunch, ~33 overnight). The weekday-evening
+     * window inside game_check_promotion picks WHICH hours a 3->4/4->5
+     * can land on. */
+    {
+        int prev_h, prev_m;
+        game_tick_clock(tick_in_day - 1, &prev_h, &prev_m);
+        if (prev_h != sim->hour) {
         game_venue_hourly(sim, tower);
         game_retail_hourly(sim, tower);
 
@@ -1416,20 +1462,23 @@ void game_update(GameSim *sim, Tower *tower)
             game_parking_recompute(sim, tower);
         }
         /* Santa: 9PM on the LAST day of the 12-day year — Christmas night
-         * (TimeT ft 0x7D0: day % 0xC == 0xB -> SantaT LaunchSanta). Once a
-         * year, after dark, exactly like the EXE. */
+         * (TimeT ft 0x7D0 = 2000: day % 0xC == 0xB -> SantaT LaunchSanta).
+         * Once a year, after dark, exactly like the EXE. */
         if (sim->hour == 21 && tower->day % 12 == 11 && !sim->santa.active)
             game_launch_santa(sim, 960);
 
         evaluate_star_rating(sim, tower);
+        }
     }
 
     /* Schedule clock for the elevator tables (EXE 0xB3A0/0xB3A1: the
-     * weekend day-type + the 7 periods that slice the day) */
+     * weekend day-type + the 7 periods). Period IS ft/400 — boundaries
+     * at 7:00AM/12:00/12:30/1:00PM/5:00PM/9:00PM/1:00AM, the EXE's
+     * real (and lopsided) schedule slices. */
     sim->people.sched_day = (uint8_t)game_is_weekend(tower);
-    if (day_ticks > 0) {
-        int per = (int)((long)tick_in_day * 7 / day_ticks);
-        sim->people.sched_period = (uint8_t)(per < 0 ? 0 : per > 6 ? 6 : per);
+    {
+        int per = (tick_in_day % GAME_DAY_TICKS) / 400;
+        sim->people.sched_period = (uint8_t)(per > 6 ? 6 : per);
     }
 
     /* Grand-lobby prestige: a 2/3-story ground lobby forgives 25/50 ticks of
@@ -1524,23 +1573,17 @@ void game_update(GameSim *sim, Tower *tower)
     /* Update Santa position */
     game_update_santa(sim);
     
-    /* Quarter transition */
-    if (sim->tick >= sim->ticks_per_quarter) {
-        sim->tick = 0;
-        sim->quarter++;
-        quarter_closeout(sim, tower);
+    /* Midnight day++ (TimeT 1200:04ab: the calendar increments at ft
+     * 0x8FC = 2300, which the clock decodes to exactly 0:00 — clock and
+     * calendar agree). The weekend flag (day % 3, [0xB3A0]) flips here,
+     * at midnight, as in the EXE. Rows use equality: ticks advance by 1
+     * and clock jumps never cross this ft (game_clock_jump guards). */
+    if (tick_in_day == FT_MIDNIGHT)
+        tower->day++;
 
-        /* Day transition */
-        if (sim->quarter >= QUARTER_COUNT) {
-            sim->quarter = 0;
-            /* Close out the day: snapshot its totals, then reset the rollup. */
-            sim->last_day_num      = tower->day;
-            sim->last_day_income   = sim->day_income;
-            sim->last_day_expenses = sim->day_expenses;
-            sim->day_income = 0;
-            sim->day_expenses = 0;
-            tower->day++;
-
+    /* THE 4:59AM ROW (TimeT ft 0x9E5 = 2533): the daily judge and the
+     * finance settlement — the EXE's dawn bookkeeping tick. */
+    if (tick_in_day == FT_DAILY_SETTLE) {
             /* THE DAILY JUDGE (JudgeTenant tail, 4:59AM): categorize
              * offices/condos/shops and re-arm any vacant unit whose
              * verdict climbed off stressed — this is the whole rental
@@ -1722,9 +1765,28 @@ void game_update(GameSim *sim, Tower *tower)
             /* Wedding check at dawn (ChurchT) — wants fresh promo flags */
             scan_promotion_flags(sim, tower);
             game_wedding_daily(sim, tower);
+    }
+
+    /* Quarter transition — the port's cosmetic 650-tick bookkeeping
+     * slices (analytics samples + finance sub-logs; no EXE meaning). */
+    if (sim->tick >= GAME_TICKS_PER_QUARTER) {
+        sim->tick = 0;
+        sim->quarter++;
+        quarter_closeout(sim, tower);
+
+        /* Day wrap at ft 2600 = 7:00AM: close the intra-day rollup with
+         * its 4th quarter. tower->day itself was bumped at midnight
+         * (ft 2300), so the finished 7AM-7AM span was mostly day-1. */
+        if (sim->quarter >= QUARTER_COUNT) {
+            sim->quarter = 0;
+            sim->last_day_num      = tower->day - 1;
+            sim->last_day_income   = sim->day_income;
+            sim->last_day_expenses = sim->day_expenses;
+            sim->day_income = 0;
+            sim->day_expenses = 0;
         }
     }
-    
+
     /* Count total tenants */
     sim->tenants_total = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
@@ -1774,9 +1836,10 @@ void game_format_time(GameSim *sim, char *buf, int bufsize)
 const char *game_quarter_name(Quarter q)
 {
     /* Intra-day bookkeeping slices — NOT the EXE's WD/WE days (those
-     * are day%3; see game_is_weekend). */
+     * are day%3; see game_is_weekend). Equal 650-tick slices of the
+     * authentic non-uniform day, so the clock spans are lopsided. */
     static const char *names[] = {
-        "Q1 (5-11a)", "Q2 (11a-5p)", "Q3 (5-11p)", "Q4 (11p-5a)"
+        "Q1 (7a-12:18p)", "Q2 (12:18-2p)", "Q3 (2-8:30p)", "Q4 (8:30p-7a)"
     };
     if (q >= 0 && q < QUARTER_COUNT) return names[q];
     return "???";
@@ -3351,48 +3414,37 @@ void game_update_event(GameSim *sim, Tower *tower)
             game_resolve_event(sim, tower);
             return;
         }
-        /* The deterministic sweep, paced in EXE frames like the fire
-         * (320 frames/game-hour before 1PM). */
+        /* The deterministic sweep runs in raw EXE frames, one per tick —
+         * with the authentic 2600-tick day, 1 port tick = 1 EXE
+         * frame-time exactly (guard cadence per GUARD_SWEEP_FRAMES /
+         * GUARD_FLOOR_FRAMES, 0xDDCC/0xDDCE). */
         int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
         tower_floor_extents(tower, left, right);
-        int ticks_per_hour = sim->ticks_per_quarter / 6;
-        if (ticks_per_hour < 1) ticks_per_hour = 1;
-        ev->hunt.frame_accum += 320;
-        while (ev->hunt.frame_accum >= ticks_per_hour) {
-            ev->hunt.frame_accum -= ticks_per_hour;
-            if (guard_hunt_step_frame(sim, tower, left, right)) {
-                ev->caught = 1;
-                ev->active = 0;
-                ev->type = EVENT_NONE;
-                ev->hunt.active = 0;
-                printf("🛡️ Security caught the bomb on floor %d! "
-                       "Crisis averted.\n", ev->target_floor);
-                /* EXE EventCleanup resets frame_time to 0x5DC = 4:00 PM —
-                 * the world was frozen for the whole hunt, and the jump
-                 * hands those dead hours back. */
-                game_clock_jump(sim, tower, 16);
-                return;
-            }
+        if (guard_hunt_step_frame(sim, tower, left, right)) {
+            ev->caught = 1;
+            ev->active = 0;
+            ev->type = EVENT_NONE;
+            ev->hunt.active = 0;
+            printf("🛡️ Security caught the bomb on floor %d! "
+                   "Crisis averted.\n", ev->target_floor);
+            /* EXE EventCleanup resets frame_time to 0x5DC = 4:00 PM —
+             * the world was frozen for the whole hunt, and the jump
+             * hands those dead hours back. */
+            game_clock_jump(sim, tower, 16);
         }
         return;
     }
 
-    /* FIRE — advance the EXE frame clock. TimeT's day clock is non-uniform:
-     * 320 frames per game-hour from 10AM to 1PM (ft 240->1200), then 100
-     * per hour to the 9PM stop (->2000). One frame fires per
-     * ticks-per-hour of accumulated frames-per-hour, so this is exact at
-     * every game speed. */
+    /* FIRE — one EXE frame per tick, raw (FireT seg_10e8: horizontal
+     * step every ft%7==0, +1 floor per 80 ft, hard stop at ft 2000 =
+     * 9PM). The port's old 320/100 frames-per-hour split was a window
+     * AVERAGE of the real clock (referee 2026-08-02): the EXE runs
+     * 80 ft/hr 10AM-noon, 800 ft/hr noon-1PM, 100 ft/hr after — and
+     * with the authentic 2600-tick day that true pacing now falls out
+     * of stepping once per tick, no conversion at all. */
     int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
     tower_floor_extents(tower, left, right);
-
-    int ticks_per_hour = sim->ticks_per_quarter / 6;
-    if (ticks_per_hour < 1) ticks_per_hour = 1;
-    ev->fire_accum += (sim->hour < 13) ? 320 : 100;
-    while (ev->fire_accum >= ticks_per_hour) {
-        ev->fire_accum -= ticks_per_hour;
-        fire_step_frame(sim, tower, left, right);
-        if (!ev->active) return;
-    }
+    fire_step_frame(sim, tower, left, right);
 }
 
 void game_resolve_event(GameSim *sim, Tower *tower)
@@ -3461,7 +3513,11 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 14u  /* v14: grand lobby (Tower.lobby_height;
+#define SAVE_VERSION 15u  /* v15: authentic 2600-tick non-uniform day
+                             clock (struct layout UNCHANGED — v14 saves
+                             still load; their uniform 5AM-anchored
+                             tick is renormalized on load).
+                             v14: grand lobby (Tower.lobby_height;
                              new towers start on an empty lot).
                              v13: art styles (Tenant.style,
                              Tower.style_ctr).
@@ -3521,7 +3577,8 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
     if (!f) return -1;
     uint32_t hdr[5];
     int ok = fread(hdr, sizeof(hdr), 1, f) == 1 &&
-             hdr[0] == SAVE_MAGIC && hdr[1] == SAVE_VERSION &&
+             hdr[0] == SAVE_MAGIC &&
+             (hdr[1] == SAVE_VERSION || hdr[1] == 14u) &&
              hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
              hdr[4] == sizeof(Tuning);
     if (ok)
@@ -3531,10 +3588,42 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
     fclose(f);
     /* Turbo lost its UI entry (speed capped at FAST, 2026-07-29) —
      * clamp saves made before the cap. */
-    if (ok && sim->speed > SPEED_FAST) {
+    if (ok && sim->speed > SPEED_FAST)
         sim->speed = SPEED_FAST;
-        sim->ticks_per_quarter = TICKS_PER_QUARTER[SPEED_FAST];
+    /* Clock renormalization (v15, 2026-08-02): pre-re-pace saves carry a
+     * uniform 720/360/120-ticks-per-quarter clock anchored at 5:00AM.
+     * Decode the OLD clock time, then re-encode it on the authentic
+     * 2600-tick table so the tower resumes at the same wall-clock time.
+     * If the resumed time is between midnight and 5AM, bump the day:
+     * the new scheme increments the calendar at 0:00 (TimeT 1200:04ab),
+     * where the old one waited for its 5AM rollover — bumping keeps the
+     * judge/settlement cadence identical to what the old save would
+     * have seen (from 5AM on, both schemes already agree on the day
+     * number). Detection is belt-and-braces: the header version AND
+     * the stored ticks_per_quarter (never 650 in an old save). */
+    if (ok && (hdr[1] == 14u ||
+               sim->ticks_per_quarter != GAME_TICKS_PER_QUARTER)) {
+        int old_tpq = sim->ticks_per_quarter;
+        int h = 12, m = 0;
+        if (old_tpq > 0) {
+            int old_tid = (int)sim->quarter * old_tpq + sim->tick;
+            int old_day_ticks = old_tpq * QUARTER_COUNT;
+            if (old_tid < 0) old_tid = 0;
+            if (old_tid >= old_day_ticks) old_tid %= old_day_ticks;
+            int t = old_tid * 1440 / old_day_ticks;   /* min since 5AM */
+            h = (5 + t / 60) % 24;
+            m = t % 60;
+        }
+        int ft = game_clock_to_tick(h, m);
+        if (ft >= FT_MIDNIGHT && ft < FT_DAILY_SETTLE) tower->day++;
+        sim->quarter = (Quarter)(ft / GAME_TICKS_PER_QUARTER);
+        sim->tick = ft % GAME_TICKS_PER_QUARTER;
+        game_tick_clock(ft, &sim->hour, &sim->minute);
+        sim->time_of_day = hour_to_tod(sim->hour);
+        printf("Save clock renormalized: %d:%02d -> ft %d (day %d)\n",
+               h, m, ft, tower->day);
     }
+    if (ok) sim->ticks_per_quarter = GAME_TICKS_PER_QUARTER;
     /* The EXE zeroes the style rotation on load (tower_clear runs
      * before deserializing; the counters are not in the file) — the
      * per-tenant styles it stamped survive in the records. */

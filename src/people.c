@@ -1192,14 +1192,19 @@ static int dequeue(ElevatorShaft *s, int floor, int up)
 
 /* ---------- stress (WaitT -> tenant) ---------- */
 
-/* Calibration note (2026-08-01): the EXE's wait constants (queue watchdog
- * 300, wait_cap 300, judge bars 150/200) are in ITS frame-time, ~320 ft
- * per daytime game hour — and our NORMAL speed runs ~120 render frames per
- * game hour with a ~2880-frame day, close enough to the EXE's ~2500-ft day
- * that the raw frame counts are already roughly EXE-calibrated. A per-hour
- * exchange-rate conversion was tried and reverted: it made the watchdog
- * pathological at fast speeds (18 frames at TURBO). Queues visibly
- * shrinking without a car IS the original's give-up mechanic. */
+/* Calibration note (re-based 2026-08-02, TimeT frame-rate referee): the
+ * EXE's wait constants (queue watchdog 300, wait_cap 300, judge bars
+ * 80/150/200) are RAW frame-time counts (watchdog byte-cite 1220:1688-
+ * 1697: frame_time - wait_start >= [0xDD7A]). With the port's day now
+ * exactly the EXE's 2600 frame-times and 1 tick = 1 frame-time, these
+ * raw constants are byte-faithful with NO conversion — their game-CLOCK
+ * meaning varies ~10x by time of day exactly as in 1994 (a 300-frame
+ * fuse spans 3.75 clock-hours in the morning rush, 22.5 clock-minutes
+ * over lunch, 9 hours overnight), because the displayed clock is
+ * non-uniform while patience burns per frame. Never convert these to
+ * clock time — a per-hour exchange rate was tried in July and reverted
+ * (watchdog collapsed to 18 frames at TURBO). Queues visibly shrinking
+ * without a car IS the original's give-up mechanic. */
 
 static void bank_wait(const PeopleSim *ps, Person *p, int frame)
 {

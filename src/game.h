@@ -3,11 +3,15 @@
  * Time, money, population, star rating — the beating heart of SimTower.
  * Mechanics decoded from SIMTOWER.EXE decompilation (segs 1140, 1148, 1118).
  *
- * Time model (from original):
- *   - Each "day" has 4 quarters: Q1 (morning), Q2 (midday), Q3 (evening), Weekend
- *   - Actually it's: Weekday1, Weekday2, Weekday3, Weekend (repeating)
- *   - Each quarter has ~360 ticks (frames at normal speed)
- *   - Tick rate affected by game speed
+ * Time model (TimeT seg 65, byte-verified referee 2026-08-02):
+ *   - A game day is EXACTLY 2600 frame-times (ticks), wrapping at 0xA28.
+ *   - The displayed clock is deliberately non-uniform: 80 ft/game-hour
+ *     7AM-noon, 800 ft/hr noon-1PM (the long lunch), 100 ft/hr 1PM-1AM,
+ *     33 1/3 ft/hr overnight. See game_tick_clock().
+ *   - 1 tick = 1 rendered frame (the EXE's PeekMessage idle pump);
+ *     game speed multiplies sim steps per rendered frame, never the
+ *     day length.
+ *   - Days run 1st WD, 2nd WD, WE (day % 3); day++ at ft 2300 = 0:00.
  */
 #ifndef GAME_H
 #define GAME_H
@@ -36,12 +40,34 @@ typedef enum {
  * finance sub-logs). It carries NO weekday/weekend meaning — the
  * June-era names that conflated the two calendars are gone. */
 typedef enum {
-    QUARTER_1 = 0,      /* 5am-11am */
-    QUARTER_2,          /* 11am-5pm */
-    QUARTER_3,          /* 5pm-11pm */
-    QUARTER_4,          /* 11pm-5am */
+    QUARTER_1 = 0,      /* ft    0- 649: 7:00AM-12:18PM */
+    QUARTER_2,          /* ft  650-1299: 12:18PM-2:00PM */
+    QUARTER_3,          /* ft 1300-1949: 2:00PM-8:30PM  */
+    QUARTER_4,          /* ft 1950-2599: 8:30PM-7:00AM  */
     QUARTER_COUNT
 } Quarter;
+
+/* --- The authentic day clock (TimeT seg 65, byte-verified 2026-08-02) ---
+ * frame_time 0..2599 (wrap at 0xA28, 1200:01d1); period [0xB3A1] =
+ * ft/400 with boundaries at wall-clock 7:00AM / 12:00 / 12:30 /
+ * 1:00PM / 5:00PM / 9:00PM / 1:00AM. All wait/stress/judge constants
+ * are RAW frame-time counts — never convert them to clock time. */
+#define GAME_DAY_TICKS          2600
+#define GAME_TICKS_PER_QUARTER  (GAME_DAY_TICKS / QUARTER_COUNT)  /* 650 */
+#define FT_MIDNIGHT             2300  /* 0:00 — day++ (TimeT 1200:04ab, 0x8FC) */
+#define FT_DAILY_SETTLE         2533  /* 4:59AM — judge + finance row (0x9E5);
+                                       * also the EXE's new-game start ft
+                                       * (InitTime 1200:0000) */
+
+/* FrameTimeToClock (TimeT FUN_1200_058D): tick-in-day -> displayed clock.
+ * Hour math is the EXE's exactly; minutes interpolate linearly inside
+ * the hour (the referee report only pins minute math for the lunch
+ * periods — gap marked in game.c). */
+void game_tick_clock(int tick_in_day, int *hour, int *minute);
+
+/* Inverse mapping: clock time -> tick-in-day (piecewise inverse of the
+ * table above; used by clock jumps and save renormalization). */
+int game_clock_to_tick(int hour, int minute);
 
 /* Financial-report category lists, in the exact top-to-bottom order of the
  * EXE's report art (bitmap 0x81f4). Left = revenue (population + income),
@@ -60,9 +86,9 @@ enum {
 /* Game speed. The original's model (menu resource + TimeT 1200:01a5,
  * 2026-07-29): pause, or a 6ms-per-tick throttle, or Options -> Fast
  * Mode = unthrottled ("as fast as the machine can", 1994 hardware).
- * NORMAL is our throttled rate; FAST approximates era-unthrottled at
- * 2x and is the UI cap. TURBO is kept for old saves/debug only — no
- * menu entry; finer control is a mod idea. */
+ * The day is ALWAYS 2600 ticks; speed multiplies sim steps per
+ * rendered frame (main.c): NORMAL 1x, FAST 2x (the UI cap). TURBO is
+ * kept for old saves/debug only — no menu entry. */
 typedef enum {
     SPEED_PAUSED = 0,
     SPEED_NORMAL = 1,
@@ -499,7 +525,9 @@ typedef struct {
 
 typedef struct {
     int         active;
-    int         frame_accum;  /* EXE-frame pacing, shared with the clock */
+    int         frame_accum;  /* UNUSED since the 2600-tick re-pace (1 tick
+                                 = 1 EXE frame; kept for the frozen save
+                                 layout) */
     int         noffices;
     GuardOffice o[GUARD_OFFICES_MAX];
 } GuardHunt;
@@ -517,12 +545,15 @@ typedef struct {
                                   the EXE never charges cash for the damage) */
     int       ransom_cost;     /* bomb pay-off by star / fire helicopter fee */
     /* Fire: per-floor advancing fronts, paced in EXE frame units.
-     * TimeT's clock is non-uniform: 320 frames/game-hour from 10AM-1PM
-     * (ft 240->1200), then 100/hour to 9PM — so the fire visibly races
-     * before lunch and crawls after. fire_accum carries the remainder
-     * (one frame per ticks-per-hour of accumulated frames-per-hour). */
+     * With the authentic 2600-tick day, 1 port tick = 1 EXE frame-time
+     * exactly, so the fire steps once per tick raw (FireT: horizontal
+     * step every ft%7==0, +1 floor per 80 ft, hard stop at ft 2000 =
+     * 9PM). The clock's non-uniformity (80/800/100 ft/hr) is what makes
+     * it race through the morning hours and crawl after lunch — no
+     * rate conversion needed. fire_accum is retired (kept only for the
+     * frozen save layout). */
     int       fire_frame;      /* EXE frames since ignition; >= 1760 = 9PM stop */
-    int       fire_accum;
+    int       fire_accum;      /* UNUSED since the 2600-tick re-pace */
     int16_t   fire_left[TOWER_FLOOR_COUNT];   /* leftmost burning cell, -1 = none */
     int16_t   fire_right[TOWER_FLOOR_COUNT];  /* right front cell (flames span +12) */
     int       chopper_x;       /* > 0: helicopter at this cell, flying left */
@@ -592,8 +623,12 @@ typedef struct {
 /* The simulation state */
 typedef struct {
     /* Time */
-    int           tick;             /* Current tick within quarter */
-    int           ticks_per_quarter;/* ~360 at normal speed */
+    int           tick;             /* Current tick within quarter (0..649);
+                                       tick-in-day = quarter*650 + tick =
+                                       the EXE's frame_time [0xB3DE] */
+    int           ticks_per_quarter;/* always GAME_TICKS_PER_QUARTER (650);
+                                       older saves carry 720/360/120 — the
+                                       load path renormalizes on that */
     TimeOfDay     time_of_day;
     Quarter       quarter;
     GameSpeed     speed;
