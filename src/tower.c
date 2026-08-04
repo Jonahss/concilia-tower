@@ -539,6 +539,22 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (!touches)
             REJECT("Cannot start a shaft inside the lobby's upper stories");
     }
+    /* No shaft may START on B10 (PlaceElevator 11f8:0fea @1014: internal
+     * floor >= 1; underground referee 2026-08-03 §6). Extensions can
+     * still drag down to it. */
+    if (item_is_elevator(type) && floor <= TOWER_MIN_FLOOR &&
+        !elevator_extends_column(tower, type, floor, x))
+        REJECT("Cannot start a shaft on the bottom floor");
+    /* Venues above ground must clear the grand lobby band (2f5a per-type
+     * table: [0xB3E6]+10 < floor, where the EXE's stored floor is the
+     * venue's TOP story — they extend downward; same referee). The rule
+     * in port coordinates: the top story must sit above the lobby band.
+     * Basements are free. */
+    if (type == ITEM_CINEMA || type == ITEM_PARTY_HALL) {
+        int vtop = floor + ITEM_HEIGHT[type] - 1;
+        if (vtop >= 1 && vtop <= deck_lobby_band(tower))
+            REJECT("Cannot build inside the lobby");
+    }
 
     /* Shaft clearance (CheckElevatorClearance 10a0:10e8 — seg44 drag trace
      * 2026-07-28, correcting the earlier "no spacing rule" note): the
