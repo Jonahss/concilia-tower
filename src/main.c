@@ -3281,18 +3281,36 @@ static void render_shaft(ElevatorShaft *s)
             SDL_SetTextureColorMod(queue_spr->texture, 255, 255, 255);
         }
 
-        /* Cars, with smooth travel between floors */
+        /* Cars, with smooth travel between floors. The sim ticks at 15Hz
+         * (authentic 1994 pacing) while we render at 60 — cruise-gear
+         * cars move a whole floor per tick, so raw positions step
+         * visibly. A render-side smoother eases each car's drawn
+         * position (in world floor units, so camera scrolls don't lag)
+         * toward its true position; big jumps (settle, boot, removal)
+         * snap. Pure cosmetics — the sim never reads this. */
+        static float car_fpos[MAX_SHAFTS][CARS_PER_SHAFT];
+        static uint8_t car_fpos_on[MAX_SHAFTS][CARS_PER_SHAFT];
+        int si = (int)(s - game.sim.people.shafts);
         for (int ci = 0; ci < s->num_cars; ci++) {
             ElevatorCar *c = &s->car[ci];
             if (!c->active) continue;
             if (s->hidden && !game.elv_edit_mode) continue;
+            float truef = (float)index_to_floor(c->floor);
+            if (c->target != c->floor && c->move_total) {
+                float prog = (float)(c->move_total - c->move_timer) /
+                             (float)c->move_total;
+                truef += c->dir ? prog : -prog;
+            }
+            float *fp = &car_fpos[si][ci];
+            if (!car_fpos_on[si][ci] || fabsf(*fp - truef) > 4.0f) {
+                *fp = truef; car_fpos_on[si][ci] = 1;
+            } else {
+                *fp += (truef - *fp) * 0.35f;
+            }
             int sx, sy;
             grid_to_screen(index_to_floor(c->floor), s->x, &sx, &sy);
-            if (c->target != c->floor && c->move_total) {
-                int gone = c->move_total - c->move_timer;
-                int off = gone * CELL_H / c->move_total;
-                sy += c->dir ? -off : off;
-            }
+            sy -= (int)lroundf((*fp - (float)index_to_floor(c->floor)) *
+                               (float)CELL_H);
 
             /* GetCarSprite: 0/1 pax -> frame 0/1, 2-3 -> 2, partial -> 3,
              * full -> 4 (red F) */
