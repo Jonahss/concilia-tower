@@ -1514,7 +1514,12 @@ static void render_tower(void)
                      * and mistook its second furniture pair for a tier variant). */
                     int night = (game.sim.time_of_day == TOD_NIGHT ||
                                  game.sim.time_of_day == TOD_EVENING);
-                    int leased = (tenant->state >= TENANT_MOVING_IN &&
+                    /* MOVING_IN = still on the market (a fresh office
+                     * waiting for movers, maybe unreachable) — bare
+                     * 0x85ab art until someone actually leases it.
+                     * (2026-08-03: fresh unreachable offices rendered
+                     * furnished.) */
+                    int leased = (tenant->state >= TENANT_OCCUPIED &&
                                   tenant->state != TENANT_ABANDONED);
                     uint16_t office_sheet;
                     if (!leased) {
