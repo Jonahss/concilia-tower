@@ -3295,12 +3295,30 @@ static void render_shaft(ElevatorShaft *s)
         /* Cars, with smooth travel between floors. The sim ticks at 15Hz
          * (authentic 1994 pacing) while we render at 60 — cruise-gear
          * cars move a whole floor per tick, so raw positions step
-         * visibly. A render-side smoother eases each car's drawn
-         * position (in world floor units, so camera scrolls don't lag)
-         * toward its true position; big jumps (settle, boot, removal)
-         * snap. Pure cosmetics — the sim never reads this. */
-        static float car_fpos[MAX_SHAFTS][CARS_PER_SHAFT];
-        static uint8_t car_fpos_on[MAX_SHAFTS][CARS_PER_SHAFT];
+         * visibly. Fixed-timestep interpolation: remember each car's
+         * position at the last two sim ticks and draw linearly between
+         * them, advancing with the render frames elapsed since the tick.
+         * (The first version exponentially eased toward the true
+         * position — constant-speed travel is the worst case for that:
+         * the car surged after every tick and stalled before the next,
+         * a 15Hz throb. Jonah caught it.) Positions are world floor
+         * units so camera scrolls don't lag; big jumps (settle, boot,
+         * removal) snap. One tick of display latency (~67ms). Pure
+         * cosmetics — the sim never reads this. */
+        static float car_prev[MAX_SHAFTS][CARS_PER_SHAFT];
+        static float car_cur[MAX_SHAFTS][CARS_PER_SHAFT];
+        static int   car_tick[MAX_SHAFTS][CARS_PER_SHAFT];
+        /* Render frames per sim tick, measured (4 at NORMAL, 1 at FAST) */
+        static int last_simframe = -1, frames_since_tick = 0, tick_len = 4;
+        if (game.sim.frame != last_simframe) {
+            if (last_simframe >= 0 && frames_since_tick > 0 &&
+                frames_since_tick <= 8)
+                tick_len = frames_since_tick;
+            last_simframe = game.sim.frame;
+            frames_since_tick = 0;
+        } else if (s == &game.sim.people.shafts[0]) {
+            frames_since_tick++;   /* once per rendered frame, not per shaft */
+        }
         int si = (int)(s - game.sim.people.shafts);
         for (int ci = 0; ci < s->num_cars; ci++) {
             ElevatorCar *c = &s->car[ci];
@@ -3312,15 +3330,26 @@ static void render_shaft(ElevatorShaft *s)
                              (float)c->move_total;
                 truef += c->dir ? prog : -prog;
             }
-            float *fp = &car_fpos[si][ci];
-            if (!car_fpos_on[si][ci] || fabsf(*fp - truef) > 4.0f) {
-                *fp = truef; car_fpos_on[si][ci] = 1;
-            } else {
-                *fp += (truef - *fp) * 0.35f;
+            float *pv = &car_prev[si][ci], *cu = &car_cur[si][ci];
+            if (car_tick[si][ci] != game.sim.frame + 1) {
+                /* new sim tick for this car: shift the history. Stored
+                 * value is last-shifted-frame + 1 (dodges zero-init).
+                 * Consecutive tick -> normal shift; anything else (first
+                 * sight, tick gap, teleport) -> snap both. */
+                if (car_tick[si][ci] == game.sim.frame &&
+                    fabsf(*cu - truef) <= 4.0f) {
+                    *pv = *cu; *cu = truef;
+                } else {
+                    *pv = *cu = truef;             /* boot / teleport */
+                }
+                car_tick[si][ci] = game.sim.frame + 1;
             }
+            float alpha = (float)(frames_since_tick + 1) / (float)tick_len;
+            if (alpha > 1.0f) alpha = 1.0f;
+            float drawf = *pv + (*cu - *pv) * alpha;
             int sx, sy;
             grid_to_screen(index_to_floor(c->floor), s->x, &sx, &sy);
-            sy -= (int)lroundf((*fp - (float)index_to_floor(c->floor)) *
+            sy -= (int)lroundf((drawf - (float)index_to_floor(c->floor)) *
                                (float)CELL_H);
 
             /* GetCarSprite: 0/1 pax -> frame 0/1, 2-3 -> 2, partial -> 3,
