@@ -5616,8 +5616,9 @@ static void ti_build(const Tenant *t, TiLayout *L)
         /* Status word (res 0x2c8): condos sell, offices rent. */
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
         snprintf(f[nf].value, 40, "%s",
-                 t->state == TENANT_OCCUPIED ? "Occupied"
-               : ty == ITEM_CONDO            ? "For Sale" : "For Rent");
+                 (t->state >= TENANT_OCCUPIED &&
+                  t->state != TENANT_ABANDONED) ? "Occupied"
+               : ty == ITEM_CONDO              ? "For Sale" : "For Rent");
         nf++;
     } else if (item_is_hotel_room(ty)) {
         f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
@@ -5636,7 +5637,8 @@ static void ti_build(const Tenant *t, TiLayout *L)
         L->price_field = nf; nf++;
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
         snprintf(f[nf].value, 40, "%s",
-                 t->state == TENANT_OCCUPIED ? "Occupied" : "For Rent");
+                 (t->state >= TENANT_OCCUPIED &&
+                  t->state != TENANT_ABANDONED) ? "Occupied" : "For Rent");
         nf++;
     } else if (inspect_is_cinema(t)) {
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Playing");
