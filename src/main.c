@@ -9417,10 +9417,15 @@ int main(int argc, char *argv[])
                 add_event_message(buf);
             }
             
-            /* Population milestones */
-            if (prev_pop < 100 && game.tower.population >= 100) add_event_message("Population reached 100!");
-            else if (prev_pop < 300 && game.tower.population >= 300) add_event_message("Population reached 300!");
-            else if (prev_pop < 1000 && game.tower.population >= 1000) add_event_message("Population reached 1,000!");
+            /* Population milestones — achievements, so they fire only at
+             * a fresh all-time high. A tower that collapses and bounces
+             * off a threshold must not re-announce it ("Population
+             * reached 300!" during a 840->300 eviction wave, 2026-08-03). */
+            if (game.tower.population >= game.sim.max_population) {
+                if (prev_pop < 100 && game.tower.population >= 100) add_event_message("Population reached 100!");
+                else if (prev_pop < 300 && game.tower.population >= 300) add_event_message("Population reached 300!");
+                else if (prev_pop < 1000 && game.tower.population >= 1000) add_event_message("Population reached 1,000!");
+            }
             
             /* Event announcements (edge: went active this tick) */
             if (game.sim.event.active && !prev_event_active) {
