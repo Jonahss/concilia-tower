@@ -588,19 +588,24 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             REJECT("No more elevator shafts available");
     }
 
-    /* Underground-only items must be below floor 0 */
-    if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0)
+    /* Underground-only items must be below floor 0 — their TOP story
+     * included: the EXE's 2f5a applies the depth rules to a 2-story
+     * downward-extender's upper row too (metro top must land 2..9
+     * internal), so a metro/recycling based at B1 poking into the
+     * ground floor is illegal. */
+    if (ITEM_UNDERGROUND_ONLY[type] && floor + ITEM_HEIGHT[type] - 1 >= 0)
         REJECT("Item unavailable above ground");
-    /* Commercial CAN go underground — the EXE's placement dispatch
-     * (11f8 jump table) has no basement gate for restaurant/shop/fast
-     * food, OpenSkyscraper allows them, and the underground food court
-     * is era gameplay canon. The blanket block was a port invention.
-     * Offices/housing/hotel/services stay blocked pending a full decode
-     * of ValidateTypeSpecificPlacement (11f8:2f5a). */
-    if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
-        type != ITEM_LOBBY && type != ITEM_FLOOR &&
-        type != ITEM_RESTAURANT && type != ITEM_FAST_FOOD &&
-        type != ITEM_SHOP && type != ITEM_CINEMA && floor < 0)
+    /* Underground placement per ValidateTypeSpecificPlacement 11f8:2f5a,
+     * FULL DECODE (underground referee 2026-08-03): the per-type table
+     * @CS:0x30ab blocks ONLY hotels/office/condo above-ground-only (msg
+     * 0xA); every unmatched type — restaurant/shop/fast food, cinema,
+     * party hall, medical, SECURITY, housekeeping — falls through to
+     * ALLOWED, basements included. The port's old blanket block was an
+     * invention. (Still queued from the report: venue-vs-grand-lobby
+     * band, shaft-start ban on B10.) */
+    if ((type == ITEM_OFFICE || type == ITEM_CONDO ||
+         type == ITEM_HOTEL_SINGLE || type == ITEM_HOTEL_TWIN ||
+         type == ITEM_HOTEL_SUITE) && floor < 0)
         REJECT("Item not available underground");
 
     /* Singletons and fixed-table caps (placement dispatcher seg_11f8 +
@@ -1092,9 +1097,15 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     tower->money -= charged;
     tower->built_value += charged;
 
-    /* Create tenant */
+    /* Create tenant. ZERO the record first: the slot at tenant_count can
+     * hold a demolished tenant's stale bytes (demolition compacts the
+     * array), and the assignments below only cover some fields — a
+     * rebuilt hotel room was inheriting the bulldozed room's condition
+     * and tenure, i.e. brand-new rooms opening pre-dirtied and even
+     * infested (Jonah live test). */
     uint16_t id = tower->next_tenant_id++;
     Tenant *t = &tower->tenants[tower->tenant_count++];
+    memset(t, 0, sizeof(*t));
     t->id = id;
     t->type = type;
     t->floor = floor;
@@ -1103,8 +1114,13 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     t->height = height;
     t->state = 0;
     t->capacity = CAP_EMPTY;
-    t->construction = (type < ITEM_TYPE_COUNT) ? CONSTRUCTION_TIME[type] : 0;
-    /* Transports appear instantly — the EXE shows no build animation on
+    /* Uniform 12-tick build for every queued type (EXE 1228:0000 @70:00a7
+     * hard-codes 0x0C; CONSTRUCTION_TIME is the person-pool table and only
+     * distinguishes queued from instant here). */
+    t->construction = (type < ITEM_TYPE_COUNT && CONSTRUCTION_TIME[type] > 0)
+                      ? CONSTRUCT_PASSES : 0;
+    /* (t was zeroed above — see the memset note.)
+     * Transports appear instantly — the EXE shows no build animation on
      * shafts or stairs, and update_tenants skips transports entirely, so a
      * transport left in TENANT_CONSTRUCTION would never finish (the
      * everlasting-construction-workers-on-the-shaft bug). */
@@ -1322,9 +1338,10 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
     if (x < 0 || x + width > TOWER_WIDTH) return 0;
     if (floor < TOWER_MIN_FLOOR || floor + height - 1 > TOWER_MAX_FLOOR) return 0;
     
-    /* Create tenant */
+    /* Create tenant (zeroed: same stale-slot hazard as the main path) */
     uint16_t id = tower->next_tenant_id++;
     Tenant *t = &tower->tenants[tower->tenant_count++];
+    memset(t, 0, sizeof(*t));
     t->id = id;
     t->type = type;
     t->floor = floor;

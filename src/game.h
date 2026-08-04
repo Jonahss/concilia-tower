@@ -207,33 +207,49 @@ static inline uint8_t cap_drain_step(uint8_t cap) {
     return (cap > CAP_STEP) ? (uint8_t)(cap - CAP_STEP) : CAP_EMPTY;
 }
 
-/* Construction times from TenantMake (GetConstructionTime) */
+/* EVERY queued tenant builds in 12 sim ticks — raw-verified 2026-08-03:
+ * begin-construction (1228:0000) hard-sets the countdown byte +0x17 to
+ * 0x0C at 70:00a7 for ALL types, and TickConstructionTimers (11f0:0211,
+ * run once per sim tick from the 1090 main update) decrements it to
+ * completion. GetConstructionTime's per-type values only feed a
+ * write-only end-time dword (+0x0E, no reader in the full 07-29 census)
+ * — that table's REAL role is the per-tenant PERSON-POOL size.
+ * update_tenants runs every 4th tick, so 3 passes = the EXE's 12. */
+#define CONSTRUCT_PASSES 3
+
+/* GetConstructionTime (1228:07c5) — raw switch re-read 2026-08-03. NOT a
+ * build duration (see above): it is the person-pool size per tenant
+ * (office 6 workers, condo 3 residents, retail 48 walk-in customers,
+ * metro 240 visitors...). Kept faithful for pool sizing; the port's
+ * only structural read is zero-vs-nonzero = instant-vs-queued build.
+ * (The old table here had invented per-type build times — security 40,
+ * hotel 56, cathedral 240 — none of them in the binary.) */
 static const int CONSTRUCTION_TIME[] = {
     [ITEM_NONE] = 0,
-    [ITEM_LOBBY] = 0,          /* Instant */
-    [ITEM_FLOOR] = 0,          /* Instant */
-    [ITEM_OFFICE] = 2,
+    [ITEM_LOBBY] = 0,          /* drag-builder, never queued */
+    [ITEM_FLOOR] = 0,          /* deck, not a tenant record */
+    [ITEM_OFFICE] = 6,         /* default case */
     [ITEM_CONDO] = 3,
-    [ITEM_HOTEL_SINGLE] = 56,
-    [ITEM_HOTEL_TWIN] = 56,
-    [ITEM_HOTEL_SUITE] = 56,
+    [ITEM_HOTEL_SINGLE] = 2,
+    [ITEM_HOTEL_TWIN] = 3,
+    [ITEM_HOTEL_SUITE] = 3,
     [ITEM_RESTAURANT] = 48,
     [ITEM_FAST_FOOD] = 48,
     [ITEM_SHOP] = 48,
     [ITEM_CINEMA] = 56,
-    [ITEM_PARTY_HALL] = 48,
-    [ITEM_METRO] = 56,
-    [ITEM_PARKING] = 8,
-    [ITEM_CATHEDRAL] = 240,    /* Takes FOREVER */
-    [ITEM_MEDICAL] = 56,
-    [ITEM_SECURITY] = 40,
-    [ITEM_RECYCLING] = 56,
-    [ITEM_STAIRS] = 40,
-    [ITEM_ESCALATOR] = 56,
-    [ITEM_ELEVATOR_SHAFT] = 8,
-    [ITEM_ELEVATOR_SERVICE] = 8,
-    [ITEM_ELEVATOR_EXPRESS] = 8,
-    [ITEM_HOUSEKEEPING] = 40,
+    [ITEM_PARTY_HALL] = 40,
+    [ITEM_METRO] = 240,        /* the dig — biggest pool in the game */
+    [ITEM_PARKING] = 6,        /* default case */
+    [ITEM_CATHEDRAL] = 8,      /* per section */
+    [ITEM_MEDICAL] = 6,        /* default case */
+    [ITEM_SECURITY] = 6,       /* default case */
+    [ITEM_RECYCLING] = 6,      /* default case */
+    [ITEM_STAIRS] = 0,         /* StairsT record, builds instantly */
+    [ITEM_ESCALATOR] = 0,
+    [ITEM_ELEVATOR_SHAFT] = 0, /* ElevatorsT, builds instantly */
+    [ITEM_ELEVATOR_SERVICE] = 0,
+    [ITEM_ELEVATOR_EXPRESS] = 0,
+    [ITEM_HOUSEKEEPING] = 6,   /* default case */
 };
 
 /* Promotion flags — from decompiled seg_1148 (offsets 0xB922-0xB92D).

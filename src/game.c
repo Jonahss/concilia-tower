@@ -670,9 +670,13 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
         /* State machine */
         switch ((TenantState)t->state) {
         case TENANT_EMPTY:
-            /* New tenant — starts construction */
+            /* New tenant — starts construction. Uniform 12-tick build
+             * (CONSTRUCT_PASSES × the every-4th-tick cadence here): the
+             * EXE hard-codes countdown 0x0C for every type (1228:0000 @
+             * 70:00a7) and ticks it once per sim tick. The per-type
+             * table only distinguishes queued from instant. */
             if (type_idx < ITEM_TYPE_COUNT && CONSTRUCTION_TIME[type_idx] > 0) {
-                t->construction = CONSTRUCTION_TIME[type_idx];
+                t->construction = CONSTRUCT_PASSES;
                 t->state = TENANT_CONSTRUCTION;
             } else {
                 t->state = TENANT_OCCUPIED;
@@ -682,18 +686,18 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
             break;
 
         case TENANT_CONSTRUCTION:
-            /* Under construction — decrement on a GAME-TIME cadence, not every
-             * frame. The old code stepped construction every update_tenants
-             * call (every 4 frames), so an office (CONSTRUCTION_TIME 2) finished
-             * in ~0.13s and build time was tied to frame rate, not the sim
-             * clock. Gate the decrement to ~12 steps per in-game quarter
-             * (cdiv = ticks_per_quarter/12) so it's frame-rate independent and
-             * scales with game speed: office ~0.8s, hotel ~22s, at normal. */
-            {
-                int cdiv = sim->ticks_per_quarter / 24;
-                if (cdiv < 4) cdiv = 4;
-                if (sim->tick % cdiv < 4) t->construction--;
-            }
+            /* One decrement per pass = the EXE's per-tick countdown at
+             * this function's every-4th-tick cadence (12 ticks total).
+             * The old "game-time cadence" here (~ a step per half game-
+             * hour) was an invention — 1994 construction is a sub-second
+             * scaffold flash, which is also why the EXE can count a
+             * security office for the star gate at PLACEMENT without
+             * anyone noticing the unit is technically still building. */
+            if (t->construction > CONSTRUCT_PASSES)   /* heal pre-fix saves
+                                                       * (old table stored
+                                                       * up to 240 here) */
+                t->construction = CONSTRUCT_PASSES;
+            t->construction--;
             if (t->construction <= 0) {
                 t->state = TENANT_MOVING_IN;
                 /* Fresh units OPEN EMPTY — frame 0 is the vacant art (bare

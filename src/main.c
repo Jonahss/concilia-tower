@@ -215,6 +215,9 @@
 #define SPR_MEDICAL_COMP      0x0017  /* 0x8728 + 0x8729 + ... */
 #define SPR_PARKING_COMP      0x0018  /* 0x86A8 + 0x86A9 */
 #define SPR_PARTYHALL_COMP    0x0019  /* 0x8B28 + 0x8B68 vertically */
+#define SPR_RAMP_COMP         0x001A  /* 0x8EE8 + 0x8EE9 + 0x8EEA horizontally
+                                       * (3 frames x 128px, 24px basement art
+                                       * — same merge as OpenSkyscraper) */
 #define SPR_CINEMA_COMP       0x001A  /* cinema hall composite */
 #define SPR_METRO_COMP        0x001B  /* metro station composite */
 #define SPR_CINEMA_COMP_F1    0x001C  /* cinema with cycled marquee */
@@ -265,6 +268,7 @@ static uint16_t item_sprite_id(ItemType type, int *frame_w, int *floors)
     case ITEM_PARTY_HALL:    *frame_w = 192; return SPR_PARTYHALL_COMP; /* 576/3=192 per frame */
     case ITEM_METRO:         *frame_w = 240; return SPR_METRO_COMP;  /* 720/3=240 per frame */
     case ITEM_PARKING:       *frame_w = 32;  return SPR_PARKING_COMP;
+    case ITEM_RAMP:          *frame_w = 128; return SPR_RAMP_COMP; /* 384/3 */
     case ITEM_CATHEDRAL:     *frame_w = 224; return SPR_CATHEDRAL_COMP; /* 448/2:
         * day|night frames, 5 floors tall (composited at init) */
     case ITEM_MEDICAL:       *frame_w = 208; return SPR_MEDICAL_COMP;  /* 3 states × 208px */
@@ -1689,11 +1693,8 @@ static void render_tower(void)
                  * (Stage split inferred; both are dedicated construction art.) */
                 uint16_t cg_id = SPR_CONST_GRID;
                 if (tenant->state == TENANT_CONSTRUCTION &&
-                    (int)tenant->type < ITEM_TYPE_COUNT) {
-                    int total = CONSTRUCTION_TIME[(int)tenant->type];
-                    if (total > 1 && tenant->construction <= total / 2)
-                        cg_id = SPR_CONST_SOLID;
-                }
+                    tenant->construction <= CONSTRUCT_PASSES / 2)
+                    cg_id = SPR_CONST_SOLID;
                 Sprite *cgrid = (tenant->state == TENANT_CONSTRUCTION)
                               ? sprites_find(&game.sprites, cg_id) : NULL;
                 if (cgrid && cgrid->w > 0) {
@@ -8540,6 +8541,13 @@ int main(int argc, char *argv[])
             ok++;
         } else fail++;
         /* Parking: 0x86A8 + 0x86A9 horizontally */
+        /* Parking ramp: 0x8EE8-0x8EEA merged horizontally (3 frames) */
+        {
+            uint16_t ramp01 = 0x00EF;
+            if (sprites_compose_h(&game.sprites, game.renderer, 0x8EE8, 0x8EE9, ramp01) == 0 &&
+                sprites_compose_h(&game.sprites, game.renderer, ramp01, 0x8EEA, SPR_RAMP_COMP) == 0)
+                ok++; else fail++;
+        }
         if (sprites_compose_h(&game.sprites, game.renderer, 0x86A8, 0x86A9, SPR_PARKING_COMP) == 0)
             ok++; else fail++;
         /* Party Hall: 0x8B28 (top) + 0x8B68 (bottom) vertically */
