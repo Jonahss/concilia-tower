@@ -1381,6 +1381,24 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
                                 : 0;
             vip_result = (avg <= TUNING.judge_moderate) ? 1 : 2;
         }
+        /* A metro visitor stepping back onto the concourse frees his
+         * pool slot — same-day re-entry is real (metro-pacing referee:
+         * home arrival -> status 1, dice-eligible again). Identified by
+         * a retail home + a below-ground entry floor matching a
+         * station's top platform. */
+        {
+            Tenant *ht = tower_tenant(tower, p->home_tenant);
+            if (ht && (ht->type == ITEM_SHOP || ht->type == ITEM_RESTAURANT ||
+                       ht->type == ITEM_FAST_FOOD) &&
+                (int)p->entry_floor < floor_to_index(0)) {
+                for (int mi = 0; mi < tower->tenant_count; mi++) {
+                    Tenant *mt = &tower->tenants[mi];
+                    if (mt->type == ITEM_METRO &&
+                        floor_to_index(mt->floor + 2) == (int)p->entry_floor &&
+                        ps->spawned[mi] > 0) { ps->spawned[mi]--; break; }
+                }
+            }
+        }
         p->home_tenant = 0;
         p->state = PERSON_FREE;
         return;
@@ -2173,8 +2191,9 @@ static void release_car(Tower *tower, Person *p)
     p->parked_cat = 0;
 }
 
-/* METRO_VISITORS_PER_PHASE lives in people.h now — the metro's "Crowded
- * with passengers" comment (game.c) reads the same cap. */
+/* METRO_VISITOR_POOL lives in people.h — the station's 240-rider pool
+ * (game.c's "Crowded with passengers" inspection line is train ambience,
+ * independent of the pool). */
 
 /* Phase transitions drive trips:
  *   MORNING: office workers arrive       EVENING: they go home
@@ -2184,7 +2203,18 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
 {
     if ((uint8_t)tod != ps->cur_phase) {
         ps->cur_phase = (uint8_t)tod;
-        memset(ps->spawned, 0, sizeof(ps->spawned));
+        /* Metro pools are per-DAY, not per-phase: a rider's dice run the
+         * whole 10AM-5PM window and spent riders come back at midnight
+         * (EXE status 0x27, ft > 0x8FC) — so only the dawn wipe resets
+         * a station's counter; mid-day phase flips leave it alone. */
+        if (tod == TOD_DAWN) {
+            memset(ps->spawned, 0, sizeof(ps->spawned));
+        } else {
+            for (int zi = 0; zi < MAX_TENANTS; zi++)
+                if (zi >= tower->tenant_count ||
+                    tower->tenants[zi].type != ITEM_METRO)
+                    ps->spawned[zi] = 0;
+        }
         memset(ps->dinner_sent, 0, sizeof(ps->dinner_sent));
         /* flip people already at their destination into the new phase */
         for (int i = 0; i < ps->people_high; i++) {
@@ -2457,14 +2487,23 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             v = t;
             ps->spawned[i]++;
         } else if (t->type == ITEM_METRO) {
-            /* Metro visitors (1220:51dc): outside traffic, 10AM-5PM, a
-             * random retail KIND in the GROUND zone. Riders enter and
+            /* Metro visitors (1220:51dc, injection 50e2): outside
+             * traffic, 10AM-5PM, a random retail KIND in the GROUND
+             * zone. Each of the station's 240 riders rolls 1-in-36 per
+             * 16-ft sim visit — pool_roll is that dice aggregated, with
+             * the natural slowdown as the pool drains. A roll consumes
+             * the rider's day even when the venue pick fails (EXE
+             * kind-miss -> status 0x27, out until midnight); stepping
+             * back onto the concourse frees the slot for same-day
+             * re-entry (rc table CS:5594 -> status 1). Riders enter and
              * leave on the TOP station floor — the port anchors the
              * 3-piece station at its bottom platform, so top = +2
              * (MakeMetroStation 11f8:2181, byte-verified 2026-07-11). */
             if (hour < 10 || hour >= 17) continue;
-            if (ps->spawned[i] >= METRO_VISITORS_PER_PHASE) continue;
-            if (!depart_roll(frame, i, 3)) continue;  /* ~the EXE's 300/day */
+            if (ps->spawned[i] >= METRO_VISITOR_POOL) continue;
+            if (!pool_roll(frame, i, METRO_VISITOR_POOL - ps->spawned[i],
+                           36)) continue;
+            ps->spawned[i]++;
             fidx = floor_to_index(t->floor + 2);
             if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
                 !reach_public[fidx]) continue;
@@ -2472,7 +2511,6 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 { ITEM_RESTAURANT, ITEM_FAST_FOOD, ITEM_SHOP };
             v = pick_retail(tower, KINDS[(seed >> 4) % 3], 0, seed,
                             reach_public);
-            if (v) ps->spawned[i]++;
         } else {
             continue;
         }
@@ -2484,7 +2522,13 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         int sp = spawn_person(ps, tower, v, fidx, vf, 0);
         if (sp) {
             Person *np = &ps->people[sp - 1];
-            np->stay = (uint8_t)(8 + (i * 3) % 10);   /* min-stay ~60fr */
+            /* Metro riders dwell the EXE's min-stay 60 + 16-ft poll grid
+             * = 64/72 frames, per PERSON (metro-pacing referee: OutRest
+             * 11a8:0f11, min-stay res 0x7F05). Other visitors keep the
+             * per-tenant spread. */
+            np->stay = (t->type == ITEM_METRO)
+                         ? (uint8_t)(8 + (sp & 1))
+                         : (uint8_t)(8 + (i * 3) % 10);
             np->entry_floor = (uint8_t)fidx;
         }
     }

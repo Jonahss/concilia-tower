@@ -405,6 +405,14 @@ typedef struct {
      * unknown, preserved verbatim so exports of imported towers keep
      * them. All-zero means "no file origin" and export uses defaults. */
     uint8_t  twr_unk[5];
+
+    /* Yesterday's walk-in count (EXE retail record +8) — what a
+     * restaurant/FF/shop contributes to tower POPULATION (CountT daily
+     * rebuild, 11a8:0461; population-accounting referee 2026-08-03).
+     * Rotated from walkins_today at open; seeded 10 at build/re-let.
+     * Appended at the struct tail so the v16 save repack maps v15
+     * records with one contiguous copy. */
+    uint8_t  walkins_yesterday;
 } Tenant;
 
 /* Big imported towers (THEECSTA.TDT) carry ~4100 tenant strips plus one

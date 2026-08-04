@@ -1091,6 +1091,12 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
      * everlasting-construction-workers-on-the-shaft bug). */
     if (item_is_transport(type)) t->construction = 0;
     t->population = 0;
+    /* Fresh retail seeds its population byte at 10 — the EXE's
+     * NewVenueRecord arm (11a8:09ef seeds +7=10 so the first open
+     * rebuilds the category with 10). */
+    t->walkins_yesterday =
+        (type == ITEM_RESTAURANT || type == ITEM_FAST_FOOD ||
+         type == ITEM_SHOP) ? 10 : 0;
     t->zone = (floor >= 0) ? floor / 15 : 0;  /* JudgeT: 7 zones of 15 floors */
     t->upgrade_day = 0;
     t->rent_class = 1;
@@ -1310,6 +1316,12 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
     t->capacity = CAP_MIN;       /* Start at first animation frame */
     t->construction = 0;         /* Already built */
     t->population = 0;
+    /* Fresh retail seeds its population byte at 10 — the EXE's
+     * NewVenueRecord arm (11a8:09ef seeds +7=10 so the first open
+     * rebuilds the category with 10). */
+    t->walkins_yesterday =
+        (type == ITEM_RESTAURANT || type == ITEM_FAST_FOOD ||
+         type == ITEM_SHOP) ? 10 : 0;
     t->zone = (floor >= 0) ? floor / 15 : 0;
     t->upgrade_day = 0;
     

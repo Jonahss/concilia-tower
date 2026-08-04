@@ -257,6 +257,7 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
         t->retail_score[2] = e[5];
         t->retail_quota    = e[6];
         t->walkins_today   = e[7];
+        t->walkins_yesterday = e[8];   /* population contribution (+8) */
         t->patrons_now     = e[9];
         t->retail_open     = (e[2] != 3 && e[2] != 0xFF);
         t->customers_today = (uint16_t)(e[0x10] | (e[0x11] << 8));
@@ -652,6 +653,7 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
         e[5] = t->retail_score[2];
         e[6] = t->retail_quota;
         e[7] = t->walkins_today;
+        e[8] = t->walkins_yesterday;
         e[9] = t->patrons_now;
         e[0x10] = (uint8_t)(t->customers_today & 0xFF);
         e[0x11] = (uint8_t)(t->customers_today >> 8);

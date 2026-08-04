@@ -104,96 +104,78 @@ void game_init(GameSim *sim)
 
 /* --- Population calculation --- */
 
+/* Tower population — the EXE's [0xB8C6] accounting, recomputed from
+ * state each call (population-accounting referee 2026-08-03: CountT
+ * AddPopulation 1060:07f7 / ResetPopulationCategory 1060:07b3; full
+ * caller census).
+ *
+ * Sticky categories: office +6 and condo +3 whenever moved in — around
+ * the clock, no move-in ramp, no reachability gate (a cut-off unit
+ * keeps its people on the books until it actually vacates); hotels
+ * +1/+2/+2 strictly while guests are hosted (check-in .. check-out).
+ * Daily-rebuilt categories: occupied restaurant/FF/shop contribute
+ * yesterday's walk-ins (rotated at open, seeded 10 at build/re-let);
+ * cinema (hall strip) = matinee+evening quotas; party hall = 50.
+ * Everything else — medical, security, recycling, housekeeping,
+ * cathedral, metro, parking — is structurally excluded (the EXE's
+ * category mapper 1060:08be returns -1: staff and visitors are never
+ * population).
+ *
+ * ONE number everywhere, like the EXE: the HUD, the star gate, the
+ * recycling requirement, the wedding gate and the finance window's
+ * per-category column all read this (or the per-tenant contributions
+ * it stamps into t->population). */
 int game_calc_population(GameSim *sim, Tower *tower)
 {
     int pop = 0;
-    int standing = 0;
     int occupied = 0;
-    
+
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type == ITEM_NONE || t->type == ITEM_LOBBY || t->type == ITEM_FLOOR)
             continue;
         if (item_is_transport(t->type)) continue;
 
-        /* Nobody can be somewhere they can't get to */
-        {
-            int fidx = floor_to_index(t->floor);
-            int is_staff = (t->type == ITEM_SECURITY || t->type == ITEM_HOUSEKEEPING);
-            if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT ||
-                !(is_staff ? sim->reach_service[fidx] : sim->reach_public[fidx])) {
-                t->population = 0;
-                continue;
-            }
-            /* A hotel room that isn't open for booking gets no guests
-             * tonight — but already-hosted guests stay their night out
-             * (the EXE only gates NEW check-ins, UniPeple 1220:3032). */
-            if (item_is_hotel_room(t->type) && !t->demand_armed &&
-                !t->hosted) {
-                t->population = 0;
-                continue;
-            }
-        }
-
-        /* Check if this tenant type is active at current time of day */
-        int type_idx = (int)t->type;
-        int base_pop = (type_idx < ITEM_TYPE_COUNT) ? TENANT_POPULATION[type_idx] : 0;
-        /* No capacity-byte scaling: an EXE office is always exactly 6
-         * people and pays flat 0x3E9 rent — the "thriving office ×2"
-         * multiplier was fabricated (economy referee 2026-08-02:
-         * OfficeRentIncome 1178:0cb4 uses constant population delta;
-         * JudgeT walks exactly 6 office persons at 1130:03f4). */
-        /* Occupancy ramp: new tenants start at 50% pop, grow to 100% */
-        if (t->state == 1) base_pop /= 2;  /* moving in */
-
         /* Only units someone actually lives/works in count. A condo held
          * on the market (MOVING_IN until a buyer can reach it), a unit
-         * still building, or an abandoned unit houses nobody — counting
-         * them showed sold-out art and star-worthy population for
-         * unreachable rooms. */
+         * still building, or an abandoned unit houses nobody. */
         int is_lived_in = t->state >= TENANT_OCCUPIED &&
                           t->state != TENANT_ABANDONED;
 
+        int add = 0;
         if (is_lived_in) {
-            /* STANDING population: everyone who lives or works here,
-             * regardless of the hour — the EXE's population global counts
-             * person records tied to tenants, so an office's workers count
-             * at midnight too. Hotel guests are the exception: they only
-             * exist while hosted. This is the number star promotion reads
-             * (otherwise the weekday-EVENING window could never see an
-             * office tower's population). */
-            if (item_is_hotel_room(t->type)) {
-                if (TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day])
-                    standing += base_pop;
-            } else {
-                standing += base_pop;
+            switch (t->type) {
+            case ITEM_OFFICE:       add = 6; break;
+            case ITEM_CONDO:        add = 3; break;
+            case ITEM_HOTEL_SINGLE: add = t->hosted ? 1 : 0; break;
+            case ITEM_HOTEL_TWIN:   /* suite = 2 as well (`type==3?1:2`
+                                     * at all three CountT call sites) */
+            case ITEM_HOTEL_SUITE:  add = t->hosted ? 2 : 0; break;
+            case ITEM_RESTAURANT:
+            case ITEM_FAST_FOOD:
+            case ITEM_SHOP:         add = t->walkins_yesterday; break;
+            case ITEM_CINEMA:
+                /* .TDT cinemas import as hall + entrance strips; only
+                 * the hall carries the show (same width filter as the
+                 * venue cycle). */
+                if (t->width >= 20)
+                    add = t->quota_matinee + t->quota_evening;
+                break;
+            case ITEM_PARTY_HALL:   add = 50; break;
+            default: break;
             }
+            occupied++;
         }
 
-        if (type_idx < ITEM_TYPE_COUNT && TENANT_ACTIVE_TIMES[type_idx][sim->time_of_day]) {
-            /* Active — people are physically present right now */
-            if (is_lived_in) {
-                t->population = base_pop;
-                pop += base_pop;
-                occupied++;
-            }
-        } else {
-            /* Inactive right now — condos still count (people sleep there) */
-            if (t->type == ITEM_CONDO && is_lived_in) {
-                t->population = TENANT_POPULATION[ITEM_CONDO];
-                pop += t->population;
-                occupied++;
-            } else {
-                t->population = 0;
-            }
-        }
+        t->population = add;
+        pop += add;
     }
-    
+
     tower->population = pop;
-    sim->standing_population = standing;
+    sim->standing_population = pop;   /* one number, everywhere */
     sim->tenants_occupied = occupied;
     if (pop > sim->max_population) sim->max_population = pop;
-    
+
     return pop;
 }
 
@@ -2637,6 +2619,10 @@ static void retail_open_one(GameSim *sim, Tower *tower, Tenant *t)
     t->retail_open = 1;
     t->retail_quota = (uint8_t)quota;
     t->retail_score[period] = 0;      /* today's grades start fresh */
+    /* Yesterday's walk-ins become today's population contribution —
+     * the EXE re-adds rec[+8] to the freshly wiped retail category at
+     * every open (11a8:0417-0461). */
+    t->walkins_yesterday = t->walkins_today;
     t->walkins_today = 0;
     t->patrons_now = 0;
     t->customers_today = 0;
@@ -2937,6 +2923,11 @@ void game_relet_arrivals(GameSim *sim, Tower *tower)
         t->capacity = CAP_MIN;
         t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
         if (t->type == ITEM_SHOP) t->retail_open = 0;  /* opens at 10AM */
+        /* Re-let retail re-seeds its population byte (EXE shop re-let
+         * +10 at first walk-in, 11a8:11bd). */
+        if (t->type == ITEM_SHOP || t->type == ITEM_RESTAURANT ||
+            t->type == ITEM_FAST_FOOD)
+            t->walkins_yesterday = 10;
         printf("🔑 %s on F%d re-let for $%d\n",
                tower_item_name(t->type), t->floor, lump);
     }
@@ -3713,5 +3704,15 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
         for (int i = 0; i < tower->tenant_count; i++)
             if (tower->tenants[i].state == TENANT_STRESSED)
                 tower->tenants[i].state = TENANT_OCCUPIED;
+    /* Migration: walkins_yesterday is new in v16 (it landed in the v15
+     * record's tail padding, so a repacked save carries garbage there)
+     * — seed it; the next retail open rotates in the real value. */
+    if (ok && legacy)
+        for (int i = 0; i < tower->tenant_count; i++) {
+            Tenant *t = &tower->tenants[i];
+            t->walkins_yesterday =
+                (t->type == ITEM_RESTAURANT || t->type == ITEM_FAST_FOOD ||
+                 t->type == ITEM_SHOP) ? 10 : 0;
+        }
     return ok ? 0 : -1;
 }

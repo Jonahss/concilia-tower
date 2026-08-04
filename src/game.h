@@ -341,7 +341,11 @@ static inline int tenant_rent(const ItemType type, int rent_class)
     return TENANT_RENT_BY_CLASS[type][rent_class];
 }
 
-/* Population per tenant type when occupied */
+/* Staffing/spawn table (people.c tenant_commuters) — how many person
+ * records a unit fields. NOT population accounting: tower population is
+ * the EXE's [0xB8C6] composition in game_calc_population, which excludes
+ * services/venues structurally (population-accounting referee
+ * 2026-08-03). Don't wire this table back into it. */
 static const int TENANT_POPULATION[] = {
     [ITEM_NONE] = 0,
     [ITEM_LOBBY] = 0,
