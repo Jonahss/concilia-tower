@@ -1633,6 +1633,26 @@ void game_update(GameSim *sim, Tower *tower)
 
                 game_stressed_moveout(sim, tower);
 
+                /* ResetStress (StressT 11d8:03c4): on this same tick the
+                 * EXE's JudgeT 0cec loops wipe every judged person's
+                 * counters — office/condo/shop pools sample a fresh
+                 * 3-DAY WINDOW (JudgeT-bars referee 2026-08-02, reset
+                 * cadence). Hotels are exempt (their pools reset at the
+                 * 5PM arm), and ABANDONED units keep their frozen bad
+                 * memory. Without this the pool is a lifetime average —
+                 * an old tower's verdicts could never move again. */
+                for (int ri = 0; ri < tower->tenant_count; ri++) {
+                    Tenant *rt = &tower->tenants[ri];
+                    if ((rt->type == ITEM_OFFICE || rt->type == ITEM_CONDO ||
+                         rt->type == ITEM_SHOP || rt->type == ITEM_RESTAURANT ||
+                         rt->type == ITEM_FAST_FOOD) &&
+                        (rt->state == TENANT_OCCUPIED ||
+                         rt->state == TENANT_VACANT)) {
+                        rt->pool_stress_total = 0;
+                        rt->pool_stress_trips = 0;
+                    }
+                }
+
                 /* Rent lumps: each occupied office and shop banks its
                  * full 0x3E9 value as ONE payment (never amortized).
                  * Hotels are absent from this loop — they bank per guest

@@ -1691,9 +1691,14 @@ static void car_start_step(ElevatorShaft *s, ElevatorCar *c)
 static void adopt_call_direction(ElevatorShaft *s, ElevatorCar *c, int ci)
 {
     if (car_turnaround(s, c, ci) != c->floor) return;   /* work ahead */
-    uint8_t mine = (uint8_t)(ci + 1);
-    if (s->up_call_car[c->floor] == mine) c->dir = 1;
-    else if (s->down_call_car[c->floor] == mine) c->dir = 0;
+    /* UpdateDirection 1d2f flips a workless car onto ANY waiting call at
+     * its floor — whoever owned the button (call-lifecycle referee F3);
+     * the slot itself is released by reassign_calls at the door-open
+     * that follows, robbed cars retargeting then. This is the classic
+     * SCAN reversal at a sweep extreme: unload downward at the lobby,
+     * flip, board the up queue. */
+    if (s->up_call_car[c->floor]) c->dir = 1;
+    else if (s->down_call_car[c->floor]) c->dir = 0;
 }
 
 /* highest/lowest serviced floor — the shuttle mode's loop ends */
@@ -1737,17 +1742,28 @@ static void car_retarget(ElevatorShaft *s, ElevatorCar *c, int ci)
  * banks. (referee L2) */
 static void reassign_calls(ElevatorShaft *s, ElevatorCar *c, int ci)
 {
-    uint8_t mine = (uint8_t)(ci + 1);
+    /* ReassignCalls (1090:13cc, re-read end-to-end 2026-08-03): for each
+     * direction whose gate matches (up: sched!=0 || dir==up; down:
+     * sched!=0 || dir==down) and whose slot is nonzero — ANY owner,
+     * including this car — the slot is ZEROED, never transferred: the
+     * call is satisfied by the open doors, and boarding takes the queue
+     * regardless of who owned the button (Board 1210:0351 has no
+     * ownership check). A robbed other car releases its claim and
+     * retargets (DecrementWait 151c = assigned_calls--, UpdateCarState).
+     * Leftovers re-press at departure. The old version transferred the
+     * slot to the arriving car and skipped its own — which kept latches
+     * alive across door cycles (call-lifecycle referee F2). */
+    int sched = c->schedule_index != 0;
     for (int d = 0; d < 2; d++) {
+        if (!(sched || (d ? !c->dir : c->dir))) continue;
         uint8_t *slot = d ? &s->down_call_car[c->floor]
                           : &s->up_call_car[c->floor];
-        if (!*slot || *slot == mine) continue;
-        ElevatorCar *oc = &s->car[*slot - 1];
+        if (!*slot) continue;
         int oci = *slot - 1;
+        *slot = 0;
+        ElevatorCar *oc = &s->car[oci];
         if (oc->assigned_calls) oc->assigned_calls--;
-        *slot = mine;
-        c->assigned_calls++;
-        car_retarget(s, oc, oci);
+        if (oci != ci) car_retarget(s, oc, oci);
     }
 }
 
@@ -1760,12 +1776,24 @@ static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
      * changes elsewhere wait for the next turnaround. */
     if (c->floor == s->lo || c->floor == s->hi)
         c->schedule_index = sched_mode_now(ps, s);
+
+    /* The EXE's exact departure order (MoveElevator decomp 712-736):
+     * 1. ClearFloorCall — own slot, departing direction only at mode 0.
+     * 2. Sample which directions still queue with no owning car.
+     * 3. StopAndDispatch — fresh target AND the floor stepped
+     *    IMMEDIATELY (raw 1150-1179); the speed tail is served at the
+     *    NEW floor. An EXE car is never "still at" a departed floor,
+     *    not even for one tick.
+     * 4. Re-press the sampled directions.
+     * The port used to re-press FIRST, while the car still stood on the
+     * served floor scoring approach-cost 0 — so it re-won its own
+     * leftover call every cycle and idle homed cars could never wake
+     * (call-lifecycle referee 2026-08-03 F1; Jonah's one-car-does-
+     * everything shaft). */
     clear_call(s, c, ci, c->floor);
-    /* people still queued here with no assigned car press the button again */
-    if (queue_len(s, c->floor, 1) && !s->up_call_car[c->floor])
-        call_elevator(ps, s, c->floor, 1);
-    if (queue_len(s, c->floor, 0) && !s->down_call_car[c->floor])
-        call_elevator(ps, s, c->floor, 0);
+    int from = c->floor;
+    int press_up = queue_len(s, from, 1) && !s->up_call_car[from];
+    int press_dn = queue_len(s, from, 0) && !s->down_call_car[from];
 
     int tgt = find_target_floor(s, c, ci);
     /* FindTargetFloor (1090:1553): a car with no work returns to its
@@ -1774,11 +1802,22 @@ static void car_depart_or_idle(PeopleSim *ps, ElevatorShaft *s,
      * cars park at home, not at the shaft extremes. */
     if (tgt < 0 && !c->passengers && c->floor != s->home[ci])
         tgt = s->home[ci];
-    if (tgt < 0) { c->target = c->floor; return; }   /* idle in place */
-    c->target = (uint8_t)tgt;
-    c->dir = (uint8_t)(tgt > c->floor);
-    c->leg_start = c->floor;
-    car_start_step(s, c);
+    if (tgt < 0 || tgt == c->floor) {
+        c->target = c->floor;              /* idle in place */
+    } else {
+        c->target = (uint8_t)tgt;
+        c->dir = (uint8_t)(tgt > c->floor);
+        c->leg_start = c->floor;
+        int stride;
+        car_move_ticks(s, c, &stride);     /* gear for the departure step */
+        int left = c->dir ? c->target - c->floor : c->floor - c->target;
+        if (stride > left) stride = left;
+        c->floor = (uint8_t)(c->floor + (c->dir ? stride : -stride));
+        car_start_step(s, c);              /* tail at the NEW floor */
+    }
+
+    if (press_up) call_elevator(ps, s, from, 1);
+    if (press_dn) call_elevator(ps, s, from, 0);
 }
 
 static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
@@ -1863,6 +1902,12 @@ static void car_tick(PeopleSim *ps, Tower *tower, ElevatorShaft *s,
         }
         return;
     }
+
+    /* Landing tail: a departure step that lands directly on its target
+     * serves the speed tail here, at the NEW floor, before the doors
+     * open (EXE MoveElevator's moving branch counts +0x298b down before
+     * the arrival pass). Ordinary idle cars carry no tail. */
+    if (c->move_timer) { c->move_timer--; return; }
 
     /* idle at a floor: the EXE's parked cars rest DOORS OPEN and re-run
      * the open-door pass every tick (MoveElevator idle branch raw 684-711,
@@ -2578,9 +2623,13 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
         if (cap > CAR_SLOTS) cap = CAR_SLOTS;
         if (cap < 1) cap = 1;
         s->capacity = (uint8_t)cap;
-        /* ShowElevator's re-call pass: a queued floor with no owning car
-         * gets re-called (covers calls orphaned by car-count changes). */
+        /* Cold safety net for orphaned calls (car removal, layout edits).
+         * The EXE has no periodic re-press at all — queued people press
+         * once at join and the departure re-press covers leftovers
+         * (call-lifecycle referee F4) — so this runs at a slow %16
+         * cadence purely as belt-and-braces, never as a dispatch path. */
         for (int f = s->lo; f <= s->hi; f++) {
+            if ((frame + f) % 16 != 0) continue;
             if (!s->serviced[f]) continue;
             if (queue_len(s, f, 1) && !s->up_call_car[f])
                 call_elevator(ps, s, f, 1);
