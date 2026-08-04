@@ -951,12 +951,24 @@ static void render_sky(void)
     {
         int sky_h = lobby_sy;
         if (sky_h > game.screen_h) sky_h = game.screen_h;
+        /* Overcast while it rains — the original's rainy sky bitmaps are
+         * grey cloud cover, not blue-with-streaks. Same window as the
+         * streak effect below. */
+        int overcast = game.rainy_day && game.sim.hour >= 8 &&
+                       game.sim.hour < 16;
         for (int y = 0; y < sky_h; y++) {
-            /* SimTower sky blue: gradient from deep blue at top to light at horizon */
             float t = (float)y / (sky_h > 0 ? (float)sky_h : 1.0f);
-            int r = (int)(74 + t * 106);   /* 74 → 180 */
-            int g = (int)(140 + t * 80);   /* 140 → 220 */
-            int b = (int)(220 + t * 35);   /* 220 → 255 */
+            int r, g, b;
+            if (overcast) {
+                r = (int)(104 + t * 46);   /* dark grey → lighter horizon */
+                g = (int)(108 + t * 46);
+                b = (int)(118 + t * 46);
+            } else {
+                /* SimTower sky blue: deep blue at top, light at horizon */
+                r = (int)(74 + t * 106);   /* 74 → 180 */
+                g = (int)(140 + t * 80);   /* 140 → 220 */
+                b = (int)(220 + t * 35);   /* 220 → 255 */
+            }
             SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
             SDL_RenderDrawLine(game.renderer, 0, y, game.screen_w, y);
         }

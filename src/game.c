@@ -236,6 +236,11 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
      * the scan just mirrors it into the flag bank */
     sim->promo.medical_adequate = sim->medical_adequate;
 
+    /* [0xB923] mirror — the favorable-VIP flag; persistent until a
+     * promotion ceremony clears it (VIP-topology referee 2026-08-03:
+     * cleared at 1148:004f on EVERY ceremony). */
+    sim->promo.vip_visited = sim->vip_satisfied;
+
     sim->tower_width = game_measure_width(tower);
 }
 
@@ -373,11 +378,17 @@ void game_wedding_daily(GameSim *sim, Tower *tower)
         sim->wedding.done = 1;
         tower->star_rating = 6;
         sim->pending_star_up = 6;
+        sim->vip_satisfied = 0;   /* ceremonies clear [0xB923] (1148:004f) */
         printf("\xf0\x9f\x92\x92 The wedding is over — "
                "WELCOME TO TOWER! \xf0\x9f\x8f\x86\n");
     } else if (!sim->wedding.done && tower->star_rating == 5 &&
                sim->standing_population >= STAR_POP_THRESHOLD[5] &&
-               sim->promo.has_cathedral && sim->promo.vip_visited) {
+               /* No VIP condition: [0xB923]'s only gameplay reader is the
+                * 3->4 gate (VIP-topology referee 2026-08-03, full caller
+                * census — no ChurchT reader exists; and the flag clears at
+                * every ceremony, so requiring it here would make TOWER
+                * unreachable). */
+               sim->promo.has_cathedral) {
         sim->wedding.active = 1;
         sim->wedding.day = tower->day;
         printf("\xf0\x9f\x92\x92 A wedding is being held at the "
@@ -1262,6 +1273,9 @@ static void evaluate_star_rating(GameSim *sim, Tower *tower)
     if (new_rating > tower->star_rating) {
         tower->star_rating = new_rating;
         sim->pending_star_up = new_rating;
+        /* Every promotion ceremony clears the favorable-VIP flag
+         * (1148:004f) — star 3 will need a fresh VIP before 4. */
+        sim->vip_satisfied = 0;
         if (new_rating == 6) {
             printf("\xf0\x9f\x8f\x86 TOWER STATUS ACHIEVED!\n");
         } else {
@@ -1476,6 +1490,28 @@ void game_update(GameSim *sim, Tower *tower)
     if (sim->hour >= 17 && sim->hotel_pass_day != tower->day) {
         sim->hotel_pass_day = tower->day;
         game_hotel_demand_pass(sim, tower);
+
+        /* CheckVipDay (1240:01de, same 5PM row): the day after a VIP
+         * visit, settle his verdict — by 5PM the morning checkout has
+         * completed and the judgment (favorable / void / not) is in.
+         * Dangling visits (guest never checked in) cancel silently. */
+        if (sim->vip_visiting && tower->day > sim->vip_last_day) {
+            int r = people_vip_take_result();
+            if (sim->vip_visiting == -1) {
+                printf("👔 The VIP never arrived.\n");
+            } else if (r == 1) {
+                sim->vip_satisfied = 1;
+                sim->vip_notice = 2;
+                printf("👔 VIP checked out after a comfortable stay! ⭐\n");
+            } else {
+                /* unfavorable, or the stay voided (no-route, forced
+                 * checkout, demolition) */
+                sim->vip_notice = 3;
+                printf("👔 VIP was NOT pleased with the tower.\n");
+            }
+            people_vip_arm(0);
+            sim->vip_visiting = 0;
+        }
     }
 
     /* 4PM person-name purge (NameT: hotel-guest names drop at ft 1600 —
@@ -1650,36 +1686,20 @@ void game_update(GameSim *sim, Tower *tower)
              * that's the EXE's void-on-failed-park). vip_visiting now
              * carries the person handle: -1 = armed and waiting for
              * tonight's check-in, >0 = people[] index + 1. */
-            int vip_can_park = tower->usable_spaces > 0;
+            /* No arm-time parking gate: the EXE has none (VIP-topology
+             * referee 2026-08-03 D6) — a spaceless tower voids naturally
+             * when the driving guest fails to park at arrival. Settlement
+             * happens at the 5PM CheckVipDay row, NOT here: the guest
+             * checks out AFTER 5:58AM, so a 4:59AM read would always see
+             * a pending verdict and conclude "NOT pleased" (D1 — this
+             * exact bug made star 4 unreachable). */
             if (tower->day % 9 == 3 && tower->star_rating == 3 &&
-                !sim->vip_satisfied) {
-                if (!vip_can_park) {
-                    printf("👔 VIP visit canceled — nowhere to park the car.\n");
-                } else if (!sim->vip_visiting) {
-                    sim->vip_visiting = -1;      /* armed, no guest yet */
-                    sim->vip_last_day = tower->day;
-                    people_vip_arm(1);
-                    printf("👔 A VIP has made reservations for a Hotel Suite. (Day %d)\n",
-                           tower->day);
-                }
-            } else if (sim->vip_visiting) {
-                /* the day after: settle (CheckVipDay 1240:01de) */
-                int r = people_vip_take_result();
-                if (sim->vip_visiting == -1) {
-                    /* no qualifying guest ever checked in — quiet reset */
-                    printf("👔 The VIP never arrived.\n");
-                } else if (r == 1) {
-                    sim->vip_satisfied = 1;
-                    sim->promo.vip_visited = 1;
-                    sim->vip_notice = 2;
-                    printf("👔 VIP checked out after a comfortable stay! ⭐\n");
-                } else {
-                    /* unfavorable, or the stay never got judged (void) */
-                    sim->vip_notice = 3;
-                    printf("👔 VIP was NOT pleased with the tower.\n");
-                }
-                people_vip_arm(0);
-                sim->vip_visiting = 0;
+                !sim->vip_satisfied && !sim->vip_visiting) {
+                sim->vip_visiting = -1;      /* armed, no guest yet */
+                sim->vip_last_day = tower->day;
+                people_vip_arm(1);
+                printf("👔 A VIP has made reservations for a Hotel Suite. (Day %d)\n",
+                       tower->day);
             }
             
             /* Upkeep sweep (MoneyT 1178:0b44) — fires on the SAME

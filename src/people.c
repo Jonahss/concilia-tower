@@ -151,10 +151,10 @@ static int vip_result;            /* 0 pending / 1 favorable / 2 not */
 void people_vip_arm(int on)
 {
     vip_armed = on;
-    if (on) {
-        vip_watch = -1; vip_tagged = -1;
-        vip_result = 0; vip_stress_total = 0; vip_trips = 0;
-    }
+    /* reset both ways — a stale watch/result must not leak into the
+     * next visit (VIP-topology referee 2026-08-03 D1) */
+    vip_watch = -1; vip_tagged = -1;
+    vip_result = 0; vip_stress_total = 0; vip_trips = 0;
 }
 int people_vip_take_tagged(void)
 {
@@ -1354,6 +1354,10 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
             deliver_stress(ps, tower, p);
             noroute_report(p);   /* "People on Floor X need a path to Floor Y" */
         }
+        /* A VIP with no route voids the visit on either leg
+         * (VoidVipVisit census: checkout 1220:33d5, arrival 369e) */
+        if ((int)(p - ps->people) == vip_watch && !vip_result)
+            vip_result = 2;
         ps->trips_failed++;
         p->state = PERSON_AT_DEST;          /* gives up where they stand */
         break;
@@ -2617,6 +2621,11 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                 queue_remove(&ps->shafts[p->shaft], p->cur_floor, p->dir, i);
                 bank_wait(ps, p, frame);
                 deliver_stress(ps, tower, p);
+                /* VIP forced off a CHECKOUT queue voids the visit
+                 * (watchdog 1220:1637 -> VoidVipVisit); an arrival-leg
+                 * timeout does NOT — the EXE forces the guest onward. */
+                if (i == vip_watch && p->going_home && !vip_result)
+                    vip_result = 2;
                 ps->trips_failed++;
                 if (p->errand == 1 || p->errand == 3) p->errand = 4;
                 p->state = PERSON_AT_DEST;
