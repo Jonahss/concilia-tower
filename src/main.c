@@ -157,6 +157,8 @@
 #define SPR_ELEV_SHAFT   0x87e8   /* shaft sections: tile 0 plain, 1+ digits */
 #define SPR_ELEV_DIGITS  0x87e9   /* floor digits 0-9, 11x17 glyphs at
                                    * (1+16*n, 16); bg 25,25,25 keyed out. */
+#define SPR_ELEV_DIGITS_B 0x87ea  /* basement plates: [B1][B2] stacked tiles,
+                                   * then B,1..9 glyphs (same 16px stride) */
 #define SPR_ELEV_DIGITS_RED 0x87ec /* red twin of 0x87e9: the floor-number plate
                                     * lights red when a car of the group is at
                                     * that floor (IsCarOnFloor gate, decomp
@@ -1204,10 +1206,36 @@ static int elv_structural_stop(const ElevatorShaft *s, int fidx);
 static void draw_shaft_digits(int tx, int ty, int w, int wf, int hot)
 {
     if (getenv("ELV_REDTEST")) hot = 1;   /* force red plates for a capture */
+    if (wf < 0) {
+        /* Basement plates: sheet 0x87ea (16px tiles, 12 of them) —
+         * [B1 stacked][B2 stacked][B][1]..[9]. B1/B2 blit whole; deeper
+         * floors compose B + digit side by side (no red twin known —
+         * hot plates draw the plain art). B10 has no glyphs (no 0). */
+        Sprite *b = sprites_find(&game.sprites, SPR_ELEV_DIGITS_B);
+        if (!b || wf < -9) return;
+        if (wf >= -2) {
+            SDL_Rect src = { 16 * (-wf - 1), 0, 16, 36 };
+            SDL_Rect dst = { tx + (w - 16) / 2, ty, 16, 36 };
+            SDL_RenderCopy(game.renderer, b->texture, &src, &dst);
+        } else {
+            /* Deeper floors: the B and digit tiles are full 16x36 shaft
+             * SECTIONS with the glyph baked over the shaft art — stamp
+             * two side by side (a standard shaft is exactly two). */
+            int digit = -wf;                     /* 3..9 */
+            SDL_Rect sb = { 16 * 2, 0, 16, 36 };
+            SDL_Rect sd = { 16 * (2 + digit), 0, 16, 36 };
+            int x = tx + (w - 32) / 2;
+            SDL_Rect db = { x, ty, 16, 36 };
+            SDL_Rect dd = { x + 16, ty, 16, 36 };
+            SDL_RenderCopy(game.renderer, b->texture, &sb, &db);
+            SDL_RenderCopy(game.renderer, b->texture, &sd, &dd);
+        }
+        return;
+    }
     Sprite *d = sprites_find(&game.sprites,
                              hot ? SPR_ELEV_DIGITS_RED : SPR_ELEV_DIGITS);
     if (!d) d = sprites_find(&game.sprites, SPR_ELEV_DIGITS);  /* red missing */
-    if (!d || wf < 0) return;     /* basements unlabeled (only 0-9 glyphs) */
+    if (!d) return;
     char buf[8];
     int n = snprintf(buf, sizeof(buf), "%d", wf);
     if (n < 1 || n > 3) return;
@@ -8358,6 +8386,8 @@ int main(int argc, char *argv[])
                             25, 25, 25);
     sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS_RED,
                             25, 25, 25);   /* red car-here twin, same key */
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_ELEV_DIGITS_B,
+                            25, 25, 25);   /* basement B-plates, same key */
     /* engine animation frames (palette-cycled 'animated bitmaps') */
     sprites_load_palette_cycled(&game.sprites, &game.exe, game.renderer,
                                 SPR_ELEV_STD_LOADED, SPR_ELEV_STD_F1, 1);

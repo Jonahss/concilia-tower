@@ -591,8 +591,16 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     /* Underground-only items must be below floor 0 */
     if (ITEM_UNDERGROUND_ONLY[type] && floor >= 0)
         REJECT("Item unavailable above ground");
+    /* Commercial CAN go underground — the EXE's placement dispatch
+     * (11f8 jump table) has no basement gate for restaurant/shop/fast
+     * food, OpenSkyscraper allows them, and the underground food court
+     * is era gameplay canon. The blanket block was a port invention.
+     * Offices/housing/hotel/services stay blocked pending a full decode
+     * of ValidateTypeSpecificPlacement (11f8:2f5a). */
     if (!item_is_transport(type) && !ITEM_UNDERGROUND_ONLY[type] &&
-        type != ITEM_LOBBY && type != ITEM_FLOOR && floor < 0)
+        type != ITEM_LOBBY && type != ITEM_FLOOR &&
+        type != ITEM_RESTAURANT && type != ITEM_FAST_FOOD &&
+        type != ITEM_SHOP && type != ITEM_CINEMA && floor < 0)
         REJECT("Item not available underground");
 
     /* Singletons and fixed-table caps (placement dispatcher seg_11f8 +

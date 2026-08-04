@@ -973,6 +973,7 @@ static int select_car(const PeopleSim *ps, ElevatorShaft *s, int floor,
 
 static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci);
 static void car_start_step(ElevatorShaft *s, ElevatorCar *c);
+static void car_retarget(ElevatorShaft *s, ElevatorCar *c, int ci);
 
 static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
                           int up)
@@ -996,25 +997,13 @@ static void call_elevator(const PeopleSim *ps, ElevatorShaft *s, int floor,
     c->assigned_calls++;
     /* The EXE's CallElevator ends with UpdateCarState: the chosen car
      * re-derives its target ON THE SPOT, even mid-run — that's how an
-     * elevator stops for you on its way up instead of sailing past
-     * (elevator-truths referee H2). Mid-boarding cars finish the door
-     * cycle first; the depart path re-derives anyway. */
-    if (c->door_timer == 0) {
-        int t = find_target_floor(s, c, ci);
-        if (t >= 0) {
-            if (c->target == c->floor) {
-                /* parked: take the work and face it */
-                c->dir = (uint8_t)(t > c->floor);
-                c->target = (uint8_t)t;
-                c->leg_start = c->floor;
-                car_start_step(s, c);
-            } else if ((c->dir && t > c->floor && t < c->target) ||
-                       (!c->dir && t < c->floor && t > c->target)) {
-                /* in flight: pull the stop earlier on the same path */
-                c->target = (uint8_t)t;
-            }
-        }
-    }
+     * elevator stops for you on its way up instead of sailing past, and
+     * how a deepened reversal point extends the run instead of forcing
+     * a wasted stop at the stale extreme (elevator-truths referee H2;
+     * call-lifecycle trace 2026-08-03). One shared implementation:
+     * car_retarget — this used to be an inline copy that kept the old
+     * shorten-only rule after car_retarget was fixed. */
+    car_retarget(s, c, ci);
 }
 
 /* ---------- queue ops (TripT 11c2/1332) ---------- */
@@ -1713,8 +1702,15 @@ static int shaft_extreme(const ElevatorShaft *s, int top)
 
 /* Re-derive a car's target in place (the UpdateCarState tail used by
  * CallElevator/ReassignCalls). Mid-boarding cars finish the door cycle
- * first; an in-flight car can only pull its stop EARLIER on the same
- * path — the depart path re-derives everything else at the next stop. */
+ * first; an in-flight car takes ANY fresh target along its travel
+ * direction — nearer (stop for a new call on the way) or FARTHER (the
+ * sweep's reversal point deepened: a call beyond the old turnaround
+ * extends the run, no wasted stop at the stale extreme). The EXE's
+ * UpdateCarState re-derives fully mid-run; only a target behind the
+ * car waits for the next stop's re-derive. (Round K: the old
+ * shorten-only rule made a car stop at its stale reversal floor facing
+ * the wrong way — a full door cycle that boarded nobody, every trip,
+ * while down-queues starved. Trace 2026-08-03 rush_test t048-t059.) */
 static void car_retarget(ElevatorShaft *s, ElevatorCar *c, int ci)
 {
     if (c->door_timer) return;
@@ -1729,8 +1725,7 @@ static void car_retarget(ElevatorShaft *s, ElevatorCar *c, int ci)
         c->target = (uint8_t)tgt;
         c->leg_start = c->floor;
         car_start_step(s, c);
-    } else if ((c->dir && tgt > c->floor && tgt < c->target) ||
-               (!c->dir && tgt < c->floor && tgt > c->target)) {
+    } else if (c->dir ? tgt > c->floor : tgt < c->floor) {
         c->target = (uint8_t)tgt;
     }
 }
