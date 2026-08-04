@@ -1034,8 +1034,19 @@ static void render_sky(void)
      * you're scrolled up near the top of a tall tower on Christmas night.
      * Options -> Anim: Effects ([0xDE32], the AnimeT gate) hides him. */
     if (game.sim.santa.active && game.santa && game.anim_effects) {
+        /* Same render-side smoother as the elevator cars: the sim moves
+         * him 10px per 15Hz tick; ease the drawn x toward the true one
+         * so 60fps rendering doesn't show the steps. Snap on launch or
+         * any big jump. Cosmetic only. */
+        static float santa_fx; static uint8_t santa_fx_on;
+        float truex = (float)game.sim.santa.x;
+        if (!santa_fx_on || fabsf(santa_fx - truex) > 60.0f) {
+            santa_fx = truex; santa_fx_on = 1;
+        } else {
+            santa_fx += (truex - santa_fx) * 0.35f;
+        }
         SDL_Rect dst = {
-            game.sim.santa.x,
+            (int)lroundf(santa_fx),
             lobby_sy + CELL_H - 0x84c + game.sim.santa.y,
             game.santa->w, game.santa->h
         };

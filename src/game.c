@@ -2850,11 +2850,14 @@ static void occ_roll_hotel(const GameSim *sim, const Tenant *t,
 void game_animate_occupants(GameSim *sim, Tower *tower)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
-        /* The EXE's &15 stagger ran at ITS ~15fps frame clock — one
-         * re-roll per tenant-second. At our 60fps the same mask re-posed
-         * everyone 4x a second and interiors looked like ant farms
-         * (Jonah, 2026-08-01); stretch the period to match wall-clock. */
-        if (((sim->frame + i * 4) & 63) != 0) continue;
+        /* The EXE's &15 stagger, at its native tick rate. When the sim
+         * ticked at 60Hz this was stretched to &63 to avoid ant-farm
+         * interiors (Jonah, 2026-08-01); NORMAL now ticks at the
+         * authentic 15Hz, so the EXE's own mask gives the EXE's own
+         * cadence — one re-pose per tenant-second (and the metro
+         * train's rand()%7 flip below approximates its 1%/tick roll
+         * over exactly this 16-tick pass again). */
+        if (((sim->frame + i) & 15) != 0) continue;
         Tenant *t = &tower->tenants[i];
         TenantOccupants *o = &sim->occupants[i];
         o->count = 0;
@@ -3523,7 +3526,10 @@ void game_update_santa(GameSim *sim)
 {
     if (!sim->santa.active) return;
     
-    sim->santa.x -= 3;   /* Fly left (slower than original's 10 for visibility) */
+    sim->santa.x -= 10;  /* Fly left, the EXE's 10 px/tick. (The old -3 was
+                          * tuned against the 60Hz tick; at the authentic
+                          * 15Hz it crawled at under a third of the EXE's
+                          * ~150 px/s.) */
     /* y is a small bob AROUND the fixed flight altitude — the renderer
      * anchors him in WORLD space ~0x84c px above the ground (LaunchSanta's
      * viewport_height - 0x84c), so he's only seen when you're scrolled up
