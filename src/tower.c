@@ -1091,8 +1091,6 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
      * everlasting-construction-workers-on-the-shaft bug). */
     if (item_is_transport(type)) t->construction = 0;
     t->population = 0;
-    t->stress = 0;
-    t->complaints = 0;
     t->zone = (floor >= 0) ? floor / 15 : 0;  /* JudgeT: 7 zones of 15 floors */
     t->upgrade_day = 0;
     t->rent_class = 1;
@@ -1312,8 +1310,6 @@ static uint16_t tower_force_place(Tower *tower, ItemType type, int floor, int x)
     t->capacity = CAP_MIN;       /* Start at first animation frame */
     t->construction = 0;         /* Already built */
     t->population = 0;
-    t->stress = 0;
-    t->complaints = 0;
     t->zone = (floor >= 0) ? floor / 15 : 0;
     t->upgrade_day = 0;
     

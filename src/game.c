@@ -9,6 +9,7 @@
  */
 #include "game.h"
 #include "sound_hook.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3513,7 +3514,12 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 15u  /* v15: authentic 2600-tick non-uniform day
+#define SAVE_VERSION 16u  /* v16: legacy-stress dead padding dropped —
+                             Tenant.stress/complaints (8 B/record) and
+                             GameSim.zones[7]+last_stress_day (144 B).
+                             v15/v14 saves load via a byte repack
+                             (load_v15_blobs).
+                             v15: authentic 2600-tick non-uniform day
                              clock (struct layout UNCHANGED — v14 saves
                              still load; their uniform 5AM-anchored
                              tick is renormalized on load).
@@ -3571,20 +3577,92 @@ int game_save(const GameSim *sim, const Tower *tower, const char *path)
     return 0;
 }
 
+/* v14/v15 layout deltas — the legacy-stress dead padding removed in v16.
+ * Old Tenant carried two dead ints (stress/complaints) where `zone` now
+ * sits; old GameSim carried ZoneData zones[7] (140 B) where `santa` now
+ * sits, plus a dead last_stress_day int right before hotel_pass_day.
+ * Offsets pinned by the static asserts below (probed against the last
+ * v15 build, 2026-08-03) — if a future struct edit moves them, v15
+ * loading needs a fresh look, and the assert makes that loud. */
+#define V15_TENANT_EXTRA   8u
+#define V15_GS_ZONES_BYTES 140u
+#define V15_GS_EXTRA       (V15_GS_ZONES_BYTES + 4u)
+_Static_assert(sizeof(Tenant) == 108, "v15 repack: Tenant layout moved");
+_Static_assert(offsetof(Tenant, zone) == 36, "v15 repack: cut point moved");
+_Static_assert(offsetof(GameSim, santa) == 384, "v15 repack: zones cut moved");
+_Static_assert(offsetof(GameSim, hotel_pass_day) == 1592,
+               "v15 repack: last_stress_day cut moved");
+
+static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
+{
+    size_t old_tw = sizeof(Tower) + (size_t)MAX_TENANTS * V15_TENANT_EXTRA;
+    size_t old_gs = sizeof(GameSim) + V15_GS_EXTRA;
+    unsigned char *buf = malloc(old_tw > old_gs ? old_tw : old_gs);
+    if (!buf) return 0;
+
+    /* Tower: every Tenant record loses the 8 dead bytes at `zone`. */
+    int ok = fread(buf, old_tw, 1, f) == 1;
+    if (ok) {
+        unsigned char *dst = (unsigned char *)tower;
+        size_t base = offsetof(Tower, tenants);
+        size_t cut = offsetof(Tenant, zone);
+        size_t s_new = sizeof(Tenant), s_old = s_new + V15_TENANT_EXTRA;
+        memcpy(dst, buf, base);
+        for (int i = 0; i < MAX_TENANTS; i++) {
+            unsigned char *o = buf + base + (size_t)i * s_old;
+            unsigned char *n = dst + base + (size_t)i * s_new;
+            memcpy(n, o, cut);
+            memcpy(n + cut, o + cut + V15_TENANT_EXTRA, s_new - cut);
+        }
+        size_t tail_old = base + (size_t)MAX_TENANTS * s_old;
+        size_t tail_new = base + (size_t)MAX_TENANTS * s_new;
+        memcpy(dst + tail_new, buf + tail_old, sizeof(Tower) - tail_new);
+    }
+
+    /* GameSim: drop zones[7], then last_stress_day. */
+    ok = ok && fread(buf, old_gs, 1, f) == 1;
+    if (ok) {
+        unsigned char *dst = (unsigned char *)sim;
+        size_t a = offsetof(GameSim, santa);          /* old zones offset */
+        size_t b_new = offsetof(GameSim, hotel_pass_day);
+        size_t b_old = b_new + V15_GS_ZONES_BYTES;    /* old last_stress_day */
+        memcpy(dst, buf, a);
+        memcpy(dst + a, buf + a + V15_GS_ZONES_BYTES,
+               b_old - a - V15_GS_ZONES_BYTES);
+        memcpy(dst + b_new, buf + b_old + 4u, sizeof(GameSim) - b_new);
+    }
+    free(buf);
+    return ok;
+}
+
 int game_load(GameSim *sim, Tower *tower, const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     uint32_t hdr[5];
-    int ok = fread(hdr, sizeof(hdr), 1, f) == 1 &&
-             hdr[0] == SAVE_MAGIC &&
-             (hdr[1] == SAVE_VERSION || hdr[1] == 14u) &&
-             hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
-             hdr[4] == sizeof(Tuning);
-    if (ok)
-        ok = fread(tower, sizeof(*tower), 1, f) == 1 &&
-             fread(sim, sizeof(*sim), 1, f) == 1 &&
-             fread(&TUNING, sizeof(TUNING), 1, f) == 1;
+    int ok = fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == SAVE_MAGIC;
+    int legacy = 0;
+    if (ok) {
+        if (hdr[1] == SAVE_VERSION) {
+            ok = hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
+                 hdr[4] == sizeof(Tuning);
+        } else if (hdr[1] == 15u || hdr[1] == 14u) {
+            legacy = 1;
+            ok = hdr[2] == sizeof(Tower) + MAX_TENANTS * V15_TENANT_EXTRA &&
+                 hdr[3] == sizeof(GameSim) + V15_GS_EXTRA &&
+                 hdr[4] == sizeof(Tuning);
+        } else {
+            ok = 0;
+        }
+    }
+    if (ok) {
+        if (legacy)
+            ok = load_v15_blobs(f, sim, tower);
+        else
+            ok = fread(tower, sizeof(*tower), 1, f) == 1 &&
+                 fread(sim, sizeof(*sim), 1, f) == 1;
+        ok = ok && fread(&TUNING, sizeof(TUNING), 1, f) == 1;
+    }
     fclose(f);
     /* Turbo lost its UI entry (speed capped at FAST, 2026-07-29) —
      * clamp saves made before the cap. */

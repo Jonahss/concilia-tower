@@ -3352,13 +3352,35 @@ static void test_authentic_clock(void)
  * cadence matches what the old scheme would have run. */
 static void write_v14_save(const char *path, const GameSim *s, const Tower *t)
 {
+    /* Emit the genuine pre-v16 LAYOUT — dead padding re-inserted
+     * (Tenant.stress/complaints, GameSim.zones + last_stress_day) — so
+     * loading exercises the real repack path (load_v15_blobs' inverse). */
     FILE *f = fopen(path, "wb");
     if (!f) return;
-    uint32_t hdr[5] = { 0x52575443u, 14u, (uint32_t)sizeof(Tower),
-                        (uint32_t)sizeof(GameSim), (uint32_t)sizeof(Tuning) };
+    static const unsigned char zeros[140];
+    uint32_t hdr[5] = { 0x52575443u, 14u,
+                        (uint32_t)(sizeof(Tower) + MAX_TENANTS * 8u),
+                        (uint32_t)(sizeof(GameSim) + 144u),
+                        (uint32_t)sizeof(Tuning) };
     fwrite(hdr, sizeof hdr, 1, f);
-    fwrite(t, sizeof *t, 1, f);
-    fwrite(s, sizeof *s, 1, f);
+    const unsigned char *tb = (const unsigned char *)t;
+    size_t base = offsetof(Tower, tenants), cut = offsetof(Tenant, zone);
+    fwrite(tb, base, 1, f);
+    for (int i = 0; i < MAX_TENANTS; i++) {
+        const unsigned char *rec = tb + base + (size_t)i * sizeof(Tenant);
+        fwrite(rec, cut, 1, f);
+        fwrite(zeros, 8, 1, f);
+        fwrite(rec + cut, sizeof(Tenant) - cut, 1, f);
+    }
+    size_t tail = base + (size_t)MAX_TENANTS * sizeof(Tenant);
+    fwrite(tb + tail, sizeof(Tower) - tail, 1, f);
+    const unsigned char *sb = (const unsigned char *)s;
+    size_t a = offsetof(GameSim, santa), b = offsetof(GameSim, hotel_pass_day);
+    fwrite(sb, a, 1, f);
+    fwrite(zeros, 140, 1, f);
+    fwrite(sb + a, b - a, 1, f);
+    fwrite(zeros, 4, 1, f);
+    fwrite(sb + b, sizeof(GameSim) - b, 1, f);
     fwrite(&TUNING, sizeof TUNING, 1, f);
     fclose(f);
 }

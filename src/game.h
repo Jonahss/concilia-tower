@@ -433,17 +433,6 @@ static inline int floor_to_zone(int floor) {
     return (z >= NUM_ZONES) ? NUM_ZONES - 1 : z;
 }
 
-/* DEAD since 2026-08-02 (zone stressor deleted) — the type and the
- * GameSim.zones field below stay only to freeze the .sav layout; remove
- * both at the next save-version bump. */
-typedef struct {
-    int restaurant_count;
-    int fastfood_count;
-    int shop_count;
-    int office_count;
-    int total_commercial;  /* Sum of above */
-} ZoneData;
-
 /* --- Disasters (EventT seg_10c8 + FireT seg_10e8) ---
  * SCHEDULED, not random (byte-verified 2026-07-09/10 referees + the TimeT
  * dispatcher map): TimeT's 10:00 AM block starts a fire every 84th day
@@ -718,9 +707,6 @@ typedef struct {
     /* Animation */
     int           frame;            /* Global animation frame counter */
     
-    /* Zone competition (from JudgeT) */
-    ZoneData      zones[NUM_ZONES];
-    
     /* Santa Easter egg */
     SantaState    santa;
     
@@ -734,9 +720,6 @@ typedef struct {
     int           vip_last_day;    /* Last day VIP visited */
     int           vip_notice;      /* one-shot for UI: 1=arrived 2=satisfied 3=not */
     
-    /* Day tracking for upgrade cadence (MainteT: 3-day minimum) */
-    int           last_stress_day;
-
     /* Day the 5PM hotel pass (roach spread → neglect fuse → demand
      * arm/disarm) last ran. The EXE fires it from TimeT at frame_time
      * 0x640 = 17:00 sharp (calls 1130:01e2 then 1130:0109). */

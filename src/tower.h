@@ -285,10 +285,6 @@ typedef struct {
                             * From TenantMake: office=2, condo=3, restaurant=48,
                             * hotel=56, cathedral=240, etc. */
     int      population;   /* Number of people currently here */
-    int      stress;       /* DEAD (legacy-stress referee 2026-08-02: no EXE
-                            * counterpart). Kept zeroed to freeze the .sav
-                            * layout; remove at the next save-version bump. */
-    int      complaints;   /* DEAD — same story as stress. */
     int      zone;         /* Commercial zone (0-6, floors/15). From JudgeT. */
     int      upgrade_day;  /* Last upgrade day (3-day cadence). From MainteT. */
 
