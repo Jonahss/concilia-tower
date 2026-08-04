@@ -9132,13 +9132,21 @@ int main(int argc, char *argv[])
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
             int prev_day = game.tower.day;
-            /* The day is ALWAYS 2600 ticks (authentic TimeT clock);
-             * speed multiplies sim steps per rendered frame — the EXE
-             * model, where "Fast Mode" just runs more frame-times per
-             * wall second. NORMAL 1x, FAST 2x, TURBO (legacy saves) 6x. */
+            /* The day is ALWAYS 2600 ticks (authentic TimeT clock). The
+             * EXE ticks once per rendered frame with NO pacing beyond an
+             * optional 6ms floor — wall speed was emergent from 1994
+             * hardware: ~15-20fps ⇒ a 2-3 minute day (frame-clock
+             * referee 2026-08-02). At our 60fps, tick-per-frame ran the
+             * day in 43s — everything felt 4x rushed (Jonah, 2026-08-03).
+             * NORMAL therefore ticks every 4th frame (15Hz = the 1994
+             * experience); FAST ticks every frame (= the EXE's Fast Mode
+             * on a fast machine); TURBO (legacy saves) 3x. */
             {
-                int steps = (game.sim.speed == SPEED_FAST)  ? 2
-                          : (game.sim.speed == SPEED_TURBO) ? 6 : 1;
+                static unsigned pace = 0;
+                int steps;
+                if (game.sim.speed == SPEED_FAST)       steps = 1;
+                else if (game.sim.speed == SPEED_TURBO) steps = 3;
+                else steps = (++pace % 4 == 0) ? 1 : 0;
                 for (int s = 0; s < steps; s++)
                     game_update(&game.sim, &game.tower);
             }
