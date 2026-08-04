@@ -23,7 +23,11 @@ static void set_reject(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(last_reject, sizeof last_reject, fmt, ap);
     va_end(ap);
-    printf("  [reject] %s\n", last_reject);
+    /* The build ghost validates the hovered cell EVERY FRAME through
+     * this same path — logging here sprayed "[reject]" 60x/sec whenever
+     * a build tool was armed with the cursor over the tower (the
+     * long-hunted "phantom clicks", 2026-08-03: they were never input
+     * at all). Real placement attempts log below in tower_place. */
 }
 
 #define REJECT(...) do { set_reject(__VA_ARGS__); return 0; } while (0)
@@ -973,7 +977,14 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
         return tower_extend_deck(tower, floor, x, x + ITEM_WIDTH[type])
                    ? UINT16_MAX : 0;
 
-    if (!tower_can_place(tower, type, floor, x)) return 0;
+    if (!tower_can_place(tower, type, floor, x)) {
+        /* log real (clicked) refusals only — the every-frame ghost
+         * preview stays quiet (see set_reject) */
+        if (last_reject[0])
+            printf("  [reject] %s (%s f%d x%d)\n", last_reject,
+                   tower_item_name(type), floor, x);
+        return 0;
+    }
     if (tower->tenant_count >= MAX_TENANTS) return 0;
 
     /* can_place promoted internally; mirror it here so the record and
