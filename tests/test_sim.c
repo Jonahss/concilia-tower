@@ -414,6 +414,20 @@ static void test_metro_visitors(void)
     }
     CHECK(visitors > 0, "metro pumps visitors to the shop (entry via metro floor)");
 
+    /* The rider pool is per-DAY (metro-pacing referee 2026-08-03): a
+     * midday phase flip must not reset the station's counter — only
+     * the dawn wipe starts a new day. */
+    int mi = (int)(m - tw.tenants);
+    uint8_t pool_before = sim.people.spawned[mi];
+    CHECK(pool_before > 0, "station pool counter advanced");
+    people_update(&sim.people, &tw, 3001, TOD_EVENING, 17,
+                  sim.reach_public, sim.reach_service);
+    CHECK(sim.people.spawned[mi] == pool_before,
+          "5PM phase flip keeps the day's pool count");
+    people_update(&sim.people, &tw, 3002, TOD_DAWN, 5,
+                  sim.reach_public, sim.reach_service);
+    CHECK(sim.people.spawned[mi] == 0, "dawn wipe resets the pool");
+
     /* night: the metro stops feeding the tower */
     memset(&sim.people, 0, sizeof(sim.people));
     people_rebuild_transport(&sim.people, &tw);
