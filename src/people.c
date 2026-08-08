@@ -2938,6 +2938,35 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                         }
                     }
                 }
+                /* Venue visitors grab food/shopping on the way out — the
+                 * 5th customer flow (retail-zone referee 2026-08-08:
+                 * VENUE-pieces journey 1220:5b7f picks rand%3 kind in the
+                 * venue's zone via 1498 at journey status 1, no dice; a
+                 * failed pick just skips the stop). The port rolls it at
+                 * show's end: the departing patron BECOMES a retail
+                 * customer — one pick per patron, no extra state. Counted
+                 * at dispatch (like the EXE's walk-in gate) so the door's
+                 * ground-entry walkin heuristic doesn't double-count. */
+                if (ht && (ht->type == ITEM_CINEMA ||
+                           ht->type == ITEM_PARTY_HALL)) {
+                    static const ItemType SKINDS[3] =
+                        { ITEM_RESTAURANT, ITEM_FAST_FOOD, ITEM_SHOP };
+                    int sseed = frame * 31 + i;
+                    Tenant *sv = pick_retail(tower, SKINDS[(sseed >> 4) % 3],
+                                             ht->floor, sseed, reach_public);
+                    if (sv) {
+                        int svf = floor_to_index(sv->floor);
+                        if (svf >= 0 && svf < TOWER_FLOOR_COUNT) {
+                            if (sv->customers_today < 0xFFFF)
+                                sv->customers_today++;
+                            p->home_tenant = sv->id;
+                            p->stay = (uint8_t)(8 + (i * 3) % 10);
+                            p->dest_floor = (uint8_t)svf;
+                            p->state = PERSON_PLANNING;
+                            break;
+                        }
+                    }
+                }
                 /* a retail patron heading out (OutRestPeple) */
                 if (ht && is_retail_kind(ht->type))
                     game_retail_customer_out(ht);
