@@ -146,6 +146,13 @@
 #define SPR_ELEV_EXP_F1  0xf82b
 #define SPR_ELEV_EXP_F2  0xf92b
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
+#define SPR_PEOPLE_EMERG 0x8469   /* emergency figures, 20 cells: firefighters
+                                   * (cells 0-9) + security guards (10-15).
+                                   * In the EXE it's the tail of the people
+                                   * strip (0x468's 80 cells + these 20);
+                                   * guard sprites 0x5A/0x5C/0x5E = strip
+                                   * cells 90-95 = cells 10-15 here
+                                   * (DrawGuards 10f8:00c9). */
 
 /* Person figure sheet (InfoPeple blitter 1100:364a): RT_BITMAP 0x2BC
  * normal row / 0x2BE named row / 0x2BF VIP row — each 96x24, 12 cells of
@@ -4918,8 +4925,12 @@ static void render_events(void)
             }
         }
     } else if (game.sim.event.type == EVENT_BOMB) {
-        /* The hunt: every materialized guard, sweeping right-to-left.
-         * Small dark-uniform figures; invisible while in floor transit. */
+        /* The hunt: every materialized guard, sweeping right-to-left, drawn
+         * from the real emergency-figure art (DrawGuards 10f8:00c9): 16x36
+         * frames — walk A/B alternating per 1-cell step, and the bomb-
+         * detector action pose held by the finder through the defuse.
+         * Invisible while in floor transit, exactly like the EXE. */
+        Sprite *ges = sprites_find(&game.sprites, SPR_PEOPLE_EMERG);
         for (int oi = 0; oi < game.sim.event.hunt.noffices; oi++) {
             const GuardOffice *o = &game.sim.event.hunt.o[oi];
             for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
@@ -4927,12 +4938,24 @@ static void render_events(void)
                 if (g->retired || g->transit > 0 || g->x < 0) continue;
                 int gx = lobby_sx + g->x * CELL_W;
                 int gy = lobby_sy - (g->floor * CELL_H);
-                SDL_SetRenderDrawColor(game.renderer, 20, 20, 120, 255);
-                SDL_Rect body = { gx + 2, gy + CELL_H - 12, 4, 10 };
-                SDL_RenderFillRect(game.renderer, &body);
-                SDL_SetRenderDrawColor(game.renderer, 230, 200, 160, 255);
-                SDL_Rect head = { gx + 3, gy + CELL_H - 15, 2, 3 };
-                SDL_RenderFillRect(game.renderer, &head);
+                if (ges && ges->texture) {
+                    /* frame 0/2 = walk A/B (strip 0x5A/0x5C), 4 = action
+                     * (0x5E); sheet x = 80 + frame*8. Walk phase from cell
+                     * parity — guards step one cell at a time, so the
+                     * frames alternate just like the EXE's 0<->2 toggle. */
+                    int frame = game.sim.event.hunt.defuse > 0 ? 4
+                              : ((g->x & 1) ? 2 : 0);
+                    SDL_Rect src = { 80 + frame * 8, 0, 2 * CELL_W, CELL_H };
+                    SDL_Rect dst = { gx, gy, 2 * CELL_W, CELL_H };
+                    SDL_RenderCopy(game.renderer, ges->texture, &src, &dst);
+                } else {   /* fallback: the old placeholder figure */
+                    SDL_SetRenderDrawColor(game.renderer, 20, 20, 120, 255);
+                    SDL_Rect body = { gx + 2, gy + CELL_H - 12, 4, 10 };
+                    SDL_RenderFillRect(game.renderer, &body);
+                    SDL_SetRenderDrawColor(game.renderer, 230, 200, 160, 255);
+                    SDL_Rect head = { gx + 3, gy + CELL_H - 15, 2, 3 };
+                    SDL_RenderFillRect(game.renderer, &head);
+                }
             }
         }
         int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
@@ -8371,6 +8394,7 @@ int main(int argc, char *argv[])
 
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_PEOPLE_EMERG);
     /* person figure sheets (portrait rows) are white-keyed too */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NORMAL);
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NAMED);
@@ -9151,6 +9175,12 @@ int main(int argc, char *argv[])
         game_offer_bomb(&game.sim, &game.tower, atoi(getenv("CT_BOMB")));
         if (!game.sim.event.pending)
             printf("CT_BOMB: TryStartEvent gates refused it (security? star 2-4?)\n");
+        else if (getenv("CT_HUNT")) {  /* ...and refuse the ransom: guards out */
+            game.sim.hour = 10;        /* room before the 1PM detonation */
+            game.sim.quarter = 0;
+            game.sim.tick = game_clock_to_tick(10, 0);
+            game_event_proceed(&game.sim, &game.tower);
+        }
     }
     if (getenv("CT_MODAL")) {          /* demo: open the disaster decision modal */
         const char *which = getenv("CT_MODAL");
@@ -9302,6 +9332,25 @@ int main(int argc, char *argv[])
                     (h >= 7  && h < 12) ? TOD_MORNING :
                     (h >= 12 && h < 17) ? TOD_AFTERNOON :
                     (h >= 17 && h < 21) ? TOD_EVENING : TOD_NIGHT;
+            }
+
+            /* A bomb catch: glide the camera to the finder holding the
+             * action pose (the EXE jumps there — CameraT via 10f8:0429). */
+            {
+                static int prev_defuse;
+                const GuardHunt *h = &game.sim.event.hunt;
+                if (h->defuse > 0 && !prev_defuse) {
+                    for (int oi = 0; oi < h->noffices; oi++)
+                        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+                            const GuardState *g = &h->o[oi].g[gi];
+                            if (!g->retired) {
+                                find_center_camera(floor_to_index(g->floor),
+                                                   g->x);
+                                oi = h->noffices; break;
+                            }
+                        }
+                }
+                prev_defuse = h->defuse;
             }
 
             /* Disaster events: announce onset and resolution in the feed.
@@ -9592,6 +9641,17 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "Sound capture: nothing recorded\n");
                 if (getenv("CT_SOUND_DEBUG")) snd_tally_dump();
                 game.running = 0;
+            }
+        }
+
+        if (getenv("CT_HUNT_TRACE") && game.sim.event.hunt.active &&
+            frame % 120 == 0) {   /* headless probe: where are the guards? */
+            const GuardHunt *ht = &game.sim.event.hunt;
+            for (int oi = 0; oi < ht->noffices; oi++) {
+                const GuardState *g0 = &ht->o[oi].g[0];
+                printf("hunt[%d] office f%d | g0 f%d x%d transit%d ret%d\n",
+                       oi, ht->o[oi].office_floor, g0->floor, g0->x,
+                       g0->transit, g0->retired);
             }
         }
 

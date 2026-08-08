@@ -520,6 +520,7 @@ typedef enum {
 #define GUARD_OFFICES_MAX   10
 #define GUARD_SWEEP_FRAMES  2    /* 1 cell / 2 EXE frames (linger 0xDDCC=1) */
 #define GUARD_FLOOR_FRAMES  3    /* transit frames per floor (0xDDCE=3) */
+#define GUARD_DEFUSE_FRAMES 100  /* finder's action pose on a catch (10f8:0426) */
 
 typedef struct {
     int8_t  floor;      /* current floor */
@@ -540,9 +541,10 @@ typedef struct {
 
 typedef struct {
     int         active;
-    int         frame_accum;  /* UNUSED since the 2600-tick re-pace (1 tick
-                                 = 1 EXE frame; kept for the frozen save
-                                 layout) */
+    int         defuse;       /* frames left of the finder's action pose
+                                 after a catch; 0 = still hunting. Occupies
+                                 the dead frame_accum slot, so the v16 save
+                                 layout is unchanged (field was always 0). */
     int         noffices;
     GuardOffice o[GUARD_OFFICES_MAX];
 } GuardHunt;

@@ -2479,12 +2479,15 @@ static void test_guard_hunt(void)
     sim.hour = 10;
     sim.quarter = 0; sim.tick = game_clock_to_tick(10, 0);
     sim.income_this_quarter = 777;    /* proves the jump closes the books */
-    int caught_at = -1;
-    for (int t = 0; t < 150 && caught_at < 0; t++) {
+    int caught_at = -1, found_at = -1;
+    for (int t = 0; t < 400 && caught_at < 0; t++) {
         game_update_event(&sim, &tw);
+        if (found_at < 0 && sim.event.hunt.defuse > 0) found_at = t;
         if (sim.event.caught) caught_at = t;
     }
-    CHECK(caught_at >= 0, "sweep reaches the bomb cell - caught, no dice");
+    CHECK(found_at >= 0, "sweep reaches the bomb cell - found, no dice");
+    CHECK(caught_at == found_at + GUARD_DEFUSE_FRAMES,
+          "the finder holds a 100-tick defuse pose before resolution");
     CHECK(!sim.event.active && !sim.event.hunt.active, "everyone stands down");
     /* EXE EventCleanup: frame_time -> 0x5DC = 4:00 PM after a catch. */
     CHECK(sim.hour == 16 && sim.minute == 0,

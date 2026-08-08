@@ -3420,8 +3420,18 @@ static int guard_hunt_step_frame(GameSim *sim, Tower *tower,
             if (g->x >= 0 && fi >= 0 && fi < TOWER_FLOOR_COUNT && g->x > left[fi]) {
                 g->x--;
                 if (g->floor == sim->event.target_floor &&
-                    g->x == sim->event.target_slot)
-                    return 1;                          /* CAUGHT */
+                    g->x == sim->event.target_slot) {
+                    /* BOMB FOUND (10f8:0424): the finder freezes in the
+                     * action pose for a 100-tick defuse while every other
+                     * guard stands down (StandDownOtherGuards 10f8:0656).
+                     * Resolution waits for the pose to finish. */
+                    h->defuse = GUARD_DEFUSE_FRAMES;
+                    for (int oj = 0; oj < h->noffices; oj++)
+                        for (int gj = 0; gj < GUARDS_PER_OFFICE; gj++)
+                            if (&h->o[oj].g[gj] != g)
+                                h->o[oj].g[gj].retired = 1;
+                    return 1;
+                }
                 g->pause = GUARD_SWEEP_FRAMES - 1;
             } else {
                 /* left edge (or unbuilt start): pull the frontier */
@@ -3445,6 +3455,24 @@ void game_update_event(GameSim *sim, Tower *tower)
     if (!ev->active) return;
 
     if (ev->type == EVENT_BOMB) {
+        /* A found bomb is already caught — the finder just holds the
+         * action pose (GUARD_DEFUSE_FRAMES) before the resolution dialog
+         * and cleanup land. Checked before the deadline: a 12:59 catch
+         * can't detonate under the finder. */
+        if (ev->hunt.defuse > 0) {
+            if (--ev->hunt.defuse == 0) {
+                ev->caught = 1;
+                ev->active = 0;
+                ev->hunt.active = 0;
+                printf("🛡️ Security caught the bomb on floor %d! "
+                       "Crisis averted.\n", ev->target_floor);
+                /* EXE EventCleanup resets frame_time to 0x5DC = 4:00 PM —
+                 * the world was frozen for the whole hunt, and the jump
+                 * hands those dead hours back. */
+                game_clock_jump(sim, tower, 16);
+            }
+            return;
+        }
         /* Detonation at 1:00 PM sharp (EXE frame 0x4B0), checked BEFORE
          * guard movement — a guard can't catch it on the deadline frame. */
         if (sim->hour >= 13) {
@@ -3457,17 +3485,7 @@ void game_update_event(GameSim *sim, Tower *tower)
          * GUARD_FLOOR_FRAMES, 0xDDCC/0xDDCE). */
         int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
         tower_floor_extents(tower, left, right);
-        if (guard_hunt_step_frame(sim, tower, left, right)) {
-            ev->caught = 1;
-            ev->active = 0;
-            ev->hunt.active = 0;
-            printf("🛡️ Security caught the bomb on floor %d! "
-                   "Crisis averted.\n", ev->target_floor);
-            /* EXE EventCleanup resets frame_time to 0x5DC = 4:00 PM —
-             * the world was frozen for the whole hunt, and the jump
-             * hands those dead hours back. */
-            game_clock_jump(sim, tower, 16);
-        }
+        guard_hunt_step_frame(sim, tower, left, right);
         return;
     }
 
