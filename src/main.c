@@ -4281,27 +4281,33 @@ static void render_minimap(void)
              * fallback tiers were invented (legacy-stress referee
              * 2026-08-02). ABANDONED keeps a dim red as the port's
              * rescue-target readability aid. */
+            /* Exact overlay RGBs from the 11d0:0363 color tables
+             * (referee 2026-08-08): RED(230,0,0) YELLOW(204,204,0)
+             * CYAN(0,255,255); skipped statuses show the silhouette.
+             * ABANDONED dim red stays as the port's rescue-target
+             * readability aid (documented divergence). */
             if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
-                { r = g = b = 200; }
+                { r = 204; g = 204; b = 204; }
             else if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
-            else if (t->demand_category == 0)      { r = 230; g = 40; b = 40; }
-            else if (t->demand_category == 1) { r = 220; g = 210; b = 40; }
+            else if (t->demand_category == 0)      { r = 230; g = 0; b = 0; }
+            else if (t->demand_category == 1) { r = 204; g = 204; b = 0; }
             else if (t->demand_category == 2 || t->demand_category == 3)
-                { r = 60; g = 220; b = 230; }
-            else { r = g = b = 200; }          /* 0xFF / unjudged: no tint */
+                { r = 0; g = 255; b = 255; }
+            else { r = 204; g = 204; b = 204; }  /* 0xFF / unjudged: skip */
         } else if (game.map_mode == 2) {
-            switch (t->rent_class) {
-            case 0:  r = 230; g = 40;  b = 40;  break;   /* High */
-            default: r = 220; g = 210; b = 40;  break;   /* Average */
-            case 2:  r = 60;  g = 210; b = 60;  break;   /* Low */
-            case 3:  r = 60;  g = 220; b = 230; break;   /* Very Low */
+            switch (t->rent_class) {             /* mode-2 table: 0..3, 4 skip */
+            case 0:  r = 230; g = 0;   b = 0;   break;   /* High */
+            default: r = 204; g = 204; b = 0;   break;   /* Average */
+            case 2:  r = 0;   g = 255; b = 0;   break;   /* Low */
+            case 3:  r = 0;   g = 255; b = 255; break;   /* Very Low */
             }
-        } else { /* mode 3: hotel housekeeping (dirty amber, infested red) */
-            if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY)
-                { r = 230; g = 150; b = 40; }
-            else if (item_is_hotel_room(t->type) &&
-                     t->condition == ROOM_INFESTED)
-                { r = 230; g = 40; b = 40; }
+        } else { /* mode 3: hotel rooms with status >= dirty band -> pure
+                  * RED, everything else skipped (11d0 mode-3 rule: byte
+                  * +0xB >= 0x28 covers dirty AND infested; the old amber
+                  * split was a port invention). */
+            if (item_is_hotel_room(t->type) &&
+                (t->condition == ROOM_DIRTY || t->condition == ROOM_INFESTED))
+                { r = 230; g = 0; b = 0; }
             else { r = 204; g = 204; b = 204; }
         }
 
@@ -4320,7 +4326,10 @@ static void render_minimap(void)
         if (!s->active) continue;
         int fl_lo = s->lo + TOWER_MIN_FLOOR;
         int fl_hi = s->hi + TOWER_MIN_FLOOR;
-        int ty = (int)(ground_line - (fl_hi + 1) * pf);
+        /* The EXE's line tops out ~2 rows above the highest stop — the
+         * motor room rows (MapPaint shaft y formula's -2, referee
+         * 2026-08-08). */
+        int ty = (int)(ground_line - (fl_hi + 2) * pf);
         int by = (int)(ground_line - fl_lo * pf);
         int tx = map_x + (s->x * map_w / TOWER_WIDTH);
         int tw = map_x + ((s->x + 4) * map_w / TOWER_WIDTH) - tx;
@@ -4352,16 +4361,17 @@ static void render_minimap(void)
         }
     }
 
-    /* Legend strip (the EXE blits bitmap 0x138+mode over the map). Anchor it to
-     * the TOP of the map (sky) rather than the bottom — the lowest floors
-     * (lobby + basements) are the densest part of the silhouette and the legend
-     * was sitting right on top of them. */
+    /* Legend strip (the EXE blits bitmap 0x138+mode over the map) at the
+     * original's spot: left edge, y = 200 - height + 18 in the 288-tall
+     * map space (MapPaint 058a-0615, referee 2026-08-08). */
     if (game.map_mode > 0) {
         Sprite *lg = sprites_find(&game.sprites, (uint16_t)(0x8138 + game.map_mode));
         if (lg) {
             int lw = lg->w * map_w / 200;       /* legends drawn for a 200px map */
             int lh = lg->h;
-            SDL_Rect dst = { map_x + (map_w - lw) / 2, map_y + 2, lw, lh };
+            SDL_Rect dst = { map_x,
+                             map_y + (200 - lg->h + 18) * map_h / 288,
+                             lw, lh };
             SDL_RenderCopy(game.renderer, lg->texture, NULL, &dst);
         }
     }

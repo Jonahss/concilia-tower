@@ -2767,6 +2767,11 @@ static void retail_close_one(GameSim *sim, Tower *tower, Tenant *t)
     int amount = retail_income_tier(t->type, t->customers_today);
     t->yesterday_profit = amount;   /* the info dialog's "Yesterday's Profit" */
     tower->money += amount;
+    /* Signed into the financial-report row too — a loss day pulls the
+     * quarter's restaurant/fast-food figure down. (These rows rendered
+     * blank before: the nightly settle never posted to the ledger —
+     * Jonah's missing-datapoints report, 2026-08-08.) */
+    fin_bank_income(sim, t->type, amount);
     if (amount >= 0) sim->income_this_quarter += amount;
     else             sim->expenses_this_quarter += -amount;
     if (amount < 0)
@@ -3046,6 +3051,8 @@ void game_relet_arrivals(GameSim *sim, Tower *tower)
         int lump = tenant_rent(t->type, t->rent_class);
         tower->money += lump;
         sim->income_this_quarter += lump;
+        fin_bank_income(sim, t->type, lump);   /* re-let lump joins its
+                                                  finance-report row */
         t->state = TENANT_OCCUPIED;
         t->tenure = 0;
         t->demand_category = 0xFF;         /* judged fresh next dawn */
