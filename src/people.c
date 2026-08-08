@@ -2611,10 +2611,12 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 if (v) ps->spawned[i]++;
             }
         } else if (t->type == ITEM_CATHEDRAL) {
-            /* Weekend congregation (UniPeple 1220:5edd): period-0
-             * mornings only, rand-gated from 8:00 — 40 guests ride all
-             * the way to floor 100 and head home before lunch. */
-            if (!ps->sched_day || hour < 8 || hour >= 11) continue;
+            /* Daily congregation (ChurchT: OpenChurch at 7AM summons ~8
+             * guests per cathedral piece, CloseChurch at 1PM — TimeT rows
+             * @02ce/@03af, schedule-census survey 2026-08-08). The old
+             * weekend-only gate came from reading 1220:5edd's period gate
+             * as the whole mechanism; the dispatcher runs it every day. */
+            if (hour < 7 || hour >= 13) continue;
             if (ps->spawned[i] >= 40) continue;
             /* rand-gated until 10:00, deterministic after — aggregated
              * over the congregation still to arrive */

@@ -1594,9 +1594,10 @@ void game_update(GameSim *sim, Tower *tower)
         }
     }
 
-    /* 4PM person-name purge (NameT: hotel-guest names drop at ft 1600 —
-     * today's guests check out, tomorrow's are strangers). */
-    if (sim->hour >= 16 && person_name_purge_day != tower->day) {
+    /* 5PM person-name purge (NameT: hotel-guest names drop at ft 0x640 =
+     * 5:00 PM — today's guests check out, tomorrow's are strangers; the
+     * old >=16 fired an hour early, schedule-census survey 2026-08-08). */
+    if (sim->hour >= 17 && person_name_purge_day != tower->day) {
         person_name_purge_day = tower->day;
         game_purge_person_names(tower, 1, 0);
     }

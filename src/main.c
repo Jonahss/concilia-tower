@@ -9811,12 +9811,15 @@ int main(int argc, char *argv[])
                 add_event_message("All units connected.");
             }
             
-            /* Decide rainy day at 5 AM (from OpenSkyscraper: every 3rd day) */
-            if (prev_hour == 4 && game.sim.hour == 5) {
-                game.rainy_day = (rand() % 3 == 0);
-                if (game.rainy_day) add_event_message("Bad weather incoming...");
-                else add_event_message("Nice weather today!");
-            }
+            /* Rainy day = the EXE's every-8th "special day" flag (AnimeT
+             * 1020:0dcb: day%8==4 below 5 stars) — the SAME flag the
+             * retail "rainy" quotas and the 8:00/8:30 fanfares already
+             * read. The old rand()%3 roll here was an invention that let
+             * the sky and the books disagree two days in three
+             * (schedule-census survey 2026-08-08, gap #1). */
+            if (prev_hour == 4 && game.sim.hour == 5)
+                game.rainy_day = (game.tower.day % 8 == 4) &&
+                                 (game.tower.star_rating < 5);
 
             /* Day-clock chimes (referee_ambient_timing Q2). The EXE fires these
              * at exact times of day; the port's clock now runs the authentic
