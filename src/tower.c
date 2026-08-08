@@ -389,6 +389,26 @@ int tower_stair_rise(const Tower *tower, ItemType type, int *floor)
     return 1;
 }
 
+/* Is a real unit (not a shaft/stair/floor) already occupying this cell?
+ * A tenant placed BEHIND an elevator shaft lives only in the tenant array
+ * — the shaft keeps the grid cell — so the grid-based overlap check can't
+ * see it. Used to stop a SECOND unit stacking behind the same shaft
+ * (Jonah 2026-08-07: placement let units overlap when hidden behind a
+ * shaft). */
+static int cell_has_real_unit(const Tower *tower, int fidx, int cx)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type == ITEM_NONE || t->type == ITEM_FLOOR ||
+            item_is_transport(t->type)) continue;
+        int lo = floor_to_index(t->floor);
+        if (fidx < lo || fidx >= lo + t->height) continue;
+        if (cx < t->x || cx >= t->x + t->width) continue;
+        return 1;
+    }
+    return 0;
+}
+
 int tower_can_place(Tower *tower, ItemType type, int floor, int x)
 {
     last_reject[0] = '\0';
@@ -765,8 +785,15 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                 if (elev && !item_is_elevator(occ)) continue;
                 /* Symmetrically, a room spans through an existing shaft
                  * column (the shaft keeps those grid cells — see
-                 * tower_place). */
-                if (!elev && item_is_elevator(occ)) continue;
+                 * tower_place). But only ONE unit may hide behind a shaft:
+                 * the grid shows just the shaft, so check the tenant array
+                 * for a real unit already there (Jonah 2026-08-07 — units
+                 * overlapped when stacked behind a shaft). */
+                if (!elev && item_is_elevator(occ)) {
+                    if (cell_has_real_unit(tower, fidx, cx))
+                        REJECT("Cannot place on top of other items");
+                    continue;
+                }
                 REJECT("Cannot place on top of other items");
             }
         }
