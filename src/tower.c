@@ -565,6 +565,25 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     if (item_is_elevator(type) && floor <= TOWER_MIN_FLOOR &&
         !elevator_extends_column(tower, type, floor, x))
         REJECT("Cannot start a shaft on the bottom floor");
+    /* A NEW shaft must land on a BUILT floor with its whole span inside
+     * that floor's deck extent (ValidatePlacementArea 11f8:2e64, called by
+     * PlaceElevator step 3: ground is always OK; above ground the floor
+     * record must exist, err 3, and cover the span, err 6; basements same
+     * shape, err 4). Extensions are exempt — that's the drag path, which
+     * auto-decks instead (EnsureFloorDeckUnderShaft 11f8:15f7; emergent
+     * here since shaft cells carry their own deck stubs). Without this
+     * gate a shaft could be clicked down floating in open air. */
+    if (item_is_elevator(type) && floor != 0 &&
+        !elevator_extends_column(tower, type, floor, x)) {
+        int fi0 = floor_to_index(floor), L, R;
+        if (fi0 < 0 || fi0 >= TOWER_FLOOR_COUNT)
+            REJECT("Cannot place item there");
+        if (!deck_extent(tower, fi0, &L, &R))
+            REJECT(floor > 0 ? "Cannot place item there"
+                             : "Cannot place any items there");
+        if (x < L || x + width > R)
+            REJECT("Cannot place items wider than floor below");
+    }
     /* Venues above ground must clear the grand lobby band (2f5a per-type
      * table: [0xB3E6]+10 < floor, where the EXE's stored floor is the
      * venue's TOP story — they extend downward; same referee). The rule

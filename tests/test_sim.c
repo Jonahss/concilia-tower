@@ -106,14 +106,25 @@ static void test_elevators(void)
     /* Express anchor rule (MakeElevator 11f8:0ff9): a NEW express shaft
      * must start at ground/basement/sky-lobby; extending an existing
      * column is free. f7 atop the service column: supported, mid-tower,
-     * not an extension -> refused. f15 same spot: sky lobby -> allowed.
-     * f21 on the express column: extension -> allowed. */
+     * not an extension -> refused. f15 same spot: sky lobby -> allowed
+     * (decked below — new shafts also need a built floor). f21 on the
+     * express column: extension -> allowed. */
+    fplace(ITEM_FLOOR, 15, 160);   /* deck for the f15 base */
     CHECK(!tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 7, 182),
           "new express shaft can't start mid-tower (f7)");
     CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 15, 182),
           "new express shaft CAN start at sky-lobby f15");
     CHECK(tower_can_place(&tw, ITEM_ELEVATOR_EXPRESS, 21, 208),
           "extending the existing express column past f20 is allowed");
+
+    /* A NEW shaft must land on a BUILT floor (ValidatePlacementArea
+     * 11f8:2e64): open air -> refused; pushing an existing column past
+     * the deck is the drag/extend path, which auto-decks -> allowed
+     * (Jonah's floating-elevator report 2026-08-08). */
+    CHECK(!tower_can_place(&tw, ITEM_ELEVATOR_SHAFT, 5, 100),
+          "new shaft can't float in open air");
+    CHECK(tower_can_place(&tw, ITEM_ELEVATOR_SHAFT, 11, 150),
+          "extending a shaft into open air is allowed (auto-deck)");
 }
 
 static void run_days(int days)
@@ -2804,7 +2815,12 @@ static void test_build_caps(void)
     fresh();
 
     /* 24 elevator groups max: the 25th NEW shaft is rejected at build
-     * (seg_11f8 slot scan), while extending an existing shaft still works. */
+     * (seg_11f8 slot scan), while extending an existing shaft still works.
+     * Deck f0+f1 across the tower first — new shaft bases need a built
+     * floor (ValidatePlacementArea 2e64), and the 25th must reach the
+     * group-cap gate, not the deck gate. */
+    tower_extend_deck(&tw, 0, 0, TOWER_WIDTH);
+    tower_extend_deck(&tw, 1, 0, TOWER_WIDTH);
     int made = 0;
     for (int i = 0; i < 24; i++)
         if (place(ITEM_ELEVATOR_SHAFT, 1, 4 + i * 13)) made++;
