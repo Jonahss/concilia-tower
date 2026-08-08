@@ -1213,14 +1213,28 @@ static void render_sky(void)
 }
 
 /* Find the people-sim shaft occupying column x with the given type */
-static ElevatorShaft *find_people_shaft(int x, ItemType ty)
+/* The shaft at (column, type) whose run CONTAINS fidx. Two same-type
+ * shafts can share a column stacked with a gap, so column+type alone
+ * isn't unique — a high shaft's cells were matching the low shaft and
+ * failing the range check, so their floor digits never drew (Jonah
+ * 2026-08-07). Pass fidx < 0 for the plain first-match (callers that
+ * genuinely want any shaft in the column). */
+static ElevatorShaft *find_people_shaft_at(int x, ItemType ty, int fidx)
 {
     PeopleSim *ps = &game.sim.people;
-    for (int i = 0; i < ps->shaft_count; i++)
-        if (ps->shafts[i].active && ps->shafts[i].x == x &&
-            ps->shafts[i].type == ty)
-            return &ps->shafts[i];
-    return NULL;
+    ElevatorShaft *fallback = NULL;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active || s->x != x || s->type != ty) continue;
+        if (fidx >= s->lo && fidx <= s->hi) return s;
+        if (!fallback) fallback = s;
+    }
+    return fallback;
+}
+
+static ElevatorShaft *find_people_shaft(int x, ItemType ty)
+{
+    return find_people_shaft_at(x, ty, -1);
 }
 
 static int elv_structural_stop(const ElevatorShaft *s, int fidx);
@@ -1922,7 +1936,8 @@ static void render_tower(void)
 
         /* Dialog Show Off: the shaft renders as just its two guide rails —
          * whatever it passes through stays visible. */
-        ElevatorShaft *hs = find_people_shaft(t->x, t->type);
+        ElevatorShaft *hs = find_people_shaft_at(t->x, t->type,
+                                                 floor_to_index(t->floor));
         if (hs && hs->hidden) {
             SDL_SetRenderDrawColor(game.renderer, 70, 70, 78, 255);
             SDL_RenderDrawLine(game.renderer, tx, ty, tx, ty + CELL_H - 1);
@@ -1952,8 +1967,8 @@ static void render_tower(void)
             SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
         }
         /* floor number, on serviced stops only (as the original) */
-        ElevatorShaft *es = find_people_shaft(t->x, t->type);
         int fi = floor_to_index(t->floor);
+        ElevatorShaft *es = find_people_shaft_at(t->x, t->type, fi);
         if (es && fi >= es->lo && fi <= es->hi && es->serviced[fi] &&
             elv_structural_stop(es, fi)) {
             int hot = 0;   /* red plate: a car of this group is on this floor */
@@ -3551,8 +3566,13 @@ static void render_elv_edit_mode(void)
         if (t->floor > top_floor || t->floor + t->height - 1 < bot_floor)
             continue;
         int is_elv = item_is_elevator(t->type);
-        if (is_elv && t->x == sel->x && t->type == (ItemType)sel->type)
-            continue;                     /* the shaft we're editing */
+        if (is_elv && t->x == sel->x && t->type == (ItemType)sel->type) {
+            /* leave only the EDITED shaft lit — a stacked same-column
+             * sibling (different floor run) still dims (2026-08-07). */
+            int efi = floor_to_index(t->floor);
+            if (efi >= sel->lo && efi <= sel->hi)
+                continue;
+        }
         int sx, sy;
         grid_to_screen(t->floor + t->height - 1, t->x, &sx, &sy);
         SDL_Rect r = { sx, sy, t->width * CELL_W, t->height * CELL_H };
@@ -9153,6 +9173,8 @@ int main(int argc, char *argv[])
         game.elv_sx = getenv("ELV_SX") ? atoi(getenv("ELV_SX")) : 172;
         game.elv_stype = getenv("ELV_STYPE") ? atoi(getenv("ELV_STYPE"))
                                              : ITEM_ELEVATOR_SHAFT;
+        game.elv_sfloor = getenv("ELV_SFLOOR") ? floor_to_index(
+                              atoi(getenv("ELV_SFLOOR"))) : 0;
         game.elv_x = 340; game.elv_y = 120;
     }
     if (getenv("FIN_DLG")) {        /* open the financial report for a screenshot */
