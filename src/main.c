@@ -7543,11 +7543,15 @@ static int try_cap_drag(void)
         game.cap_drag_next = game.mouse_floor;
         game.cap_drag_placed = 0;
         /* The moving end is the cap's own served floor; the opposite end
-         * stays put and is the retract floor (drag inward can shrink to a
+         * stays put and is the retract limit (drag inward can shrink to a
          * 1-floor shaft but never delete the group — that's the
-         * bulldozer's job; shaft-retract referee 2026-08-07). */
-        game.cap_drag_end   = (game.cap_drag_dir > 0) ? s->hi : s->lo;
-        game.cap_drag_fixed = (game.cap_drag_dir > 0) ? s->lo : s->hi;
+         * bulldozer's job; shaft-retract referee 2026-08-07). NOTE:
+         * s->lo/s->hi are grid INDICES; the drag math and tower_place all
+         * work in DISPLAYED floors, so convert here (index_to_floor). */
+        game.cap_drag_end   = index_to_floor(game.cap_drag_dir > 0
+                                              ? s->hi : s->lo);
+        game.cap_drag_fixed = index_to_floor(game.cap_drag_dir > 0
+                                              ? s->lo : s->hi);
         return 1;
     }
     return 0;
@@ -9273,6 +9277,37 @@ int main(int argc, char *argv[])
         if (!game.sim.event.active)
             printf("CT_FIRE: StartFire gates refused it (star>2? security? "
                    "cathedral built? floor extent >= 32 cells?)\n");
+    }
+    if (getenv("CT_DRAGTEST")) {       /* headless retract check: shorten the
+                                        * first standard/service shaft's top by
+                                        * CT_DRAGTEST floors via the real drag */
+        PeopleSim *ps = &game.sim.people;
+        int si = -1;
+        for (int i = 0; i < ps->shaft_count; i++)
+            if (ps->shafts[i].active &&
+                ps->shafts[i].type != ITEM_ELEVATOR_EXPRESS) { si = i; break; }
+        if (si >= 0) {
+            ElevatorShaft *s = &ps->shafts[si];
+            int hi0 = index_to_floor(s->hi), lo0 = index_to_floor(s->lo);
+            printf("CT_DRAGTEST: shaft x=%d floors %d..%d\n", s->x, lo0, hi0);
+            game.build_type = s->type;
+            game.drag_start_cell = s->x;
+            game.cap_drag = 1; game.dragging = 1;
+            game.cap_drag_dir = 1;
+            game.cap_drag_end = hi0;
+            game.cap_drag_fixed = lo0;
+            game.mouse_floor = hi0 - atoi(getenv("CT_DRAGTEST"));  /* pull down */
+            cap_drag_track();
+            game.cap_drag = 0; game.dragging = 0; game.build_type = ITEM_NONE;
+            people_rebuild_transport(ps, &game.tower);
+            for (int i = 0; i < ps->shaft_count; i++)
+                if (ps->shafts[i].active && ps->shafts[i].x == s->x) {
+                    printf("CT_DRAGTEST: after -> floors %d..%d\n",
+                           index_to_floor(ps->shafts[i].lo),
+                           index_to_floor(ps->shafts[i].hi));
+                    break;
+                }
+        } else printf("CT_DRAGTEST: no non-express shaft found\n");
     }
     if (getenv("CT_BOMB")) {           /* demo: force a bomb threat (arg = floor);
                                         * gates: security + star 2/3/4 */
