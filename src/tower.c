@@ -493,18 +493,18 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
                     REJECT("Cannot place on top of other items");
             }
         }
-        /* Floor 0: always allowed. Upper lobbies: need floor below. */
+        /* Floor 0: always allowed. Upper (sky) lobbies obey the same
+         * no-overhang rule as every other unit: the WHOLE footprint needs
+         * support directly below, not just one cell of it. The old
+         * "any cell below is built" test let a sky lobby cantilever past
+         * its support — even out over a fire escape (Jonah 2026-08-07). */
         if (floor != 0) {
             int below_idx = floor_to_index(floor - 1);
-            int has_support = 0;
-            if (below_idx >= 0) {
-                for (int cx = x; cx < x + width && !has_support; cx++) {
-                    if (tower->grid[below_idx][cx].type != ITEM_NONE)
-                        has_support = 1;
-                }
-            }
-            if (!has_support)
+            if (below_idx < 0 || below_idx >= TOWER_FLOOR_COUNT)
                 REJECT("Cannot place item there");
+            for (int cx = x; cx < x + width; cx++)
+                if (tower->grid[below_idx][cx].type == ITEM_NONE)
+                    REJECT("Cannot place items wider than floor below");
         }
         return 1;
     }
