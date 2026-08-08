@@ -281,3 +281,30 @@ hidden easter eggs (corrected 2026-07-30, Jonah).
   rows (drag-builder 11f8:26dd), priced through TerrainCost's lobby
   band row ($5,000 x height per cell). Ported faithfully, quirks
   included. Confidence HIGH.
+
+---
+
+# Part 3 — Cutting-room floor (content in the EXE that nothing displays)
+
+Found by the 2026-08-07 sprite audit (tools/ne_bmp_dims.py + contact.py;
+full report: simtower-decomp output/sprite_audit_2026-08-07.md). These
+resources exist in SIMTOWER.EXE but a byte-level scan finds **no
+instruction that loads them** (no `push <id>` anywhere) — the shipped
+game cannot show them. Likely first public documentation (TCRF has no
+SimTower page as of 2026-08).
+
+- **0xF530 / 0xF531 — city composite sheets, day & night** (269x218
+  each): dense micro-facade tiles plus landmark pieces — a cathedral
+  dome in 3/4 perspective (night version wreathed in smoke columns), a
+  pillar bearing a woman's portrait, a narrow TOWER-sign building.
+  Nothing in the manual matches (no zoom-out or city view exists).
+  Best guesses: marketing/box-art compositing material, or art carried
+  over from a cut feature (or from Yoot Saito's earlier *The Tower*).
+  0xF53C (96x9) rides along in the same orphaned 30000-decimal id
+  family.
+- Other unreferenced-by-the-port art we DID identify homes for (not
+  cut content, just unwired in the port so far): 0xA711 fire-chopper
+  dialog picture, 0x82BD red stressed-figure row, 0x8191 weekend
+  elevator-schedule art, 0x8195/96 Local/Express button strips,
+  0x8080/0x8100/0x8101 splash + title screens (port will make its own
+  intro instead — mods list), 0x8F6C 4-phase flame strip.
