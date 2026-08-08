@@ -2785,6 +2785,37 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                 p->state = PERSON_PLANNING;
                 break;
             }
+            /* Idle maid re-poll (Jonah 2026-08-07: 45/49 maids stuck
+             * AT_DEST idle). A maid who finished her slice and went home
+             * is ALIVE, so the spawn loop won't re-dispatch her, and the
+             * stay countdown can't fire at stay==0 — she'd sit idle while
+             * new checkouts pile up dirty rooms in her slice. So poll her
+             * mod-6 slice from the unit floor every 16 ticks and send her
+             * back out (or clean in place) the moment work appears. */
+            if (!p->stay && p->service &&
+                g_hour < 16 && !g_emergency && (frame + i) % 16 == 0) {
+                Tenant *ht = tower_tenant(tower, p->home_tenant);
+                if (ht && ht->type == ITEM_HOUSEKEEPING) {
+                    int hf = floor_to_index(ht->floor);
+                    int nf = (hf >= 0) ? maid_pick_floor(tower, hf,
+                                                         p->member % 6) : -1;
+                    if (nf >= 0) {
+                        if (nf == (int)p->cur_floor) {
+                            Tenant *room = floor_first_dirty_room(tower, nf);
+                            if (room) {
+                                room->condition = ROOM_CLEAN;
+                                record_clean_mark(room);
+                                p->stay = 4;
+                            }
+                        } else {
+                            p->going_home = 0;
+                            p->dest_floor = (uint8_t)nf;
+                            p->state = PERSON_PLANNING;
+                        }
+                        break;
+                    }
+                }
+            }
             /* Office sales errand (UniPeple statuses 0/0x40/0x21/0x61):
              * ONLY worker 0 of an occupied office makes the midday
              * round-trip to the ground lobby (status 0 @29e2); workers
