@@ -350,7 +350,11 @@ typedef struct {
                                      (EXE global 0x7840; legends 0x139..) */
     int             elv_open;     /* Elevator dialog (double-click a shaft) */
     int             elv_sx;       /* shaft column the dialog is bound to */
-    int             elv_stype;    /* shaft ItemType (column+type = identity) */
+    int             elv_stype;    /* shaft ItemType */
+    int             elv_sfloor;   /* a floor the shaft serves — disambiguates
+                                   * two same-type shafts stacked in one
+                                   * column (column+type alone is NOT a
+                                   * unique identity; Jonah 2026-08-07) */
     int             elv_day;      /* schedule editor: 0 weekday / 1 weekend */
     int             elv_period;   /* schedule editor: selected period 0..6 */
     int             elv_scroll;   /* faithful grid: bottom visible floor offset */
@@ -2483,11 +2487,19 @@ static int elv_dialog_shaft(void)
 {
     if (!game.elv_open) return -1;
     PeopleSim *ps = &game.sim.people;
-    for (int i = 0; i < ps->shaft_count; i++)
-        if (ps->shafts[i].active && ps->shafts[i].x == game.elv_sx &&
-            ps->shafts[i].type == (ItemType)game.elv_stype)
+    int fallback = -1;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active || s->x != game.elv_sx ||
+            s->type != (ItemType)game.elv_stype)
+            continue;
+        /* Prefer the shaft whose run actually contains the clicked floor;
+         * two same-type shafts can share a column (with a gap). */
+        if (game.elv_sfloor >= s->lo && game.elv_sfloor <= s->hi)
             return i;
-    return -1;
+        if (fallback < 0) fallback = i;   /* stale/unset floor: first match */
+    }
+    return fallback;
 }
 
 /* Express shafts structurally skip non-lobby floors regardless of flags */
@@ -3169,6 +3181,7 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
     game.elv_open = 1;
     game.elv_sx = t->x;
     game.elv_stype = t->type;
+    game.elv_sfloor = fidx;        /* the clicked floor picks the right shaft */
     game.elv_x = btn_x + 24;
     game.elv_y = btn_y - 60;
     if (game.elv_x + ELV_W > game.screen_w)

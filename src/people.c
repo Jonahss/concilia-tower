@@ -563,6 +563,16 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
             ElevatorShaft *os = &ps->shafts[j];
             if (!os->active || os->x != ns->x || os->type != ns->type)
                 continue;
+            /* Same column + type is NOT enough: a tower can hold TWO
+             * shafts of one type stacked in the same column with a gap
+             * (each its own ≤30-floor run). Require the floor ranges to
+             * OVERLAP so a new high shaft doesn't inherit a low shaft's
+             * cars/config/identity (Jonah 2026-08-07 — the high shaft
+             * showed the low one's inspection data and dead floors). An
+             * extend/shrink keeps the run overlapping its old self, so
+             * config still carries; only genuinely separate runs split. */
+            if (os->hi < ns->lo || os->lo > ns->hi)
+                continue;
             ns->num_cars = os->num_cars;
             ns->hidden = os->hidden;
             /* carry the cars themselves — extending a shaft must not
