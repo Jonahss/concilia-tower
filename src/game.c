@@ -3605,6 +3605,13 @@ void game_resolve_event(GameSim *sim, Tower *tower)
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
             if (t->state == TENANT_ABANDONED) continue;
+            /* The EXE's bomb can't destroy the indestructible set — its
+             * DestroyTenants routes through DeleteTenant, which aborts on
+             * CanModifyTenant-blocked types (lobby/security/housekeeping/
+             * metro/cathedral). They stand in the blast (bomb referee +
+             * DeleteTenant decode; Jonah 2026-08-07 hit the port's old
+             * over-destroy that also left un-clearable rubble). */
+            if (item_is_indestructible(t->type)) continue;
             if (t->floor + t->height - 1 < min_f || t->floor > max_f) continue;
             if (t->x + t->width - 1 < min_s || t->x > max_s) continue;
             ev->damage_cost += ITEM_COST[(int)t->type];

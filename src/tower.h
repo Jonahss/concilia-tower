@@ -503,6 +503,16 @@ static inline int item_is_transport(ItemType t)
     return t == ITEM_STAIRS || t == ITEM_ESCALATOR || item_is_elevator(t);
 }
 
+/* The EXE's indestructible set (CanModifyTenant 11f8:33f7): the bulldozer
+ * refuses these while functioning, AND DeleteTenant aborts on them — so a
+ * bomb's DestroyTenants (which routes through DeleteTenant) can't destroy
+ * them either. */
+static inline int item_is_indestructible(ItemType t)
+{
+    return t == ITEM_LOBBY || t == ITEM_SECURITY || t == ITEM_HOUSEKEEPING ||
+           t == ITEM_METRO || t == ITEM_CATHEDRAL;
+}
+
 /* Convert floor number to grid array index */
 static inline int floor_to_index(int floor)
 {

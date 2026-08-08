@@ -1257,13 +1257,15 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
     /* The EXE's indestructible set (CanModifyTenant jump table 11f8:33f7):
      * every lobby (ground AND sky), security, housekeeping, metro,
      * cathedral. Everything else — including stairs, venues, medical,
-     * recycling — demolishes freely. */
-    switch (t->type) {
-    case ITEM_LOBBY: case ITEM_SECURITY: case ITEM_HOUSEKEEPING:
-    case ITEM_METRO: case ITEM_CATHEDRAL:
+     * recycling — demolishes freely. EXCEPTION: burned/abandoned RUBBLE
+     * clears even for these — the wreckage isn't a functioning protected
+     * unit (the EXE never makes such rubble since its bomb/fire skip
+     * these too, but the port must let any that exists be cleared;
+     * Jonah 2026-08-07: a bomb blew up a housekeeping unit and its
+     * wreckage was un-bulldozable). */
+    if (item_is_indestructible(t->type) &&
+        !(t->burned || t->state == TENANT_ABANDONED))
         REJECT("Cannot destroy this item");
-    default: break;
-    }
 
     /* The bulldozer refuses units still being built (same function,
      * 11f8:33a5: negated type byte = under construction). */
