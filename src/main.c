@@ -222,7 +222,11 @@
 #define SPR_MEDICAL_COMP      0x0017  /* 0x8728 + 0x8729 + ... */
 #define SPR_PARKING_COMP      0x0018  /* 0x86A8 + 0x86A9 */
 #define SPR_PARTYHALL_COMP    0x0019  /* 0x8B28 + 0x8B68 vertically */
-#define SPR_RAMP_COMP         0x001A  /* 0x8EE8 + 0x8EE9 + 0x8EEA horizontally
+#define SPR_RAMP_COMP         0x001F  /* 0x8EE8 + 0x8EE9 + 0x8EEA horizontally
+                                       * (was 0x001A, COLLIDING with
+                                       * SPR_CINEMA_COMP — the cinema
+                                       * blinked into a stretched ramp,
+                                       * Jonah 2026-08-07)
                                        * (3 frames x 128px, 24px basement art
                                        * — same merge as OpenSkyscraper) */
 #define SPR_CINEMA_COMP       0x001A  /* cinema hall composite */
