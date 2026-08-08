@@ -4260,10 +4260,15 @@ static void render_minimap(void)
 
         uint8_t r, g, b;
         int is_shell = (t->type == ITEM_FLOOR) || item_is_transport(t->type);
-        if (game.map_mode == 0) {
+        if (item_is_elevator(t->type)) {
+            /* Shaft lines keep their true colors in EVERY map mode —
+             * MapPaint runs the elevator loop AFTER the overlay recolor
+             * (1160:0409 follows the 03fd far call to 11d0:0254), so the
+             * EXE's Eval/Rent/Hotel views still show blue/black/red
+             * lines (Jonah caught them vanishing, 2026-08-08). */
+            minimap_shaft_color(t->type, &r, &g, &b);
+        } else if (game.map_mode == 0) {
             if (t->type == ITEM_FLOOR) { r = 204; g = 204; b = 204; }
-            else if (item_is_elevator(t->type))
-                minimap_shaft_color(t->type, &r, &g, &b);
             else item_fallback_color(t->type, &r, &g, &b);
             if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
             else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
@@ -4320,8 +4325,8 @@ static void render_minimap(void)
         int tx = map_x + (s->x * map_w / TOWER_WIDTH);
         int tw = map_x + ((s->x + 4) * map_w / TOWER_WIDTH) - tx;
         uint8_t r, g, b;
-        if (game.map_mode == 0) minimap_shaft_color(s->type, &r, &g, &b);
-        else { r = 204; g = 204; b = 204; }     /* shell in overlays */
+        minimap_shaft_color(s->type, &r, &g, &b);  /* every mode, like
+                                                      MapPaint 1160:0409 */
         SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
         SDL_Rect line = { tx + tw / 2, ty, 1, by - ty };
         SDL_RenderFillRect(game.renderer, &line);
