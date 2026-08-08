@@ -509,6 +509,9 @@ typedef struct {
      * and VIP visits (dialogs 0xBB9/0xBBA/0xBBB/0xBC5/0xBCF/0xBD0), pausing
      * until dismissed. Text/button come straight from the dialog resource. */
     int             notice_modal;
+    int             find_mark_floor; /* find-target arrow (DISPLAYED floor) */
+    int             find_mark_x;
+    int             find_mark_until; /* sim frame the arrow persists to */
     int             quit_confirm;    /* the EXE's WM_CLOSE save prompt
                                         (FileT 10d0:2a8e; strings survey
                                         gap #5) */
@@ -2679,7 +2682,13 @@ static void render_elv_dialog_faithful(void)
             : exe_str(0x0190, 1, "Standard Elevator");
     draw_win31_titlebar(wx, wy, ELV_DLG_W, title);
 
-    Sprite *bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
+    /* Weekend days get their own dialog art 0x191 (ElvDlogT 1098:02de
+     * picks by the day flag; bitmap survey 2026-08-08 gap #3) — the
+     * schedule panel's period strip differs between the two sheets. */
+    Sprite *bg = sprites_find(&game.sprites,
+                              game_is_weekend(&game.tower) ? 0x8191
+                                                           : SPR_ELV_DIALOG);
+    if (!bg) bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
     if (bg) {
         SDL_Rect dst = { bx, by, ELV_DLG_W, ELV_DLG_H };
         SDL_RenderCopy(game.renderer, bg->texture, NULL, &dst);
@@ -4019,16 +4028,24 @@ static void render_info_window(void)
      * cream, never white) — the real cell is 21px, so crop and pitch at 21. */
     #define STAR_CELL_W 21
     int star_x = wx + 42;
-    if (game.tower.star_rating >= 6 && game.font_small) {
-        /* TOWER status: the original replaces the stars entirely */
-        SDL_Color gold = {220, 180, 0, 255};
-        SDL_Surface *ts = TTF_RenderUTF8_Blended(game.font_small, "T O W E R", gold);
-        if (ts) {
-            SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
-            SDL_Rect dst = { star_x, wy + 4, ts->w, ts->h };
-            SDL_RenderCopy(game.renderer, tt, NULL, &dst);
-            SDL_DestroyTexture(tt);
-            SDL_FreeSurface(ts);
+    if (game.tower.star_rating >= 6) {
+        /* TOWER status: the original replaces the stars with the ornate
+         * gold lettering 0x147 (108x22; bitmap survey 2026-08-08). */
+        Sprite *tl = sprites_find(&game.sprites, 0x8147);
+        if (tl && tl->texture) {
+            SDL_Rect dst = { star_x, wy + 2, tl->w, tl->h };
+            SDL_RenderCopy(game.renderer, tl->texture, NULL, &dst);
+        } else if (game.font_small) {
+            SDL_Color gold = {220, 180, 0, 255};
+            SDL_Surface *ts = TTF_RenderUTF8_Blended(game.font_small,
+                                                     "T O W E R", gold);
+            if (ts) {
+                SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
+                SDL_Rect dst = { star_x, wy + 4, ts->w, ts->h };
+                SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                SDL_DestroyTexture(tt);
+                SDL_FreeSurface(ts);
+            }
         }
     } else if (game.ui_star[0] && game.ui_star[1]) {
         /* Always show all five slots: earned stars filled, the rest empty. */
@@ -4400,8 +4417,24 @@ static void render_minimap(void)
         }
     }
 
-    /* Mode buttons in the strip below the map content */
+    /* Mode buttons: the original's tab-bar art (0x136 normal / 0x137
+     * pressed — "Edit / Eval / Pricing / Hotel"; MapInitGraphics,
+     * bitmap survey 2026-08-08). The active mode's quarter blits from
+     * the pressed strip. Falls back to the drawn buttons without art. */
     {
+        Sprite *tabs  = sprites_find(&game.sprites, 0x8136);
+        Sprite *tabsp = sprites_find(&game.sprites, 0x8137);
+        int by0 = map_y + map_h + 2;
+        if (tabs && tabs->texture) {
+            SDL_Rect dst = { map_x, by0, map_w, 16 };
+            SDL_RenderCopy(game.renderer, tabs->texture, NULL, &dst);
+            if (tabsp && tabsp->texture && game.map_mode >= 0) {
+                SDL_Rect src = { game.map_mode * 50, 0, 50, 18 };
+                SDL_Rect pd  = { map_x + game.map_mode * map_w / 4, by0,
+                                 map_w / 4, 16 };
+                SDL_RenderCopy(game.renderer, tabsp->texture, &src, &pd);
+            }
+        } else {
         static const char *mode_label[4] = { "Map", "Eval", "Rent", "Hotel" };
         int bw = map_w / 4;
         for (int m = 0; m < 4; m++) {
@@ -4415,8 +4448,9 @@ static void render_minimap(void)
                         locked ? (SDL_Color){ 140, 140, 140, 255 }
                                : (SDL_Color){ 0, 0, 0, 255 });
         }
+        }
     }
-    
+
     /* Camera viewport indicator — tracks BOTH axes of the view */
     {
         int cam_floor_top, cam_floor_bot, cam_xl, cam_xr;
@@ -6198,6 +6232,27 @@ static void open_tenant_popup_at(uint16_t tid, int x, int y)
     game.inspect_open = 1;
     game.inspect_tid = tid;
     game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
+    /* The EXE plays the tenant's own ambience as its info dialog opens
+     * (hidden fn 11c8:03fb; sound census MED gap #2). */
+    {
+        Tenant *at = tower_tenant(&game.tower, tid);
+        if (at && game.snd_bg) {
+            uint16_t aid = 0;
+            switch (at->type) {
+            case ITEM_RESTAURANT:   aid = AMB_RESTAURANT_A; break;
+            case ITEM_OFFICE:       aid = AMB_OFFICE; break;
+            case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN:
+            case ITEM_HOTEL_SUITE:  aid = AMB_HOTEL; break;
+            case ITEM_CONDO:        aid = AMB_HOTEL; break;
+            case ITEM_SHOP:
+            case ITEM_FAST_FOOD:    aid = AMB_SHOP_FF_B; break;
+            case ITEM_PARKING:      aid = AMB_PARKING_A; break;
+            case ITEM_PARTY_HALL:   aid = AMB_PARTY; break;
+            default: break;
+            }
+            if (aid) play_snd(aid);
+        }
+    }
     game.inspect_x = x + 16;
     game.inspect_y = y - 40;
     if (game.inspect_x + INSPECT_W > game.screen_w)
@@ -7142,6 +7197,9 @@ static void find_do_find(const FindRow *row)
             game.demolish_mode = game.finger_mode = 0;
             game.build_type = ITEM_NONE;
             find_center_camera(p->cur_floor, p->x);
+            game.find_mark_floor = index_to_floor(p->cur_floor);
+            game.find_mark_x = p->x;
+            game.find_mark_until = game.sim.frame + 90;
             open_person_popup_at((uint16_t)(i + 1),
                                  game.screen_w / 2, game.screen_h / 2);
             return;
@@ -7159,6 +7217,9 @@ static void find_do_find(const FindRow *row)
     game.demolish_mode = game.finger_mode = 0;
     game.build_type = ITEM_NONE;
     find_center_camera(floor_to_index(t->floor), t->x + t->width / 2);
+    game.find_mark_floor = t->floor;
+    game.find_mark_x = t->x + t->width / 2;
+    game.find_mark_until = game.sim.frame + 90;
     open_tenant_popup_at(row->tid, game.screen_w / 2, game.screen_h / 2);
 }
 
@@ -7213,6 +7274,24 @@ static void render(void)
         render_tower();        /* includes in-tenant people, under the shafts */
         render_people();
         render_events();       /* fire/bomb effects ON TOP of the burning floors */
+        /* Find-target marker: the EXE's red down-arrow 0x5308 over the
+         * found person/tenant (FindPosT 10e0:05da; bitmap survey gap #4).
+         * Bobs until the search popup closes. */
+        if (game.sim.frame < game.find_mark_until) {
+            Sprite *arw = sprites_find(&game.sprites, 0xD308);
+            int ax, ay;
+            grid_to_screen(game.find_mark_floor, game.find_mark_x, &ax, &ay);
+            int bob = (game.sim.frame % 16 < 8) ? 0 : 3;
+            if (arw && arw->texture) {
+                SDL_Rect ad = { ax - arw->w / 2 + CELL_W / 2,
+                                ay - CELL_H - arw->h + bob, arw->w, arw->h };
+                SDL_RenderCopy(game.renderer, arw->texture, NULL, &ad);
+            } else {
+                SDL_SetRenderDrawColor(game.renderer, 220, 0, 0, 255);
+                SDL_Rect tip = { ax + CELL_W / 2 - 2, ay - CELL_H + bob, 4, 12 };
+                SDL_RenderFillRect(game.renderer, &tip);
+            }
+        }
         render_fire_glow();    /* warm tint washed over the world while it burns */
         render_crane();
         render_build_ghost();
@@ -9963,10 +10042,20 @@ int main(int argc, char *argv[])
             /* Wedding / TOWER (5-star) promotion music (referee row 6):
              * ChurchT StartMarry plays it as the ceremony begins. */
             {
-                static int prev_wedding = 0;
-                if (game.sim.wedding.active && !prev_wedding)
-                    play_snd(SND_WEDDING);
+                /* The EXE plays the bells with loop=5 (~10s of pealing;
+                 * sound census MED-LOW) — re-fire the 1.8s clip five
+                 * times back-to-back. */
+                static int prev_wedding = 0, bells_left = 0, bells_next = 0;
+                if (game.sim.wedding.active && !prev_wedding) {
+                    bells_left = 5;
+                    bells_next = game.sim.frame;
+                }
                 prev_wedding = game.sim.wedding.active;
+                if (bells_left > 0 && game.sim.frame >= bells_next) {
+                    play_snd(SND_WEDDING);
+                    bells_left--;
+                    bells_next = game.sim.frame + 28;
+                }
             }
 
             /* Bomb/terror explosion (referee row 2): fired as the blast lands,
