@@ -3718,37 +3718,44 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define SPEED_BTN_H 26
 #define TOOL_WIN_H  264       /* Fits play/pause + tools + 5-row icon grid + cost */
 
+#define SPR_CLOCK_FACE 0x8141   /* the original Tower Info clock face,
+                                 * 32x31 — tick marks at 12/3/6/9 and a
+                                 * faint TOWER across the dial. The EXE
+                                 * loads it exactly once (push 0x0141);
+                                 * Jonah recognized it in the audit dump. */
+
 static void draw_analog_clock(int cx, int cy, int r, int hour, int minute)
 {
-    /* Clock face */
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 240, 255);
-    /* Fill circle approximation with filled rects */
-    for (int y = -r; y <= r; y++) {
-        int xspan = (int)sqrt((double)(r*r - y*y));
-        SDL_Rect row = { cx - xspan, cy + y, xspan * 2, 1 };
-        SDL_RenderFillRect(game.renderer, &row);
+    Sprite *face = sprites_find(&game.sprites, SPR_CLOCK_FACE);
+    if (face && face->texture) {
+        SDL_Rect dst = { cx - face->w / 2, cy - face->h / 2,
+                         face->w, face->h };
+        SDL_RenderCopy(game.renderer, face->texture, NULL, &dst);
+    } else {
+        /* Fallback: the old vector face */
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 240, 255);
+        for (int y = -r; y <= r; y++) {
+            int xspan = (int)sqrt((double)(r*r - y*y));
+            SDL_Rect row = { cx - xspan, cy + y, xspan * 2, 1 };
+            SDL_RenderFillRect(game.renderer, &row);
+        }
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        for (int deg = 0; deg < 360; deg++) {
+            double rad = deg * M_PI / 180.0;
+            int px = cx + (int)(r * cos(rad));
+            int py = cy + (int)(r * sin(rad));
+            SDL_RenderDrawPoint(game.renderer, px, py);
+        }
+        for (int h = 0; h < 12; h++) {
+            double angle = (h * 30 - 90) * M_PI / 180.0;
+            int x1 = cx + (int)((r - 4) * cos(angle));
+            int y1 = cy + (int)((r - 4) * sin(angle));
+            int x2 = cx + (int)((r - 1) * cos(angle));
+            int y2 = cy + (int)((r - 1) * sin(angle));
+            SDL_RenderDrawLine(game.renderer, x1, y1, x2, y2);
+        }
     }
-    
-    /* Clock border */
-    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
-    /* Draw circle outline */
-    for (int deg = 0; deg < 360; deg++) {
-        double rad = deg * M_PI / 180.0;
-        int px = cx + (int)(r * cos(rad));
-        int py = cy + (int)(r * sin(rad));
-        SDL_RenderDrawPoint(game.renderer, px, py);
-    }
-    
-    /* Hour tick marks */
-    for (int h = 0; h < 12; h++) {
-        double angle = (h * 30 - 90) * M_PI / 180.0;
-        int x1 = cx + (int)((r - 4) * cos(angle));
-        int y1 = cy + (int)((r - 4) * sin(angle));
-        int x2 = cx + (int)((r - 1) * cos(angle));
-        int y2 = cy + (int)((r - 1) * sin(angle));
-        SDL_RenderDrawLine(game.renderer, x1, y1, x2, y2);
-    }
-    
+
     /* Hour hand (shorter, thicker) */
     {
         double h_angle = ((hour % 12) * 30 + minute * 0.5 - 90) * M_PI / 180.0;
