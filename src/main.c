@@ -4327,6 +4327,26 @@ static void render_minimap(void)
         SDL_RenderFillRect(game.renderer, &line);
     }
 
+    /* Santa's sleigh: red ~3x3 dot at his position while he's flying
+     * (MapPaint 1160:0506-0589: gated on [0xDD6C] santa_active, point at
+     * ([0xDD70],[0xDD72]) inflated and FillRect'd in RED — referee
+     * 2026-08-08). Drawn in every map mode, like the EXE. The port's
+     * santa.x is screen-space, so convert to world; his altitude is the
+     * fixed 0x84c px above ground minus the descent. */
+    if (game.sim.santa.active) {
+        int wx_px = game.sim.santa.x + (int)game.cam_fx - game.screen_w / 2
+                    + (game.santa ? game.santa->w / 2 : 0);
+        int cell = wx_px / CELL_W;
+        if (cell >= 0 && cell < TOWER_WIDTH) {
+            float fl = (float)(0x84c - game.sim.santa.y) / CELL_H;
+            int sy = (int)(ground_line - fl * pf);
+            int sx = map_x + cell * map_w / TOWER_WIDTH;
+            SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, 255);
+            SDL_Rect dot = { sx - 1, sy - 1, 3, 3 };
+            SDL_RenderFillRect(game.renderer, &dot);
+        }
+    }
+
     /* Legend strip (the EXE blits bitmap 0x138+mode over the map). Anchor it to
      * the TOP of the map (sky) rather than the bottom — the lowest floors
      * (lobby + basements) are the densest part of the silhouette and the legend
