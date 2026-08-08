@@ -112,7 +112,40 @@ static int     elv_settling;
  * ([0xB406]&9 — maids sit out fires/bombs). Referee 2026-08-07. */
 static int     g_hour;
 static int     g_emergency;
+static int     g_frame;
 static Tenant *floor_first_dirty_room(Tower *tower, int fidx);
+
+/* Render-only "maid at work" marks (Jonah's ask, 2026-08-07): the EXE
+ * never draws a maid at the room (maid referee — the 'working down the
+ * rooms' look is the dirty->clean redraw), but OUR sim genuinely has
+ * her standing there through the dwell, so we render that real state.
+ * File-static and derived — lost on reload, never saved. */
+#define CLEAN_MARKS_MAX 64
+static PeopleCleanMark clean_marks[CLEAN_MARKS_MAX];
+static int clean_mark_count;
+
+static void record_clean_mark(const Tenant *room)
+{
+    /* dwell = 4 pumps at 1/16 ≈ 64 ticks */
+    int until = g_frame + 64;
+    if (clean_mark_count < CLEAN_MARKS_MAX) {
+        PeopleCleanMark *m = &clean_marks[clean_mark_count++];
+        m->fidx = (int16_t)floor_to_index(room->floor);
+        m->x = (int16_t)room->x;
+        m->until = until;
+    }
+}
+
+int people_clean_marks(const PeopleCleanMark **out)
+{
+    /* compact away expired marks on read */
+    int w = 0;
+    for (int i = 0; i < clean_mark_count; i++)
+        if (clean_marks[i].until > g_frame) clean_marks[w++] = clean_marks[i];
+    clean_mark_count = w;
+    *out = clean_marks;
+    return clean_mark_count;
+}
 
 static void fmt_floor_name(int fidx, char *out, size_t n)
 {
@@ -1450,6 +1483,7 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
         if (room) {
             room->condition = ROOM_CLEAN;   /* tenure deliberately kept —
                                              * only check-in resets the fuse */
+            record_clean_mark(room);
             p->stay = 4;
         } else {
             int hf = floor_to_index(t->floor);
@@ -2653,6 +2687,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
     (void)reach_service;
     g_hour = hour;             /* maid gates (arrival + repick) read these */
     g_emergency = emergency;   /* B406&9: no new maid jobs during fire/bomb */
+    g_frame = frame;           /* clean-mark expiry clock */
 
     spawn_phase(ps, tower, frame, tod, hour, reach_public);
 
@@ -2846,6 +2881,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                             Tenant *room = floor_first_dirty_room(tower, nf);
                             if (room) {
                                 room->condition = ROOM_CLEAN;
+                                record_clean_mark(room);
                                 p->stay = 4;
                                 break;
                             }

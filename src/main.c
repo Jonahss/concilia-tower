@@ -3212,6 +3212,9 @@ static void render_occupants(void)
     }
 }
 
+static void queue_line_limits(const ElevatorShaft *s, int f, int sx,
+                              int *llim_px, int *rlim_px);
+
 static void render_shaft(ElevatorShaft *s)
 {
     Sprite *queue_spr = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
@@ -3258,10 +3261,14 @@ static void render_shaft(ElevatorShaft *s)
             }
         }
 
-        /* Waiting queues: lines of silhouettes at the shaft door (ElvPeple).
-         * Figures picked per person id so the crowd stays varied but stable.
-         * The line forms on whichever side of the shaft has building — so
-         * it waits indoors instead of marching into the street.
+        /* Waiting queues (ElvPeple DrawQueueLines 10a8:088c): the UP ring
+         * stands LEFT of the shaft, the DOWN ring RIGHT — always — and
+         * each line is CLIPPED to the floor's built extent, splitting the
+         * space halfway with a neighboring shaft on the same floor
+         * (GetQueueLeft/RightLimit 10a8:1cbb/1d41). Overflow past the
+         * limit simply isn't drawn — a drowning queue fills its span and
+         * stops at the tower's edge instead of marching into the sky.
+         * Figures picked per person id so the crowd stays varied.
          * Options -> Anim: People ([0xDE30]) hides the crowd. */
         for (int f = s->lo; f <= s->hi && queue_spr && game.anim_people; f++) {
             const ElevatorStop *st = &s->stop[f];
@@ -3269,33 +3276,25 @@ static void render_shaft(ElevatorShaft *s)
             if (!n) continue;
             int sx, sy;
             grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
-            int left_in = 0, right_in = 0;
-            for (int d = 1; d <= 4 && !(left_in && right_in); d++) {
-                int lx = s->x - d;
-                int rx = s->x + ITEM_WIDTH[s->type] + d - 1;
-                if (lx >= 0 && game.tower.grid[f][lx].type != ITEM_NONE)
-                    left_in = 1;
-                if (rx < TOWER_WIDTH &&
-                    game.tower.grid[f][rx].type != ITEM_NONE)
-                    right_in = 1;
-            }
-            int rightward = right_in && !left_in;
-            /* Draw the WHOLE line (both 40-deep rings) — the original lets
-             * a drowning shaft's queue snake across the lobby; capping at
-             * 10 hid exactly that signal. (person_hit_test mirrors this.) */
-            int shown = n;
-            for (int k = 0; k < shown; k++) {
+            int llim_px, rlim_px;
+            queue_line_limits(s, f, sx, &llim_px, &rlim_px);
+            for (int k = 0; k < n; k++) {
                 uint16_t pid;
-                if (k < st->up_count)
-                    pid = st->up_ring[(st->up_head + k) % QUEUE_CAP];
-                else
-                    pid = st->down_ring[(st->down_head + k - st->up_count)
-                                        % QUEUE_CAP];
+                int up = k < st->up_count, ki;
+                if (up) {
+                    ki = k;
+                    pid = st->up_ring[(st->up_head + ki) % QUEUE_CAP];
+                } else {
+                    ki = k - st->up_count;
+                    pid = st->down_ring[(st->down_head + ki) % QUEUE_CAP];
+                }
                 if (!pid) continue;
                 int fig = (pid * 7) % 40;     /* 40 silhouettes of 16px */
                 SDL_Rect src = { fig * 16, 0, 16, 36 };
-                int px = rightward ? sx + shaft_w + k * 9
-                                   : sx - 16 - k * 9;
+                int px = up ? sx - 16 - ki * 9
+                            : sx + shaft_w + ki * 9;
+                if (up ? (px < llim_px) : (px + 16 > rlim_px))
+                    continue;                 /* past the clip limit */
                 SDL_Rect dst = { px, sy, 16, CELL_H };
                 /* The original's frustration display: the longer a person
                  * waits, the pinker then redder their silhouette (wait_accum
@@ -3422,11 +3421,60 @@ static void render_shaft(ElevatorShaft *s)
     }
 }
 
+/* Queue-line clip limits in screen px (GetQueueLeft/RightLimit
+ * 10a8:1cbb/1d41): a line may extend to its floor's built edge, or
+ * halfway to a neighboring shaft sharing the floor (the -4 in the EXE
+ * formula credits the neighbor's own width). Shared by the queue
+ * renderer and person_hit_test so click targets match the pixels. */
+static void queue_line_limits(const ElevatorShaft *s, int f, int sx,
+                              int *llim_px, int *rlim_px)
+{
+    const PeopleSim *ps = &game.sim.people;
+    int lcell = 0, rcell = TOWER_WIDTH - 1;
+    while (lcell < TOWER_WIDTH &&
+           game.tower.grid[f][lcell].type == ITEM_NONE) lcell++;
+    while (rcell >= 0 &&
+           game.tower.grid[f][rcell].type == ITEM_NONE) rcell--;
+    int sw = ITEM_WIDTH[s->type];
+    for (int j = 0; j < ps->shaft_count; j++) {
+        const ElevatorShaft *o = &ps->shafts[j];
+        if (!o->active || o == s || f < o->lo || f > o->hi) continue;
+        int ow = ITEM_WIDTH[o->type];
+        if (o->x < s->x) {
+            int mid = s->x - ((s->x - o->x - ow + 1) >> 1);
+            if (mid > lcell) lcell = mid;
+        } else if (o->x > s->x) {
+            int mid = s->x + sw + ((o->x - s->x - sw + 1) >> 1);
+            if (mid < rcell) rcell = mid;
+        }
+    }
+    *llim_px = sx - (s->x - lcell) * CELL_W;
+    *rlim_px = sx + (rcell + 1 - s->x) * CELL_W;
+}
+
 static void render_people(void)
 {
     PeopleSim *ps = &game.sim.people;
     for (int i = 0; i < ps->shaft_count; i++)
         render_shaft(&ps->shafts[i]);
+
+    /* Maids at work: the maid+cart figure (people strip row base 0x32 =
+     * queue sheet cells 50-51) drawn at each room mid-clean. The EXE
+     * never rendered this — our sim genuinely has her there, so we show
+     * the real state (Jonah's ask, 2026-08-07). */
+    Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
+    if (qs && qs->texture && game.anim_people) {
+        const PeopleCleanMark *marks;
+        int nm = people_clean_marks(&marks);
+        for (int i = 0; i < nm; i++) {
+            int sx, sy;
+            grid_to_screen(index_to_floor(marks[i].fidx), marks[i].x,
+                           &sx, &sy);
+            SDL_Rect src = { 50 * 8, 0, 16, 36 };
+            SDL_Rect dst = { sx + CELL_W, sy, 16, CELL_H };
+            SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+        }
+    }
 }
 
 /* Render the elevator "Simulate" edit surface: the tower dimmed to a flat
@@ -4965,20 +5013,12 @@ static void render_events(void)
                 }
             }
         }
-        int bx = lobby_sx + game.sim.event.target_slot * CELL_W;
-        Sprite *al = game.alert_terror;
-        if (al && al->texture) {
-            int bob = (game.sim.frame % 24 < 12) ? 0 : 2;
-            SDL_Rect dst = { bx + CELL_W/2 - al->w/2,
-                             floor_y - al->h - 2 + bob, al->w, al->h };
-            SDL_RenderCopy(game.renderer, al->texture, NULL, &dst);
-        } else {
-            int pulse = 60 + (game.sim.frame % 20) * 4;
-            if (pulse > 120) pulse = 180 - pulse;
-            SDL_SetRenderDrawColor(game.renderer, 255, 0, 0, pulse);
-            SDL_Rect bomb_rect = { bx - 16, floor_y - 8, 32, CELL_H + 16 };
-            SDL_RenderFillRect(game.renderer, &bomb_rect);
-        }
+        /* NO marker at the bomb's cell: the EXE never draws one — the
+         * location stays genuinely hidden until the explosion dialog
+         * names the floor (bomb referee 2026-08-07: exhaustive
+         * 0xB408/0xB40A reader census has no draw path; the terror art
+         * 0xA710 is modal-dialog artwork, not a world sprite). The old
+         * bobbing icon here was leaking the secret. */
     }
 }
 
@@ -6162,28 +6202,23 @@ static uint16_t person_hit_test(int mx, int my)
             int sx, sy;
             grid_to_screen(index_to_floor(f), s->x, &sx, &sy);
             if (my < sy || my >= sy + CELL_H) continue;
-            int left_in = 0, right_in = 0;
-            for (int d = 1; d <= 4 && !(left_in && right_in); d++) {
-                int lx = s->x - d;
-                int rx = s->x + ITEM_WIDTH[s->type] + d - 1;
-                if (lx >= 0 && game.tower.grid[f][lx].type != ITEM_NONE)
-                    left_in = 1;
-                if (rx < TOWER_WIDTH &&
-                    game.tower.grid[f][rx].type != ITEM_NONE)
-                    right_in = 1;
-            }
-            int rightward = right_in && !left_in;
-            int shown = n;   /* full line, mirroring the queue render */
-            for (int k = shown - 1; k >= 0; k--) {   /* topmost drawn first */
+            int llim_px, rlim_px;
+            queue_line_limits(s, f, sx, &llim_px, &rlim_px);
+            for (int k = n - 1; k >= 0; k--) {   /* topmost drawn first */
                 uint16_t pid;
-                if (k < st->up_count)
-                    pid = st->up_ring[(st->up_head + k) % QUEUE_CAP];
-                else
-                    pid = st->down_ring[(st->down_head + k - st->up_count)
-                                        % QUEUE_CAP];
+                int up = k < st->up_count, ki;
+                if (up) {
+                    ki = k;
+                    pid = st->up_ring[(st->up_head + ki) % QUEUE_CAP];
+                } else {
+                    ki = k - st->up_count;
+                    pid = st->down_ring[(st->down_head + ki) % QUEUE_CAP];
+                }
                 if (!pid) continue;
-                int px = rightward ? sx + shaft_w + k * 9
-                                   : sx - 16 - k * 9;
+                int px = up ? sx - 16 - ki * 9
+                            : sx + shaft_w + ki * 9;
+                if (up ? (px < llim_px) : (px + 16 > rlim_px))
+                    continue;                 /* not drawn -> not clickable */
                 if (mx >= px && mx < px + 16) return pid;
             }
         }
@@ -9389,6 +9424,10 @@ int main(int argc, char *argv[])
                              "Security caught the bomb! Crisis averted.");
                 } else if (game.sim.event.type == EVENT_BOMB) {
                     char full[192], num[8];
+                    /* The EXE camera-jumps to the blast too (10c8:0231) */
+                    find_center_camera(floor_to_index(
+                                           game.sim.event.target_floor),
+                                       game.sim.event.target_slot);
                     snprintf(num, sizeof num, "%d",
                              game.sim.event.target_floor);
                     str_subst(full, sizeof full,

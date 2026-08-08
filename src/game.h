@@ -520,7 +520,14 @@ typedef enum {
 #define GUARD_OFFICES_MAX   10
 #define GUARD_SWEEP_FRAMES  2    /* 1 cell / 2 EXE frames (linger 0xDDCC=1) */
 #define GUARD_FLOOR_FRAMES  3    /* transit frames per floor (0xDDCE=3) */
-#define GUARD_DEFUSE_FRAMES 100  /* finder's action pose on a catch (10f8:0426) */
+#define GUARD_DEFUSE_FRAMES 2    /* ticks from catch to resolution: the EXE
+                                  * reschedules [0xB40C] = now + [0xDDD6] = 2
+                                  * (tuning res 0x7F05) at the catch, and
+                                  * EventCleanup truncates the finder's
+                                  * 100-tick pose when it fires — the action
+                                  * pose is visible for these 2 frames plus
+                                  * the frozen frame behind the modal (bomb
+                                  * referee 2026-08-07). */
 
 typedef struct {
     int8_t  floor;      /* current floor */

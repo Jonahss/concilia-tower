@@ -3410,9 +3410,11 @@ static int guard_hunt_step_frame(GameSim *sim, Tower *tower,
                 if (g->floor == sim->event.target_floor &&
                     g->x == sim->event.target_slot) {
                     /* BOMB FOUND (10f8:0424): the finder freezes in the
-                     * action pose for a 100-tick defuse while every other
-                     * guard stands down (StandDownOtherGuards 10f8:0656).
-                     * Resolution waits for the pose to finish. */
+                     * action pose while every other guard stands down
+                     * (StandDownOtherGuards 10f8:0656). ResolveEvent(1)
+                     * reschedules the event tick to now+2 ([0xDDD6]) —
+                     * cleanup lands 2 ticks later and truncates the pose
+                     * (bomb referee 2026-08-07). */
                     h->defuse = GUARD_DEFUSE_FRAMES;
                     for (int oj = 0; oj < h->noffices; oj++)
                         for (int gj = 0; gj < GUARDS_PER_OFFICE; gj++)
@@ -3443,10 +3445,11 @@ void game_update_event(GameSim *sim, Tower *tower)
     if (!ev->active) return;
 
     if (ev->type == EVENT_BOMB) {
-        /* A found bomb is already caught — the finder just holds the
-         * action pose (GUARD_DEFUSE_FRAMES) before the resolution dialog
-         * and cleanup land. Checked before the deadline: a 12:59 catch
-         * can't detonate under the finder. */
+        /* A found bomb is already caught — cleanup (dialog + 4PM jump)
+         * lands GUARD_DEFUSE_FRAMES (=2, res 0xDDD6) ticks later, the
+         * finder holding the action pose until then. Checked before the
+         * deadline: the catch rescheduled the event tick, so a 12:59
+         * catch can't detonate under the finder. */
         if (ev->hunt.defuse > 0) {
             if (--ev->hunt.defuse == 0) {
                 ev->caught = 1;
@@ -3498,7 +3501,9 @@ void game_resolve_event(GameSim *sim, Tower *tower)
         int min_f = ev->target_floor - BOMB_BLAST_FLOORS_DOWN;
         int max_f = ev->target_floor + BOMB_BLAST_FLOORS_UP;
         int min_s = ev->target_slot - BOMB_BLAST_HALF_CELLS;
-        int max_s = ev->target_slot + BOMB_BLAST_HALF_CELLS;
+        /* Asymmetric on purpose: the EXE's range is [-20,+19] (bomb
+         * referee 2026-08-07 — the +20 cell survives). */
+        int max_s = ev->target_slot + BOMB_BLAST_HALF_CELLS - 1;
 
         int destroyed = 0;
         for (int i = 0; i < tower->tenant_count; i++) {

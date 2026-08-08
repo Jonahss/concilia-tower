@@ -311,6 +311,14 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                    const uint8_t *reach_public, const uint8_t *reach_service,
                    int emergency);
 
+/* Render-only marks for rooms a maid is presently cleaning (derived
+ * state, never saved): the renderer draws the maid+cart figure there. */
+typedef struct {
+    int16_t fidx, x;    /* room's floor index and left cell */
+    int32_t until;      /* sim frame the dwell ends */
+} PeopleCleanMark;
+int people_clean_marks(const PeopleCleanMark **out);
+
 /* Join the waiting queue at a stop (exposed for tests).
  * Returns 1 on success, 0 if the queue is full (cap 40/direction). */
 int people_join_queue(PeopleSim *ps, int shaft, int floor, int up,
