@@ -5401,6 +5401,10 @@ static void show_notice_modal(const char *text, const char *btn)
         game.notice_modal = 1;
     }
     game.sim.speed = SPEED_PAUSED;
+    /* The EXE rings announce ding #10000 with EVERY notice dialog —
+     * star-ups, VIP verdicts, fire out, bomb exploded (sound census
+     * 2026-08-08, HIGH gap #1). Same WAV the bomb-armed dialog uses. */
+    play_snd(SND_BOMB_ARM);
 }
 
 static SDL_Rect notice_btn_rect(void)
