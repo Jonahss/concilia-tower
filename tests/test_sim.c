@@ -2268,7 +2268,8 @@ static void test_bomb_blast(void)
     CHECK(tenant(out_side)->state != TENANT_ABANDONED,
           "a tenant fully right of cell t+20 survives");
     CHECK(tw.money == money0, "detonation charges no cash - the loss is the buildings");
-    CHECK(!sim.event.active && sim.event.type == EVENT_NONE, "blast ends the event");
+    CHECK(!sim.event.active && sim.event.type == EVENT_BOMB && !sim.event.caught,
+          "blast ends the event, leaving type/caught for the resolution notice");
 }
 
 /* Venues (VenueT seg_1180): show cycle, aging quotas, tiered income. */

@@ -9305,8 +9305,9 @@ int main(int argc, char *argv[])
             }
 
             /* Disaster events: announce onset and resolution in the feed.
-             * On the falling edge the sim leaves caught/damage_cost intact
-             * (only cleared when the next event starts), so we can read them. */
+             * On the falling edge the sim leaves type/caught/damage_cost
+             * intact (only cleared when the next event starts), so we can
+             * read them to pick the right resolution dialog. */
             if (game.sim.event.active && !prev_event_active) {
                 char buf[48];
                 if (game.sim.event.type == EVENT_FIRE)

@@ -3243,7 +3243,6 @@ void game_event_ransom(GameSim *sim, Tower *tower)
     tower->money -= ev->ransom_cost;
     sim->expenses_this_quarter += ev->ransom_cost;
     ev->caught = 1;
-    ev->type = EVENT_NONE;
     play_snd(SND_EVENT_OK);   /* #10015 ransom paid (10c8:123 pay branch) */
 }
 
@@ -3337,7 +3336,6 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
         printf("🧯 Fire out (origin floor %d, $%d damage)\n",
                ev->target_floor, ev->damage_cost);
         ev->active = 0;
-        ev->type = EVENT_NONE;
         ev->chopper_x = 0;
         /* Fire's own jump (10e8:02f2) is CONDITIONAL: snap to 4:00 PM only if
          * we're still before it — a burn that outlasts 4PM keeps its own time
@@ -3462,7 +3460,6 @@ void game_update_event(GameSim *sim, Tower *tower)
         if (guard_hunt_step_frame(sim, tower, left, right)) {
             ev->caught = 1;
             ev->active = 0;
-            ev->type = EVENT_NONE;
             ev->hunt.active = 0;
             printf("🛡️ Security caught the bomb on floor %d! "
                    "Crisis averted.\n", ev->target_floor);
@@ -3521,8 +3518,9 @@ void game_resolve_event(GameSim *sim, Tower *tower)
         game_clock_jump(sim, tower, 16);
     }
 
+    /* Leave ev->type/caught/damage_cost for the frontend's resolution
+     * notice — the next game_offer_* zeroes the whole EventState. */
     ev->active = 0;
-    ev->type = EVENT_NONE;
     ev->hunt.active = 0;
 }
 
