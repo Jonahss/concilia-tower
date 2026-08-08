@@ -509,8 +509,15 @@ typedef struct {
      * and VIP visits (dialogs 0xBB9/0xBBA/0xBBB/0xBC5/0xBCF/0xBD0), pausing
      * until dismissed. Text/button come straight from the dialog resource. */
     int             notice_modal;
+    int             quit_confirm;    /* the EXE's WM_CLOSE save prompt
+                                        (FileT 10d0:2a8e; strings survey
+                                        gap #5) */
+    GameSpeed       quit_saved_speed;
     char            notice_text[192];
     char            notice_btn[32];
+    uint16_t        notice_art;      /* sprite id of the dialog's DTMP art
+                                        (0x2700+idx | 0x8000), 0 = none —
+                                        bitmap survey 2026-08-08 */
     GameSpeed       notice_saved_speed;
 
     /* Route-loss confirmation (res 0x3ed): a Yes/No modal shown before a
@@ -5293,12 +5300,26 @@ static void render_disaster_modal(void)
                                "^0!\nEveryone should take emergency refuge!"),
                   "^0", num);
         ty = draw_text_wrapped(rep, text_x, ty, text_w, black) + 6;
-        format_money(FIRE_CHOPPER_COST, num, sizeof num);
-        str_subst(line, sizeof line,
-                  exe_dlg_text(0xBC4, 0, "Would you like to call an emergency "
-                               "fire crew?\nIt will cost $#000."),
-                  "$#000", num);
-        draw_text_wrapped(line, text_x, ty, text_w, black);
+        /* The crew offer carries the red twin-rotor chopper art 0x2711
+         * (DTMP companion of 0xBC4; bitmap survey 2026-08-08) — drawn in
+         * the left column under the fire icon, offer text beside it. */
+        {
+            Sprite *heli_art = sprites_find(&game.sprites, 0xA711);
+            int ox = wx + 14;
+            if (heli_art && heli_art->texture) {
+                SDL_Rect hd = { wx + 14, ty + 2, heli_art->w, heli_art->h };
+                SDL_RenderCopy(game.renderer, heli_art->texture, NULL, &hd);
+                ox = wx + 14 + heli_art->w + 10;
+            }
+            format_money(FIRE_CHOPPER_COST, num, sizeof num);
+            str_subst(line, sizeof line,
+                      exe_dlg_text(0xBC4, 0, "Would you like to call an "
+                                   "emergency fire crew?\nIt will cost "
+                                   "$#000."),
+                      "$#000", num);
+            draw_text_wrapped(line, ox, ty + 4,
+                              wx + DMODAL_W - 14 - ox, black);
+        }
     } else {
         /* Dialog 0xBCC: the blackmail note names the price but NOT the
          * floor — you pay blind. */
@@ -5325,6 +5346,10 @@ static void render_disaster_modal(void)
     }
 }
 
+static void show_notice_modal(const char *text, const char *btn);
+static void show_notice_modal_art(const char *text, const char *btn,
+                                  uint16_t art);
+
 static void disaster_close(void)
 {
     game.disaster_modal = 0;
@@ -5339,19 +5364,34 @@ static void disaster_do_proceed(void)
     game_event_proceed(&game.sim, &game.tower);
     char b[80];
     if (is_fire) {
-        /* Declined-crew dialog 0xBC6's line (strings survey 2026-08-08);
-         * the guards ARE the free response now (SetAllGuards(8)). */
-        if (game.sim.event.hunt.active == 2)
+        /* The EXE follows the declined offer with info dialog 0xBC6
+         * (strings survey 2026-08-08); the guards ARE the free response
+         * (SetAllGuards(8)). */
+        if (game.sim.event.hunt.active == 2) {
             snprintf(b, sizeof b,
                      "Security is attempting to quench the fire on floor %d",
                      fl);
-        else
+            disaster_close();
+            show_notice_modal(
+                exe_dlg_text(0xBC6, 0,
+                             "Security is attempting to quench the fire."),
+                exe_dlg_text(0xBC6, 1, "OK"));
+        } else {
             snprintf(b, sizeof b, "FIRE on floor %d - burning freely!", fl);
+            disaster_close();
+        }
     } else {
+        /* Bomb refused -> the EXE's 0xBCE send-off ("...Good luck..."
+         * [Hurry!]) — strings survey gap #1. */
         snprintf(b, sizeof b, "Security deployed - hunting the bomb!");
+        disaster_close();
+        show_notice_modal(
+            exe_dlg_text(0xBCE, 0,
+                         "Security forces have been deployed and are on "
+                         "their way to find the bomb.  Good luck..."),
+            exe_dlg_text(0xBCE, 1, "Hurry!"));
     }
     add_event_message(b);
-    disaster_close();
 }
 
 /* The paid path: $500k helicopters (fire) / the star-scaled ransom (bomb). */
@@ -5392,10 +5432,15 @@ static void disaster_modal_key(SDL_Keycode k)
 #define NOTICE_W 340
 #define NOTICE_H 140
 
-static void show_notice_modal(const char *text, const char *btn)
+/* Notice with the dialog's DTMP artwork (the original wires art into its
+ * event modals via the 0xFF04 companion resources: gold star 0x2716 on
+ * rating-ups, VIP limo 0x2712, ... — bitmap survey 2026-08-08). */
+static void show_notice_modal_art(const char *text, const char *btn,
+                                  uint16_t art)
 {
     snprintf(game.notice_text, sizeof game.notice_text, "%s", text);
     snprintf(game.notice_btn, sizeof game.notice_btn, "%s", btn);
+    game.notice_art = art;
     if (!game.notice_modal) {           /* don't clobber saved speed */
         game.notice_saved_speed = game.sim.speed;
         game.notice_modal = 1;
@@ -5407,23 +5452,48 @@ static void show_notice_modal(const char *text, const char *btn)
     play_snd(SND_BOMB_ARM);
 }
 
+static void show_notice_modal(const char *text, const char *btn)
+{
+    show_notice_modal_art(text, btn, 0);
+}
+
+/* Art makes the card taller/wider as needed (star art is 100x100). */
+static void notice_dims(int *w, int *h, Sprite **art)
+{
+    *art = game.notice_art ? sprites_find(&game.sprites, game.notice_art)
+                           : NULL;
+    *w = NOTICE_W + (*art ? (*art)->w + 14 : 0);
+    *h = NOTICE_H;
+    if (*art && (*art)->h + 72 > *h) *h = (*art)->h + 72;
+}
+
 static SDL_Rect notice_btn_rect(void)
 {
-    int wx = (game.screen_w - NOTICE_W) / 2;
-    int wy = (game.screen_h - NOTICE_H) / 2;
-    SDL_Rect r = { wx + (NOTICE_W - 110) / 2, wy + NOTICE_H - 40, 110, 26 };
+    int w, h; Sprite *art;
+    notice_dims(&w, &h, &art);
+    int wx = (game.screen_w - w) / 2;
+    int wy = (game.screen_h - h) / 2;
+    SDL_Rect r = { wx + (w - 110) / 2, wy + h - 40, 110, 26 };
     return r;
 }
 
 static void render_notice_modal(void)
 {
     if (!game.notice_modal) return;
-    int wx = (game.screen_w - NOTICE_W) / 2;
-    int wy = (game.screen_h - NOTICE_H) / 2;
-    draw_win31_rect(wx, wy, NOTICE_W, NOTICE_H, 1);
+    int w, h; Sprite *art;
+    notice_dims(&w, &h, &art);
+    int wx = (game.screen_w - w) / 2;
+    int wy = (game.screen_h - h) / 2;
+    draw_win31_rect(wx, wy, w, h, 1);
     SDL_Color black = { 0, 0, 0, 255 };
-    draw_text_wrapped(game.notice_text, wx + 18, wy + 16,
-                      NOTICE_W - 36, black);
+    int tx = wx + 18;
+    if (art && art->texture) {
+        SDL_Rect ad = { wx + 14, wy + 16, art->w, art->h };
+        SDL_RenderCopy(game.renderer, art->texture, NULL, &ad);
+        tx = wx + 14 + art->w + 12;
+    }
+    draw_text_wrapped(game.notice_text, tx, wy + 16,
+                      wx + w - 18 - tx, black);
     draw_modal_button(notice_btn_rect(), game.notice_btn);
 }
 
@@ -5431,6 +5501,44 @@ static void notice_close(void)
 {
     game.notice_modal = 0;
     game.sim.speed = game.notice_saved_speed;
+}
+
+/* ---- Quit save-prompt (the EXE's WM_CLOSE FileT flow) ---- */
+#define QUITC_W 320
+#define QUITC_H 128
+
+static SDL_Rect quitc_btn(int i)   /* 0 Save&Quit / 1 Quit / 2 Cancel */
+{
+    int wx = (game.screen_w - QUITC_W) / 2;
+    int wy = (game.screen_h - QUITC_H) / 2;
+    return (SDL_Rect){ wx + 14 + i * 100, wy + QUITC_H - 40, 92, 26 };
+}
+
+static void render_quit_confirm(void)
+{
+    if (!game.quit_confirm) return;
+    int wx = (game.screen_w - QUITC_W) / 2;
+    int wy = (game.screen_h - QUITC_H) / 2;
+    draw_win31_rect(wx, wy, QUITC_W, QUITC_H, 1);
+    SDL_Color black = { 0, 0, 0, 255 };
+    draw_text_wrapped("Save the tower before quitting?",
+                      wx + 18, wy + 20, QUITC_W - 36, black);
+    draw_modal_button(quitc_btn(0), "Save & Quit");
+    draw_modal_button(quitc_btn(1), "Quit");
+    draw_modal_button(quitc_btn(2), "Cancel");
+}
+
+static void quit_confirm_click(int mx, int my)
+{
+    if (point_in_rect(mx, my, quitc_btn(0))) {
+        game_save(&game.sim, &game.tower, save_path());
+        game.running = 0;
+    } else if (point_in_rect(mx, my, quitc_btn(1))) {
+        game.running = 0;
+    } else if (point_in_rect(mx, my, quitc_btn(2))) {
+        game.quit_confirm = 0;
+        game.sim.speed = game.quit_saved_speed;
+    }
 }
 
 /* ---- Route-loss confirmations (res 0x3ed, text verbatim) ----
@@ -5834,7 +5942,20 @@ static const char *tenant_custom_name(uint16_t id)
 static void tenant_set_name(uint16_t id, const char *s)
 {
     Tenant *t = tower_tenant(&game.tower, id);
-    if (t) snprintf(t->name, sizeof t->name, "%s", s);
+    if (!t) return;
+    /* The EXE caps NAMED TENANTS at 20, like people (0x3ED idx 6;
+     * strings survey gap #8 — the port's cap was person-only). */
+    if (!t->name[0]) {
+        int named = 0;
+        for (int i = 0; i < game.tower.tenant_count; i++)
+            if (game.tower.tenants[i].name[0]) named++;
+        if (named >= 20) {
+            add_event_message(exe_str(0x3ED, 6,
+                                      "You may only name 20 tenants."));
+            return;
+        }
+    }
+    snprintf(t->name, sizeof t->name, "%s", s);
 }
 static void tenant_clear_name(uint16_t id)   /* the rename dialog's Delete */
 {
@@ -5902,6 +6023,9 @@ static void inspect_title(const Tenant *t, char *buf, int n)
     const char *custom = tenant_custom_name(t->id);
     const char *base = custom ? custom : retail_variant_name(t);
     if (!base) base = tower_item_name(t->type);
+    /* Burn rubble names itself (bank 0x2C6 idx 47; strings survey). */
+    if (t->state == TENANT_ABANDONED && t->burned)
+        base = exe_str(0x2C6, 47, "Burned Area");
     if (t->floor == 0)     snprintf(buf, n, "%s  -  Lobby", base);
     else if (t->floor < 0) snprintf(buf, n, "%s  -  B%d", base, -t->floor);
     else                   snprintf(buf, n, "%s  -  %dF", base, t->floor);
@@ -6783,11 +6907,19 @@ static int name_editor_click(int mx, int my)
 }
 static void name_editor_textinput(const char *txt)
 {
-    for (const char *p = txt; *p; p++)
-        if (game.name_edit_len < 15 && (unsigned char)*p >= 32) {
-            game.name_edit_buf[game.name_edit_len++] = *p;
-            game.name_edit_buf[game.name_edit_len] = 0;
+    for (const char *p = txt; *p; p++) {
+        if ((unsigned char)*p < 32) continue;
+        if (game.name_edit_len >= 15) {
+            /* The EXE says so instead of silently ignoring the keys
+             * (0x3ED idx 3; strings survey nit #14). */
+            add_event_message(exe_str(0x3ED, 3,
+                "That name is too long.  Names can have up to 15 "
+                "characters."));
+            return;
         }
+        game.name_edit_buf[game.name_edit_len++] = *p;
+        game.name_edit_buf[game.name_edit_len] = 0;
+    }
 }
 static void name_editor_key(SDL_Keycode k)
 {
@@ -6829,8 +6961,9 @@ static void render_movie_chooser(void)
     stats_label(d.x + 12, d.y + 32, now, ink);
 
     long money = game.tower.money;
-    draw_dlg_button(movie_btn_hit(d), "Hit movie          $300,000", money >= MOVIE_COST_HIT);
-    draw_dlg_button(movie_btn_ord(d), "Ordinary movie   $150,000", money >= MOVIE_COST_ORDINARY);
+    /* The EXE's own button wording (strings survey fidelity nit). */
+    draw_dlg_button(movie_btn_hit(d), "Show a new movie: $300,000", money >= MOVIE_COST_HIT);
+    draw_dlg_button(movie_btn_ord(d), "Show a classic: $150,000", money >= MOVIE_COST_ORDINARY);
     draw_dlg_button(movie_btn_cancel(d), "Cancel", 1);
 }
 static int movie_chooser_click(int mx, int my)
@@ -7100,6 +7233,7 @@ static void render(void)
     render_disaster_modal();   /* on top of everything — it's modal */
     render_notice_modal();     /* resolution/VIP notices, same layer */
     render_route_confirm();    /* likewise */
+    render_quit_confirm();     /* topmost — quitting outranks all */
 
     SDL_RenderPresent(game.renderer);
 }
@@ -7148,12 +7282,15 @@ static int elev_add_car_at(int x, int floor)
             continue;
         if (fidx < s->lo || fidx > s->hi) continue;   /* outside span = cap/extend */
         if (s->num_cars >= CARS_PER_SHAFT) {
-            printf("Shaft x=%d already at the max %d cars\n", x, CARS_PER_SHAFT);
+            /* CanAddCar's msg 24 (0x3EB idx 23) — surfaced to the player,
+             * not just stdout (strings survey gap #6). */
+            add_event_message(exe_str(0x3EB, 23, "No more cars in this shaft"));
             return 1;
         }
         int cost = elv_car_cost(s->type);
         if (game.tower.money < cost) {
-            printf("Can't afford a car ($%d)\n", cost);
+            add_event_message(exe_str(0x3EB, 6,
+                                      "Not enough money for construction"));
             return 1;
         }
         game.tower.money -= cost;
@@ -7637,7 +7774,14 @@ static void execute_menu_item(const MenuItem *item)
         printf("Screenshot saved\n");
         break;
     }
-    case ACT_QUIT: game.running = 0; break;
+    case ACT_QUIT:
+        /* The EXE prompts to save before quitting (FileT save-prompt on
+         * WM_CLOSE; strings survey gap #5) — instant exit lost unsaved
+         * progress. Window-close (SDL_QUIT) still exits directly. */
+        game.quit_confirm = 1;
+        game.quit_saved_speed = game.sim.speed;
+        game.sim.speed = SPEED_PAUSED;
+        break;
     case ACT_NEW_TOWER:
         /* Start over (the original's New Tower command). The current game
          * is NOT auto-saved — same as the EXE, which only asks on quit. */
@@ -7795,6 +7939,25 @@ static void cap_drag_track(void)
 /* ---------- Input handling ---------- */
 static void handle_event(SDL_Event *ev)
 {
+    /* Quit save-prompt: fully modal, topmost. */
+    if (game.quit_confirm) {
+        switch (ev->type) {
+        case SDL_QUIT: game.running = 0; break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (ev->button.button == SDL_BUTTON_LEFT)
+                quit_confirm_click(ev->button.x, ev->button.y);
+            break;
+        case SDL_KEYDOWN:
+            if (ev->key.keysym.sym == SDLK_ESCAPE) {
+                game.quit_confirm = 0;
+                game.sim.speed = game.quit_saved_speed;
+            }
+            break;
+        default: break;
+        }
+        return;
+    }
+
     /* The route-loss confirm is fully modal, like the EXE's MessageBox. */
     if (game.route_confirm) {
         switch (ev->type) {
@@ -7902,7 +8065,9 @@ static void handle_event(SDL_Event *ev)
             game.running = 0;
             break;
         case SDLK_q:
-            game.running = 0;
+            game.quit_confirm = 1;           /* same save prompt as the menu */
+            game.quit_saved_speed = game.sim.speed;
+            game.sim.speed = SPEED_PAUSED;
             break;
         
         /* Simulation speed */
@@ -9731,11 +9896,26 @@ int main(int argc, char *argv[])
              * checkout), 0xBBB (unhappy) as notice modals — with the EXE's
              * button labels — plus a short feed log line. */
             if (game.sim.vip_notice) {
-                if (game.sim.vip_notice == 1) {
-                    show_notice_modal(
+                if (game.sim.vip_notice >= 1000) {
+                    /* Reservation announcement (dialog 0xBB8, ^0 = the
+                     * suite floor — strings survey gap #3). */
+                    char rb[160], num[16];
+                    snprintf(num, sizeof num, "%d",
+                             game.sim.vip_notice - 1000);
+                    str_subst(rb, sizeof rb,
+                              exe_dlg_text(0xBB8, 0,
+                                           "A VIP has made reservations "
+                                           "for the Hotel Suite on floor "
+                                           "^0."),
+                              "^0", num);
+                    show_notice_modal(rb, exe_dlg_text(0xBB8, 1, "OK"));
+                    add_event_message(rb);
+                } else if (game.sim.vip_notice == 1) {
+                    /* Black limo + red carpet 0x2712 (DTMP of 0xBB9). */
+                    show_notice_modal_art(
                         exe_dlg_text(0xBB9, 1,
                                      "A VIP has arrived at your Tower."),
-                        exe_dlg_text(0xBB9, 0, "Oh No!"));
+                        exe_dlg_text(0xBB9, 0, "Oh No!"), 0xA712);
                     add_event_message("A VIP has arrived at your Tower.");
                 } else if (game.sim.vip_notice == 2) {
                     char buf[192];
@@ -9805,6 +9985,26 @@ int main(int argc, char *argv[])
                 game.sim.medical_nag = 0;
             }
 
+            /* "Income from X" ticker (bank 0x3EF, InfoUI 1118:0a49;
+             * strings survey gap #4) — one feed line per category per
+             * day so quarterly rent doesn't spam the log. */
+            {
+                unsigned tick_m = game_income_ticker_take();
+                static int shown_day[8] =
+                    { -1, -1, -1, -1, -1, -1, -1, -1 };
+                static const char *TICK_FB[8] = {
+                    "Income from Office", "Income from Hotel",
+                    "Income from Condo sale", "Income from Restaurant",
+                    "Income from Shop", "Income from Fast Food",
+                    "Income from Movie Theater", "Income from Party Hall" };
+                for (int i = 0; tick_m && i < 8; i++) {
+                    if (!(tick_m & (1u << i))) continue;
+                    if (shown_day[i] == game.tower.day) continue;
+                    shown_day[i] = game.tower.day;
+                    add_event_message(exe_str(0x3EF, i, TICK_FB[i]));
+                }
+            }
+
             /* Star promotion: the EXE pops its congratulations dialog
              * (0xBD6..0xBDA — 2..5 stars + Tower), a plain message box.
              * The old parchment "certificate" card was a port invention
@@ -9813,11 +10013,14 @@ int main(int argc, char *argv[])
             if (game.sim.pending_star_up) {
                 int st = game.sim.pending_star_up;
                 st = st < 2 ? 2 : st > 6 ? 6 : st;
-                show_notice_modal(
+                /* Gold-star art 0x2716 rides every rating-up dialog
+                 * (DTMP companions of 0xBD6..0xBDA; bitmap survey). */
+                show_notice_modal_art(
                     exe_dlg_text((uint16_t)(0xBD6 + st - 2), 0,
                                  "Congratulations!\nYour tower has been "
                                  "given a new Star Rating!"),
-                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 1, "OK"));
+                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 1, "OK"),
+                    0xA716);
                 game.sim.pending_star_up = 0;
             }
 

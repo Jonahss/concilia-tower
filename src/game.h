@@ -947,6 +947,7 @@ void game_resolve_event(GameSim *sim, Tower *tower);
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
 int  game_fire_call_crew(GameSim *sim, Tower *tower);
+unsigned game_income_ticker_take(void);   /* bank-0x3EF bitmask, clears */
 /* Forward clock jump within the day (EXE EventCleanup: caught bomb ->
  * 4PM). Crossed quarter boundaries still close out their books. */
 void game_clock_jump(GameSim *sim, Tower *tower, int hour);

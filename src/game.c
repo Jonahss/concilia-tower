@@ -592,11 +592,44 @@ int game_fin_expense_cat(ItemType t)
 /* Bank income into the per-category quarterly ledger. Revenue types land in
  * their category; anything else (parking, bonuses) goes to Other Income. This
  * is called next to every real income bank, so the buckets sum to the flow. */
+/* Pending "Income from X" ticker lines by bank-0x3EF index — ephemeral
+ * UI state, deliberately file-static (not saved). */
+static unsigned g_income_ticker_pending;
+
 static void fin_bank_income(GameSim *sim, ItemType t, long amt)
 {
     int c = game_fin_income_cat(t);
     if (c >= 0) sim->fin_income_q[c] += amt;
     else        sim->fin_other_income_q += amt;
+    /* The EXE flashes "Income from X" in the status bar as each lump
+     * books (bank 0x3EF via SetStatusMsgConditional 1118:0a49; strings
+     * survey gap #4). Queue the bank index for the frontend, which
+     * rate-limits the feed to one line per category per day. Bank
+     * order: Office/Hotel/Condo sale/Restaurant/Shop/Fast Food/Movie/
+     * Party Hall. */
+    if (c >= 0 && amt > 0) {
+        int idx = -1;
+        switch (t) {
+        case ITEM_OFFICE:       idx = 0; break;
+        case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN:
+        case ITEM_HOTEL_SUITE:  idx = 1; break;
+        case ITEM_CONDO:        idx = 2; break;
+        case ITEM_RESTAURANT:   idx = 3; break;
+        case ITEM_SHOP:         idx = 4; break;
+        case ITEM_FAST_FOOD:    idx = 5; break;
+        case ITEM_CINEMA:       idx = 6; break;
+        case ITEM_PARTY_HALL:   idx = 7; break;
+        default: break;
+        }
+        if (idx >= 0) g_income_ticker_pending |= 1u << idx;
+    }
+}
+
+unsigned game_income_ticker_take(void)
+{
+    unsigned m = g_income_ticker_pending;
+    g_income_ticker_pending = 0;
+    return m;
 }
 
 static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *out_expenses)
@@ -1799,6 +1832,25 @@ void game_update(GameSim *sim, Tower *tower)
                 sim->vip_visiting = -1;      /* armed, no guest yet */
                 sim->vip_last_day = tower->day;
                 people_vip_arm(1);
+                /* The reservation announcement (dialog 0xBB8, VipT
+                 * 1240:00C0 — strings survey gap #3) names a suite
+                 * floor. The port adopts whichever suite hosts first
+                 * that night, so the named floor is a candidate hint:
+                 * the first bookable suite. vip_notice 1000+floor
+                 * encodes it for the frontend (values 1..3 taken;
+                 * no new save field). */
+                {
+                    int rf = 0;
+                    for (int i = 0; i < tower->tenant_count; i++) {
+                        Tenant *t = &tower->tenants[i];
+                        if (t->type == ITEM_HOTEL_SUITE &&
+                            t->state == TENANT_OCCUPIED && t->demand_armed) {
+                            rf = t->floor;
+                            break;
+                        }
+                    }
+                    sim->vip_notice = 1000 + rf;
+                }
                 printf("👔 A VIP has made reservations for a Hotel Suite. (Day %d)\n",
                        tower->day);
             }

@@ -1379,12 +1379,18 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
 
 const char *tower_item_name(ItemType type)
 {
+    /* Wording per the EXE's item-name bank 0x2C6 (strings survey
+     * 2026-08-08): Single/Twin Room, Retail Shop, Movie Theater,
+     * Medical Center, Metro Station — these title every info window. */
     static const char *names[] = {
-        "None", "Lobby", "Floor", "Office", "Condo", "Hotel(S)", "Hotel(T)",
-        "Hotel(Suite)", "Restaurant", "Fast Food", "Shop", "Cinema", "Party Hall",
-        "Metro", "Parking", "Cathedral", "Medical", "Security", "Recycling",
+        "None", "Lobby", "Floor", "Office", "Condo", "Single Room",
+        "Twin Room", "Hotel Suite", "Restaurant", "Fast Food",
+        "Retail Shop", "Movie Theater", "Party Hall",
+        "Metro Station", "Parking Space", "Cathedral", "Medical Center",
+        "Security", "Recycling Center",
         "Stairs", "Escalator", "Elevator",
-        "Service Elev", "Express Elev", "Housekeeping", "Ramp"
+        "Service Elevator", "Express Elevator", "Housekeeping",
+        "Parking Ramp"
     };
     if (type >= 0 && type < ITEM_TYPE_COUNT) return names[type];
     return "Unknown";
