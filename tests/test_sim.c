@@ -153,19 +153,21 @@ static void test_housekeeping(void)
     if (!room) { printf("  FAIL no hotel tenant\n"); fails++; return; }
 
     /* Let construction finish and several day cycles run; the room should
-     * cycle dirty (after checkout) -> cleaned (housekeeping) each day.
-     * Cleaning can land in the same tick batch as checkout, so observe it
-     * via the housekeeper's quota counter rather than the transient flag. */
-    Tenant *hku = tenant(hk);
-    int saw_cleaned = 0, saw_hosted_again = 0;
+     * cycle dirty (after checkout) -> cleaned each day. With the maid
+     * system the clean is a real person's trip: a maid spawns at the
+     * unit, walks/rides to the room's floor, and flips the condition at
+     * ARRIVAL (referee 2026-08-07) — so observe the dirty->clean edge. */
+    int saw_dirty = 0, saw_cleaned = 0, saw_hosted_again = 0;
     run_days(1);
     for (int i = 0; i < GAME_DAY_TICKS * 4; i++) {
         game_update(&sim, &tw);
-        if (hku->cleaned_today > 0) saw_cleaned = 1;
+        if (room->condition == ROOM_DIRTY) saw_dirty = 1;
+        if (saw_dirty && room->condition == ROOM_CLEAN) saw_cleaned = 1;
         if (saw_cleaned && room->state == TENANT_OCCUPIED &&
             sim.time_of_day == TOD_NIGHT) saw_hosted_again = 1;
     }
-    CHECK(saw_cleaned, "housekeeping cleaned a checked-out room");
+    CHECK(saw_dirty, "checkout left the room dirty");
+    CHECK(saw_cleaned, "a maid cleaned the checked-out room");
     CHECK(saw_hosted_again, "cleaned room hosted guests again");
 
     /* Lose housekeeping: after the next checkout the room sticks dirty —
@@ -190,6 +192,55 @@ static void test_housekeeping(void)
     run_days(4);
     CHECK(room->condition == ROOM_INFESTED,
           "3 days of neglect -> cockroach infestation");
+}
+
+/* The maid transport rules (referee 2026-08-07): staff ride SERVICE
+ * elevators only — a floor served only by a standard elevator is
+ * unreachable for maids (the service net is NOT a superset of public) —
+ * and jobs only start before 4 PM. */
+static void test_maid_service_net(void)
+{
+    printf("maid service network:\n");
+    fresh();
+    uint16_t hk    = fplace(ITEM_HOUSEKEEPING, 1, BX + 30);
+    place(ITEM_STAIRS, 0, BX + 26);                     /* unit is staffed */
+    uint16_t hotel = fplace(ITEM_HOTEL_SINGLE, 7, BX);
+    for (int f = 0; f <= 7; f++) place(ITEM_ELEVATOR_SHAFT, f, BX + 14);
+    Tenant *room = tenant(hotel);
+    if (!room || !tenant(hk)) { printf("  FAIL placement\n"); fails++; return; }
+    run_days(2);                                        /* built + settled */
+
+    /* Force the test geometry: a dirty room high up, mid-morning. */
+    sim.hour = 9; sim.quarter = 0; sim.tick = game_clock_to_tick(9, 0);
+    room->condition = ROOM_DIRTY;
+    for (int i = 0; i < 700 && room->condition == ROOM_DIRTY; i++)
+        game_update(&sim, &tw);
+    CHECK(room->condition == ROOM_DIRTY,
+          "standard elevator alone: maids can't reach floor 7");
+
+    /* A service shaft opens the route — the same dirty room gets done.
+     * (x = BX+41: service shafts need side clearance; closer spots are
+     * rejected by the both-sides rule.) */
+    for (int f = 0; f <= 7; f++) place(ITEM_ELEVATOR_SERVICE, f, BX + 41);
+    sim.hour = 9; sim.quarter = 0; sim.tick = game_clock_to_tick(9, 0);
+    for (int i = 0; i < 3000 && room->condition == ROOM_DIRTY; i++)
+        game_update(&sim, &tw);
+    CHECK(room->condition == ROOM_CLEAN,
+          "service elevator added: a maid rides up and cleans");
+
+    /* After 4 PM no new jobs start (frame_time < 0x5DC gate). */
+    room->condition = ROOM_DIRTY;
+    {
+        int t17 = game_clock_to_tick(17, 0);
+        sim.hour = 17;
+        sim.quarter = (uint8_t)(t17 / GAME_TICKS_PER_QUARTER);
+        sim.tick = t17 % GAME_TICKS_PER_QUARTER;
+    }
+    for (int i = 0; i < 700 && room->condition == ROOM_DIRTY; i++) {
+        game_update(&sim, &tw);
+        if (sim.hour < 7) break;    /* stop at midnight, before day wrap */
+    }
+    CHECK(room->condition == ROOM_DIRTY, "no new cleans after 4 PM");
 }
 
 static void test_hotel_infestation(void)
@@ -349,7 +400,7 @@ static void test_commute_elevator(void)
     int arrived = 0;
     for (int frame = 0; frame < 2000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         /* a salesman may already be off on his lobby errand — he still
          * counts as having commuted in */
         arrived = people_at(office, f5, PERSON_AT_DEST);
@@ -369,7 +420,7 @@ static void test_commute_elevator(void)
     int gone = 0;
     for (int frame = 2000; frame < 6000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (sim.people.population_now == 0) { gone = 1; break; }
     }
     CHECK(gone, "workers went home in the evening and despawned");
@@ -404,7 +455,7 @@ static void test_metro_visitors(void)
     int visitors = 0;
     for (int frame = 0; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         visitors = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
@@ -421,11 +472,11 @@ static void test_metro_visitors(void)
     uint8_t pool_before = sim.people.spawned[mi];
     CHECK(pool_before > 0, "station pool counter advanced");
     people_update(&sim.people, &tw, 3001, TOD_EVENING, 17,
-                  sim.reach_public, sim.reach_service);
+                  sim.reach_public, sim.reach_service, 0);
     CHECK(sim.people.spawned[mi] == pool_before,
           "5PM phase flip keeps the day's pool count");
     people_update(&sim.people, &tw, 3002, TOD_DAWN, 5,
-                  sim.reach_public, sim.reach_service);
+                  sim.reach_public, sim.reach_service, 0);
     CHECK(sim.people.spawned[mi] == 0, "dawn wipe resets the pool");
 
     /* night: the metro stops feeding the tower */
@@ -434,7 +485,7 @@ static void test_metro_visitors(void)
     int night = 0;
     for (int frame = 0; frame < 600; frame++)
         people_update(&sim.people, &tw, frame, TOD_NIGHT, 23,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     for (int i = 0; i < sim.people.people_high; i++) {
         Person *p = &sim.people.people[i];
         if (p->home_tenant == shop && p->entry_floor == mf) night++;
@@ -477,7 +528,7 @@ static void test_parking_cars(void)
     int via_park = 0, via_lobby = 0;
     for (int frame = 0; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         via_park = via_lobby = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
@@ -508,7 +559,7 @@ static void test_parking_cars(void)
     int drove = 0;
     for (int frame = 0; frame < 4000 && !drove; frame++) {
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
             if (p->home_tenant == ste && p->entry_floor == pf2) drove = 1;
@@ -525,7 +576,7 @@ static void test_parking_cars(void)
     game_parking_recompute(&sim, &tw);
     for (int frame = 0; frame < 4000; frame++)
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     int guests = 0;
     for (int i = 0; i < sim.people.people_high; i++)
         if (sim.people.people[i].home_tenant == ste) guests++;
@@ -549,14 +600,14 @@ static void test_medical_trip(void)
     int frame = 0;
     for (; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (people_at(office, f5, PERSON_AT_DEST) >= 4) break;
     }
     people_medical_dispatch(&sim.people, &tw, 5, 2);
     int at_clinic = -1;
     for (; frame < 6000 && at_clinic < 0; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         for (int i = 0; i < sim.people.people_high; i++)
             if (sim.people.people[i].home_tenant == office &&
                 sim.people.people[i].errand == 6 &&
@@ -569,7 +620,7 @@ static void test_medical_trip(void)
     int back = 0;
     for (; frame < 12000 && !back; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         const Person *p = &sim.people.people[at_clinic];
         back = p->errand == 0 && p->state == PERSON_AT_DEST &&
                p->cur_floor == (uint8_t)f5;
@@ -604,19 +655,19 @@ static void test_condo_cycle(void)
     int frame = 0, kid = 0, adult = 0;
     for (; frame < 4000 && !kid; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         kid = condo_member_home(condo, f5, 2);
     }
     CHECK(kid, "the kid rode home in the afternoon (member 2)");
     for (; frame < 9000 && !adult; frame++) {
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         adult = condo_member_home(condo, f5, 0);
     }
     CHECK(adult, "an adult came home in the evening (member 0)");
     for (int k = 0; k < 600; k++, frame++)
         people_update(&sim.people, &tw, frame, TOD_NIGHT, 23,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     CHECK(condo_member_home(condo, f5, 2) && condo_member_home(condo, f5, 0),
           "both residents stay home overnight");
     {
@@ -629,7 +680,7 @@ static void test_condo_cycle(void)
     int gone = 0;
     for (int k = 0; k < 6000 && !gone; k++, frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         gone = 1;
         for (int i = 0; i < sim.people.people_high; i++)
             if (sim.people.people[i].home_tenant == condo) gone = 0;
@@ -661,7 +712,7 @@ static void test_vip_visit(void)
     int tagged = -1;
     for (int frame = 0; frame < 4000 && tagged < 0; frame++) {
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         int vt = people_vip_take_tagged();
         if (vt >= 0) tagged = vt;
     }
@@ -675,7 +726,7 @@ static void test_vip_visit(void)
     for (int frame = 4000; frame < 12000 &&
                            sim.people.people[tagged].home_tenant; frame++)
         people_update(&sim.people, &tw, frame, TOD_DAWN, 6,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     CHECK(sim.people.people[tagged].home_tenant == 0, "the VIP checked out");
     CHECK(people_vip_take_result() == 1, "calm stay: verdict favorable");
     people_vip_arm(0);
@@ -697,7 +748,7 @@ static void test_walk_rules(void)
     int arrived = 0, tagged = 0, stray = 0;
     for (int frame = 0; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         /* rider attribution: WALKING people carry the id of the
          * escalator they're on (feeds the inspect rider list) */
         for (int i = 0; i < sim.people.people_high; i++) {
@@ -730,7 +781,7 @@ static void test_walk_rules(void)
     Tenant *t = tenant(office);
     for (int frame = 0; frame < 600; frame++)
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     CHECK(people_at(office, f5, PERSON_AT_DEST) == 0,
           "5 stair flights exceed the walk budget");
     CHECK(sim.people.trips_failed > 0, "failed trips recorded");
@@ -754,7 +805,7 @@ static void test_errand_warning_watchdog(void)
     (void)people_take_noroute_msg();               /* drain */
     for (int frame = 0; frame < 400; frame++)
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     const char *msg = people_take_noroute_msg();
     CHECK(msg && strstr(msg, "need a path to Floor"),
           "no-route trip produced the floor-pair warning");
@@ -774,7 +825,7 @@ static void test_errand_warning_watchdog(void)
     int frame = 0, present = 0;
     for (; frame < 3000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         present = people_at(office, f5, PERSON_AT_DEST);
         for (int i = 0; i < sim.people.people_high; i++)
             if (sim.people.people[i].home_tenant == office &&
@@ -788,7 +839,7 @@ static void test_errand_warning_watchdog(void)
     int at_lobby = 0;
     for (; frame < 6000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 12,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         at_lobby = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
             const Person *p = &sim.people.people[i];
@@ -802,7 +853,7 @@ static void test_errand_warning_watchdog(void)
     int back = 0;
     for (; frame < 12000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         back = 0;
         for (int i = 0; i < sim.people.people_high; i++) {
             const Person *p = &sim.people.people[i];
@@ -830,7 +881,7 @@ static void test_errand_warning_watchdog(void)
     people_join_queue(&sim.people, 0, g, 1, 0);
     int failed_before = sim.people.trips_failed;
     people_update(&sim.people, &tw, 301, TOD_MORNING, 9,
-                  sim.reach_public, sim.reach_service);
+                  sim.reach_public, sim.reach_service, 0);
     CHECK(p->state == PERSON_AT_DEST, "watchdog: gave up after 300 frames");
     CHECK(s->stop[g].up_count == 0, "watchdog: pulled out of the ring");
     CHECK(sim.people.trips_failed == failed_before + 1,
@@ -868,9 +919,9 @@ static void test_queue_and_stress(void)
     CHECK(s->up_call_car[g] == 0,
           "parked car at the call floor: no call assigned");
     people_update(&sim.people, &tw, 1, 1, 9, sim.reach_public,
-                  sim.reach_service);
+                  sim.reach_service, 0);
     people_update(&sim.people, &tw, 2, 1, 9, sim.reach_public,
-                  sim.reach_service);
+                  sim.reach_service, 0);
     CHECK(s->car[0].passengers > 0,
           "parked car boarded walk-ups without a call");
 }
@@ -927,7 +978,7 @@ static void test_elevator_dialog(void)
     s->car[0].door_timer = 1;          /* doors closing, no work anywhere */
     for (int t = 0; t < 200; t++) people_update(&sim.people, &tw, t, 1, 9,
                                                sim.reach_public,
-                                               sim.reach_service);
+                                               sim.reach_service, 0);
     CHECK(s->car[0].floor == f3, "idle car returned to its home floor");
 
     /* settings survive a layout rebuild (shaft extended one floor) */
@@ -1090,7 +1141,7 @@ static void test_shuttle_and_patience(void)
     int doors_at_f3_going_up = 0, reached_top = 0, served_f3_after = 0;
     for (int t = 0; t < 600; t++) {
         people_update(&sim.people, &tw, t, 1, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (!reached_top && c->floor == f3 && c->door_timer)
             doors_at_f3_going_up = 1;
         if (c->floor == f6) reached_top = 1;
@@ -1110,7 +1161,7 @@ static void test_shuttle_and_patience(void)
     int held = 0;
     for (int t = 0; t < 30; t++) {
         people_update(&sim.people, &tw, 1000 + t, 1, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (c->door_timer == 1) held++;
     }
     CHECK(held > 20, "patience holds the doors open at the lobby");
@@ -1123,7 +1174,7 @@ static void test_shuttle_and_patience(void)
     int open_ticks = 0;
     for (int t = 0; t < 30; t++) {
         people_update(&sim.people, &tw, 2000 + t, 1, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (c->floor == f3 && c->door_timer) open_ticks++;
     }
     CHECK(open_ticks <= DOOR_TICKS_TEST,
@@ -1148,7 +1199,7 @@ static void test_patrons_and_staff(void)
     int seen = 0;
     for (int frame = 0; frame < 3000 && seen < 5; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (people_at(ff, f2, PERSON_AT_DEST) > seen)
             seen = people_at(ff, f2, PERSON_AT_DEST);
     }
@@ -1156,7 +1207,7 @@ static void test_patrons_and_staff(void)
     int gone = 0;
     for (int frame = 1200; frame < 6000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (sim.people.population_now == 0) { gone = 1; break; }
     }
     CHECK(gone, "patrons finished their visit and left");
@@ -1180,7 +1231,7 @@ static void test_patrons_and_staff(void)
     int f2s = floor_to_index(2);
     for (int frame = 0; frame < 3000 && !rode; frame++) {
         people_update(&sim.people, &tw, frame, TOD_DAWN, 6,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         for (int i = 0; i < sim.people.people_high; i++) {
             Person *p = &sim.people.people[i];
             if (p->home_tenant != hk || !p->service) continue;
@@ -1534,7 +1585,7 @@ static void test_occupancy_lifecycle(void)
     int relet = 0;
     for (int frame = 0; frame < 6000 && !relet; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         game_relet_arrivals(&sim, &tw);
         relet = r->state == TENANT_OCCUPIED;
     }
@@ -1775,7 +1826,7 @@ static void test_schedules(void)
     int homed = 0;
     for (int i = 0; i < 400; i++) {
         people_update(&sim.people, &tw, i, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (s->car[0].floor == s->home[0]) homed = 1;
     }
     CHECK(homed, "idle shuttle car returns HOME, not to the shaft's end");
@@ -1790,7 +1841,7 @@ static void test_schedules(void)
         /* afternoon: the salesman's return leg supplies boarding traffic
          * (morning would leave him parked at the lobby until 13:00) */
         people_update(&sim.people, &tw, frame, TOD_AFTERNOON, 14,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         if (s->car[0].hold_timer) held = 1;
         arrived = people_at(office, f5, PERSON_AT_DEST);
         for (int i = 0; i < sim.people.people_high; i++)
@@ -3172,7 +3223,7 @@ static void test_transfer_tables(void)
     int arrived = 0;
     for (int frame = 0; frame < 8000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         arrived = people_at(office, f18, PERSON_AT_DEST);
         if (arrived > 0 && sim.people.queued_now == 0 &&
             sim.people.riding_now == 0) break;
@@ -3188,7 +3239,7 @@ static void test_transfer_tables(void)
     long failed0 = sim.people.trips_failed;
     for (int frame = 8000; frame < 10000; frame++)
         people_update(&sim.people, &tw, frame, TOD_EVENING, 18,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     CHECK(sim.people.trips_failed > failed0,
           "toggled-off transfer stop severs the route home");
 
@@ -3212,7 +3263,7 @@ static void test_transfer_tables(void)
     arrived = 0;
     for (int frame = 0; frame < 8000; frame++) {
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
         arrived = people_at(office, f17, PERSON_AT_DEST);
         if (arrived > 0) break;
     }
@@ -3240,7 +3291,7 @@ static void test_transfer_tables(void)
     (void)people_take_noroute_msg();               /* drain the latch */
     for (int frame = 0; frame < 1500; frame++)
         people_update(&sim.people, &tw, frame, TOD_MORNING, 9,
-                      sim.reach_public, sim.reach_service);
+                      sim.reach_public, sim.reach_service, 0);
     CHECK(people_at(office, floor_to_index(40), PERSON_AT_DEST) == 0,
           "...but nobody arrives: two transfers exceed the depth limit");
     CHECK(sim.people.trips_failed > 0, "two-transfer trips fail as no-route");
@@ -3473,6 +3524,7 @@ int main(void)
     test_unreachable_empty();
     test_elevators();
     test_housekeeping();
+    test_maid_service_net();
     test_hotel_infestation();
     test_hotel_demand();
     test_commute_elevator();

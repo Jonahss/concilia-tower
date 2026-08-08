@@ -106,6 +106,14 @@ static int     noroute_pending;
  * money, stress, time"). The port gates the same choke points on this. */
 static int     elv_settling;
 
+/* Per-call context for the maid gates (set at people_update entry —
+ * derived state, never saved): the 4 PM start-work cutoff (frame_time <
+ * 0x5DC, checked at dispatch AND arrival) and the emergency-flags gate
+ * ([0xB406]&9 — maids sit out fires/bombs). Referee 2026-08-07. */
+static int     g_hour;
+static int     g_emergency;
+static Tenant *floor_first_dirty_room(Tower *tower, int fidx);
+
 static void fmt_floor_name(int fidx, char *out, size_t n)
 {
     int f = index_to_floor(fidx);
@@ -1429,6 +1437,30 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
             vip_watch = vip_tagged = (int)(p - ps->people);
         }
     }
+    /* A maid reaching her target floor (TripT unboard -> 1220:65a9):
+     * StartCleanHRoom flips the room to the clean band IMMEDIATELY —
+     * it can book again while she works — then she dwells 4 pumps
+     * (~64 ticks ≈ 48 min). The 4 PM gate is re-checked at arrival: a
+     * maid arriving late starts nothing and heads home. A stale target
+     * (room booked/infested while she traveled) is a harmless no-op —
+     * she repicks at the next pump via the stay cycle. */
+    if (t && !p->going_home && t->type == ITEM_HOUSEKEEPING && p->service) {
+        Tenant *room = (g_hour < 16)
+                     ? floor_first_dirty_room(tower, p->cur_floor) : NULL;
+        if (room) {
+            room->condition = ROOM_CLEAN;   /* tenure deliberately kept —
+                                             * only check-in resets the fuse */
+            p->stay = 4;
+        } else {
+            int hf = floor_to_index(t->floor);
+            p->going_home = 1;
+            p->dest_floor = (uint8_t)(hf >= 0 ? hf : GROUND_IDX);
+            if (p->dest_floor != p->cur_floor) {
+                p->state = PERSON_PLANNING;
+                return;
+            }
+        }
+    }
     /* A worker at their desk — candidate for the sick-worker roll */
     if (t && !p->going_home && t->type == ITEM_OFFICE &&
         ps->office_arrivals < (int)(sizeof ps->office_arrival_floor))
@@ -2080,37 +2112,33 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
     return slot + 1;
 }
 
-/* Lowest floor with a DIRTY hotel room (housekeeper dispatch target).
- * Infested rooms are not on the maids' list — they never clean those
- * (MainteT's picker matches the dirty band exactly). */
-static int find_dirty_room_floor(Tower *tower)
+/* First DIRTY hotel room on a grid floor, or NULL. Infested rooms are
+ * never on the maids' list (MainteT's picker matches the dirty band
+ * {0x28,0x30} exactly — 1150:00b4/00c9). */
+static Tenant *floor_first_dirty_room(Tower *tower, int fidx)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY) {
-            int f = floor_to_index(t->floor);
-            if (f >= 0 && f < TOWER_FLOOR_COUNT) return f;
-        }
+        if (item_is_hotel_room(t->type) && t->condition == ROOM_DIRTY &&
+            floor_to_index(t->floor) == fidx)
+            return t;
     }
-    return -1;
+    return NULL;
 }
 
-/* As above, but with the EXE's maid partition: each maid works floors
- * congruent to her member index mod 6 first (MainteT's tower split),
- * falling back to anywhere dirty. */
-static int find_dirty_room_floor_for(Tower *tower, int member)
+/* ChoiceOneHRoom (MainteT 1150:0000, referee 2026-08-07): maid k only
+ * ever scans floors congruent to k (mod 6) — the unit's six maids
+ * partition the tower into interleaved slices, so two maids can never
+ * race for a room. Scan order is anchored at the unit's floor: UPWARD
+ * to the top first, then downward from anchor-1 to the bottom. First
+ * dirty room wins; no cross-slice fallback exists (a maid whose slice
+ * is clean goes home). Returns the floor index, or -1 = DontFind. */
+static int maid_pick_floor(Tower *tower, int anchor, int k)
 {
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < tower->tenant_count; i++) {
-            Tenant *t = &tower->tenants[i];
-            if (!item_is_hotel_room(t->type) || t->condition != ROOM_DIRTY)
-                continue;
-            int f = floor_to_index(t->floor);
-            if (f < 0 || f >= TOWER_FLOOR_COUNT) continue;
-            if (pass == 0 && (f % 6) != (member % 6)) continue;
-            return f;
-        }
-    }
+    for (int f = anchor; f < TOWER_FLOOR_COUNT; f++)
+        if ((f % 6) == k && floor_first_dirty_room(tower, f)) return f;
+    for (int f = anchor - 1; f >= 0; f--)
+        if ((f % 6) == k && floor_first_dirty_room(tower, f)) return f;
     return -1;
 }
 
@@ -2367,10 +2395,38 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         else if (t->type == ITEM_PARTY_HALL)
             show_cap = (tod == TOD_EVENING) ? t->quota_evening : 0;
         int patron = show_cap > 0;
-        /* housekeepers ride the service net to dirty rooms each dawn */
-        int staff = t->type == ITEM_HOUSEKEEPING &&
-                    (tod == TOD_DAWN || tod == TOD_MORNING);
-        if (!inbound && !patron && !staff && !walkin) continue;
+        /* Maids (MainteT, referee 2026-08-07): six permanent staff per
+         * unit, pumped every 16 ticks like the EXE's 1/16 person LOD.
+         * The port despawns an idle maid at her unit and re-dispatches
+         * on demand — same observable behavior as the EXE's all-day
+         * poll loop (pick -> DontFind -> home -> poll). Jobs only START
+         * before 4 PM and never during a fire/bomb; maid k's world is
+         * floors ≡ k (mod 6), anchored at the unit, up first then down.
+         * No dice, no daily caps — capacity is emergent (6 maids x
+         * travel + ~64-tick cleans ≈ 10-15 rooms/maid/day). */
+        if (t->type == ITEM_HOUSEKEEPING) {
+            if (g_emergency || hour >= 16) continue;
+            if ((frame + i) % 16) continue;
+            int uf = floor_to_index(t->floor);
+            if (uf < 0 || uf >= TOWER_FLOOR_COUNT) continue;
+            for (int k = 0; k < 6; k++) {
+                int alive = 0;
+                for (int pj = 0; pj < ps->people_high; pj++)
+                    if (ps->people[pj].home_tenant == t->id &&
+                        ps->people[pj].member == k) { alive = 1; break; }
+                if (alive) continue;
+                int nf = maid_pick_floor(tower, uf, k);
+                if (nf < 0) continue;
+                int sp = spawn_person(ps, tower, t, uf, nf, 0);
+                if (!sp) break;               /* people table full */
+                Person *np = &ps->people[sp - 1];
+                np->service = 1;              /* stairs + service cars only */
+                np->member  = (uint8_t)k;     /* her floor-residue slice */
+                ps->spawned[i]++;
+            }
+            continue;
+        }
+        if (!inbound && !patron && !walkin) continue;
         if (!walkin) {
             int cap = show_cap > 0 ? show_cap
                     : condo_in    ? 1            /* one resident per phase */
@@ -2391,18 +2447,6 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (dup) continue;
         }
 
-        if (staff) {
-            int dirty = find_dirty_room_floor(tower);
-            if (dirty < 0) continue;
-            int sp = spawn_person(ps, tower, t, fidx, dirty, 0);
-            if (sp) {
-                Person *np = &ps->people[sp - 1];
-                np->service = 1;             /* stairs-only + service cars */
-                np->stay = 4;
-                ps->spawned[i]++;
-            }
-            continue;
-        }
         /* Cars (UseCarPerson 1198:06e7, byte-verified 2026-07-11): at
          * star>=3, REAL suite guests and office worker #2 of offices
          * where (floor + person_id) % 4 == 1 drive in, entering at
@@ -2603,9 +2647,12 @@ void people_medical_dispatch(PeopleSim *ps, Tower *tower,
 /* ---------- main tick ---------- */
 
 void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
-                   const uint8_t *reach_public, const uint8_t *reach_service)
+                   const uint8_t *reach_public, const uint8_t *reach_service,
+                   int emergency)
 {
     (void)reach_service;
+    g_hour = hour;             /* maid gates (arrival + repick) read these */
+    g_emergency = emergency;   /* B406&9: no new maid jobs during fire/bomb */
 
     spawn_phase(ps, tower, frame, tod, hour, reach_public);
 
@@ -2779,24 +2826,34 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                 }
             }
             /* patrons/staff: stay a while, then head back (staff return
-             * to their unit, patrons leave via the ground) */
-            if (p->stay && (frame + i) % 8 == 0 && --p->stay == 0) {
+             * to their unit, patrons leave via the ground). Maids dwell
+             * on the 1/16 pump (4 pumps ≈ 64 ticks per clean — the
+             * EXE's StartClean->EndClean span); patrons keep 1/8. */
+            if (p->stay && (frame + i) % (p->service ? 16 : 8) == 0 &&
+                --p->stay == 0) {
                 Tenant *ht = tower_tenant(tower, p->home_tenant);
                 int hf = ht ? floor_to_index(ht->floor) : -1;
-                /* Maids cycle rooms ALL DAY (MainteT: idle->room->next,
-                 * mod-6 floor partition, no new cleans from 16:00) —
-                 * the old single dawn trip understated the service-net
-                 * load a tall hotel really generates. */
+                /* Maid finishing a clean: repick from her mod-6 slice
+                 * (anchored at the UNIT floor, up then down — never a
+                 * fallback outside the slice). Same floor = start the
+                 * next clean on the spot (TryStartTrip verdict 3). */
                 if (ht && ht->type == ITEM_HOUSEKEEPING && p->service &&
-                    hour < 16) {
-                    int nf = find_dirty_room_floor_for(tower, p->member);
+                    g_hour < 16 && !g_emergency) {
+                    int nf = (hf >= 0) ? maid_pick_floor(tower, hf,
+                                                         p->member % 6) : -1;
                     if (nf >= 0) {
-                        p->stay = 4;                 /* next room's dwell */
-                        if (nf != p->cur_floor) {
+                        if (nf == p->cur_floor) {
+                            Tenant *room = floor_first_dirty_room(tower, nf);
+                            if (room) {
+                                room->condition = ROOM_CLEAN;
+                                p->stay = 4;
+                                break;
+                            }
+                        } else {
                             p->dest_floor = (uint8_t)nf;
                             p->state = PERSON_PLANNING;
+                            break;
                         }
-                        break;
                     }
                 }
                 /* a retail patron heading out (OutRestPeple) */

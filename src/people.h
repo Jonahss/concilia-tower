@@ -308,7 +308,8 @@ int people_parking_assign(Tower *tower, const uint8_t *reach, int suite,
  * frame = global tick counter, tod = TimeOfDay (game.h value), hour =
  * the clock hour (the retail windows are finer than time-of-day). */
 void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
-                   const uint8_t *reach_public, const uint8_t *reach_service);
+                   const uint8_t *reach_public, const uint8_t *reach_service,
+                   int emergency);
 
 /* Join the waiting queue at a stop (exposed for tests).
  * Returns 1 on success, 0 if the queue is full (cap 40/direction). */

@@ -659,8 +659,13 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
              * within days; rent has no reachability check anywhere
              * (cut-off-units referee 2026-08-02). Pre-move-in states and
              * hotels keep the gate (a room the elevator can't reach can't
-             * seat a check-in; hotel corner left open by the referee). */
-            if (!reachable && (is_hotel || t->state < TENANT_OCCUPIED))
+             * seat a check-in; hotel corner left open by the referee).
+             * STAFF units are never reachability-gated at all — the EXE
+             * has no such check (maid referee 2026-08-07); each maid TRIP
+             * succeeds or fails on its own FindTransport, and guards use
+             * abstract transit. */
+            if (!reachable && !is_staff &&
+                (is_hotel || t->state < TENANT_OCCUPIED))
                 is_active = 0;
             /* Hotel rooms only open for the night if the demand pass armed
              * them; hosted guests ride out their stay regardless. */
@@ -828,8 +833,14 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
  * Two networks:
  *   public  — tenants/visitors: stairs/escalators, standard elevators,
  *             express elevators (lobby/sky-lobby/basement stops only)
- *   service — staff (housekeeping/security): all of the above PLUS service
- *             elevators (superset of public)
+ *   service — staff (maids): stairs ONLY (never escalators) and SERVICE
+ *             elevators ONLY. NOT a superset of public — ScoreElevator's
+ *             network gate is an exact type match (11b0:11e6-1201, maid
+ *             referee 2026-08-07): a floor served only by a standard
+ *             elevator is unreachable for staff. (Used for the warning
+ *             stats/UI; actual maid trips route per-leg in people.c,
+ *             which also enforces the ≤3-floor walk budget this
+ *             connectivity map can't express.)
  * Elevator type semantics from ElevatorsT (+0x0001: 0=standard, 1=express,
  * 2=service). Car movement and wait times are NOT simulated yet — this is
  * pure connectivity. */
@@ -931,8 +942,10 @@ void game_update_reachability(GameSim *sim, Tower *tower)
     sim->reach_public[ground] = 1;
     sim->reach_service[ground] = 1;
 
-    /* Collect stair/escalator links (floor f <-> f+1) once */
+    /* Collect stair/escalator links (floor f <-> f+1) once. Escalators
+     * are public-only: staff never ride them (11b0:14c9 type gate). */
     static int link_a[MAX_TRANSPORT_LINKS], link_b[MAX_TRANSPORT_LINKS];
+    static uint8_t link_svc[MAX_TRANSPORT_LINKS];
     int link_count = 0;
     for (int i = 0; i < tower->tenant_count && link_count < MAX_TRANSPORT_LINKS; i++) {
         Tenant *t = &tower->tenants[i];
@@ -941,6 +954,7 @@ void game_update_reachability(GameSim *sim, Tower *tower)
         int rise = t->height - 1; if (rise < 1) rise = 1;
         if (a >= 0 && a + rise < TOWER_FLOOR_COUNT) {
             link_a[link_count] = a;
+            link_svc[link_count] = (t->type == ITEM_STAIRS);
             link_b[link_count++] = a + rise;   /* tall: endpoints only */
         }
     }
@@ -975,7 +989,8 @@ void game_update_reachability(GameSim *sim, Tower *tower)
                 sim->reach_public[a] = sim->reach_public[b] = 1;
                 changed = 1;
             }
-            if (sim->reach_service[a] != sim->reach_service[b]) {
+            if (link_svc[i] &&
+                sim->reach_service[a] != sim->reach_service[b]) {
                 sim->reach_service[a] = sim->reach_service[b] = 1;
                 changed = 1;
             }
@@ -983,6 +998,7 @@ void game_update_reachability(GameSim *sim, Tower *tower)
         for (int i = 0; i < run_count; i++) {
             ShaftRun *r = &runs[i];
             int pub_ok = (r->ty != ITEM_ELEVATOR_SERVICE);
+            int svc_ok = (r->ty == ITEM_ELEVATOR_SERVICE);
             int any_pub = 0, any_svc = 0;
             for (int s = r->lo; s <= r->hi; s++) {
                 if (!elevator_stops_at(r->ty, s)) continue;
@@ -995,7 +1011,7 @@ void game_update_reachability(GameSim *sim, Tower *tower)
                     sim->reach_public[s] = 1;
                     changed = 1;
                 }
-                if (any_svc && !sim->reach_service[s]) {
+                if (svc_ok && any_svc && !sim->reach_service[s]) {
                     sim->reach_service[s] = 1;
                     changed = 1;
                 }
@@ -1022,48 +1038,12 @@ void game_update_reachability(GameSim *sim, Tower *tower)
 }
 
 /* --- Housekeeping ---
- * After checkout, hotel rooms stay dirty (and unrentable) until a
- * housekeeping unit cleans them. Housekeepers work morning/afternoon, travel
- * the service network, and each unit handles a limited number of rooms per
- * day — too few units and rooms sit dirty, losing the night's income.
- * Maids clean DIRTY rooms only: the EXE's room picker matches the dirty
- * band exactly (MainteT 1150:00b4/00c9), so an INFESTED room is never on
- * their list. Cleaning also does NOT reset the room's neglect counter —
- * only a check-in does. */
-#define HK_ROOMS_PER_DAY 12
-
-static void update_housekeeping(GameSim *sim, Tower *tower)
-{
-    if (sim->time_of_day != TOD_MORNING && sim->time_of_day != TOD_AFTERNOON) {
-        /* Off shift — reset the day's quotas; rooms keep their dirty flag */
-        for (int i = 0; i < tower->tenant_count; i++)
-            if (tower->tenants[i].type == ITEM_HOUSEKEEPING)
-                tower->tenants[i].cleaned_today = 0;
-        return;
-    }
-
-    for (int i = 0; i < tower->tenant_count; i++) {
-        Tenant *hk = &tower->tenants[i];
-        if (hk->type != ITEM_HOUSEKEEPING) continue;
-        if (hk->state != TENANT_OCCUPIED) continue;   /* built + on shift */
-        if (hk->cleaned_today >= HK_ROOMS_PER_DAY) continue;
-        int hf = floor_to_index(hk->floor);
-        if (hf < 0 || hf >= TOWER_FLOOR_COUNT || !sim->reach_service[hf]) continue;
-
-        /* Clean one reachable dirty room per pass (paces the work out) */
-        for (int j = 0; j < tower->tenant_count; j++) {
-            Tenant *room = &tower->tenants[j];
-            if (!item_is_hotel_room(room->type) ||
-                room->condition != ROOM_DIRTY) continue;
-            int rf = floor_to_index(room->floor);
-            if (rf < 0 || rf >= TOWER_FLOOR_COUNT || !sim->reach_service[rf])
-                continue;
-            room->condition = ROOM_CLEAN;   /* tenure deliberately kept */
-            hk->cleaned_today++;
-            break;
-        }
-    }
-}
+ * The maids ARE the mechanism (maid referee 2026-08-07): six permanent
+ * staff per unit live in people.c — mod-6 floor slices, service-network
+ * trips, rooms flip clean at physical arrival, ~64-tick dwells, no
+ * quota of any kind. The old HK_ROOMS_PER_DAY teleport quota here was
+ * an invention and is gone; a room no maid can route to simply stays
+ * dirty and feeds the 3-day neglect fuse, exactly like the EXE. */
 
 /* --- The daily 5PM hotel pass ---
  * Ported from the TimeT 17:00 dispatch (ft 0x640): roach spread
@@ -1530,7 +1510,8 @@ void game_update(GameSim *sim, Tower *tower)
      * swaps the per-frame person dispatch for the guard loop, 1090:0140). */
     if (!(sim->event.active && sim->event.type == EVENT_BOMB)) {
         people_update(&sim->people, tower, sim->frame, sim->time_of_day,
-                      sim->hour, sim->reach_public, sim->reach_service);
+                      sim->hour, sim->reach_public, sim->reach_service,
+                      sim->event.active);
         game_animate_occupants(sim, tower);   /* frozen with the people */
 
         /* An armed VIP day tags tonight's qualifying suite guest: bank
@@ -1568,7 +1549,6 @@ void game_update(GameSim *sim, Tower *tower)
     if (sim->tick % 4 == 0) {
         long tick_income = 0, tick_expenses = 0;
         update_tenants(sim, tower, &tick_income, &tick_expenses);
-        update_housekeeping(sim, tower);
         tower->money += tick_income - tick_expenses;
         sim->income_this_quarter += tick_income;
         sim->expenses_this_quarter += tick_expenses;
@@ -1778,6 +1758,14 @@ void game_update(GameSim *sim, Tower *tower)
                     if (mt->type == ITEM_RAMP) {
                         upkeep += 10000;
                         sim->fin_expense_q[FINEXP_PARKING_RAMP] += 10000;
+                    }
+                    if (mt->type == ITEM_HOUSEKEEPING) {
+                        /* $10,000 per unit per settlement — res 0x3EA row
+                         * 0xF = 100 (maid referee 2026-08-07). The
+                         * security/medical rows are still unverified, so
+                         * they stay unbilled rather than guessed. */
+                        upkeep += 10000;
+                        sim->fin_expense_q[FINEXP_HOUSEKEEPING] += 10000;
                     }
                 }
             }
