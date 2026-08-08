@@ -731,8 +731,17 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
              * reach; without this gate an unreachable office collected
              * full quarterly rent forever (the settlement loop pays any
              * OCCUPIED/VACANT unit) and unreachable condos printed free
-             * money at move-in. */
-            if (!reachable) break;             /* still on the market */
+             * money at move-in. EXCEPTION: staff units (housekeeping /
+             * security) are STAFFED on build, never rented — the EXE has
+             * no reachability check for them (maid referee 2026-08-07),
+             * and each maid TRIP fails on its own FindTransport. Without
+             * this a service elevator that doesn't reach the ground (a
+             * self-contained upper-floors service loop) left extra
+             * housekeeping units stuck un-staffed — only the first,
+             * ground-reachable one fielded maids (Jonah, 2026-08-07). */
+            if (!reachable &&
+                t->type != ITEM_SECURITY && t->type != ITEM_HOUSEKEEPING)
+                break;                         /* still on the market */
             /* Condos are a one-time SALE, banked when the buyer moves in
              * (res 0x3E9 condo row: $200k/$150k/$100k/$40k by rate class).
              * A re-occupied abandoned condo is a resale to a new buyer. */

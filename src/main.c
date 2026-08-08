@@ -392,6 +392,8 @@ typedef struct {
     int             cap_drag_dir;   /* +1 dragging the top cap, -1 the pit */
     int             cap_drag_next;  /* next floor a live drag step will claim */
     int             cap_drag_placed;/* segments placed live during this drag */
+    int             cap_drag_end;   /* the moving end's current floor */
+    int             cap_drag_fixed; /* the stationary opposite end floor */
     
     /* Camera smoothing */
     float           cam_fx, cam_fy;
@@ -7540,38 +7542,74 @@ static int try_cap_drag(void)
         game.cap_drag_dir = (fidx == s->hi + 1) ? 1 : -1;
         game.cap_drag_next = game.mouse_floor;
         game.cap_drag_placed = 0;
+        /* The moving end is the cap's own served floor; the opposite end
+         * stays put and is the retract floor (drag inward can shrink to a
+         * 1-floor shaft but never delete the group — that's the
+         * bulldozer's job; shaft-retract referee 2026-08-07). */
+        game.cap_drag_end   = (game.cap_drag_dir > 0) ? s->hi : s->lo;
+        game.cap_drag_fixed = (game.cap_drag_dir > 0) ? s->lo : s->hi;
         return 1;
     }
     return 0;
 }
 
-/* Step a live cap drag toward the cursor: the grabbed motor room / pit
- * tracks the mouse, and every floor it's pulled past becomes shaft. The
- * segment under the handle itself is claimed only once the handle moves
- * BEYOND it, so a 1-floor nudge extends by exactly 1. */
+/* Remove the single elevator segment record at (floor, drag column) of the
+ * dragged type — the outermost floor of the shaft being retracted. Returns
+ * 1 if a record was found and removed. */
+static int retract_shaft_floor(int floor)
+{
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type != game.build_type || t->x != game.drag_start_cell)
+            continue;
+        if (floor_to_index(t->floor) != floor_to_index(floor)) continue;
+        return tower_remove(&game.tower, t->id);
+    }
+    return 0;
+}
+
+/* Step a live cap drag toward the cursor. The grabbed motor room / pit
+ * follows the mouse in BOTH directions (shaft-retract referee 2026-08-07,
+ * ExtendUp/ExtendDown 10a0:0819/0b87 are bidirectional): pulled outward it
+ * lays new segments; pulled inward it tears the outermost ones off, down to
+ * a 1-floor minimum (never below the fixed opposite end — deleting the
+ * group is the bulldozer's job). people_rebuild_transport (fired by the
+ * layout-stamp change on the next tick) evicts/repaths anyone who lost
+ * their stop and clamps the cars into the surviving span. */
 static void cap_drag_track(void)
 {
     if (!game.cap_drag || !game.dragging) return;
-    int placed = 0;
-    if (game.cap_drag_dir > 0) {
-        while (game.cap_drag_next < game.mouse_floor &&
+    int placed = 0, removed = 0;
+    int target = game.mouse_floor;
+    if (game.cap_drag_dir > 0) {                 /* top cap */
+        while (game.cap_drag_end < target &&
                tower_place(&game.tower, game.build_type,
-                           game.cap_drag_next, game.drag_start_cell)) {
-            game.cap_drag_next++;
-            placed++;
+                           game.cap_drag_end + 1, game.drag_start_cell)) {
+            game.cap_drag_end++; placed++;
         }
-    } else {
-        while (game.cap_drag_next > game.mouse_floor &&
+        while (game.cap_drag_end > target &&
+               game.cap_drag_end > game.cap_drag_fixed &&
+               retract_shaft_floor(game.cap_drag_end)) {
+            game.cap_drag_end--; removed++;
+        }
+    } else {                                     /* pit */
+        while (game.cap_drag_end > target &&
                tower_place(&game.tower, game.build_type,
-                           game.cap_drag_next, game.drag_start_cell)) {
-            game.cap_drag_next--;
-            placed++;
+                           game.cap_drag_end - 1, game.drag_start_cell)) {
+            game.cap_drag_end--; placed++;
+        }
+        while (game.cap_drag_end < target &&
+               game.cap_drag_end < game.cap_drag_fixed &&
+               retract_shaft_floor(game.cap_drag_end)) {
+            game.cap_drag_end++; removed++;
         }
     }
     if (placed > 0) {
         game.cap_drag_placed += placed;
         play_snd(SND_BUILD_PLACE);
     }
+    if (removed > 0)
+        play_snd(SND_DELETE);
 }
 
 /* ---------- Input handling ---------- */
