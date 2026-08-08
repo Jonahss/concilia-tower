@@ -3348,7 +3348,21 @@ static void render_shaft(ElevatorShaft *s)
                     pid = st->down_ring[(st->down_head + ki) % QUEUE_CAP];
                 }
                 if (!pid) continue;
-                int fig = (pid * 7) % 40;     /* 40 silhouettes of 16px */
+                /* Strip 0x468's frames 25-34 are the MAID-WITH-CART set
+                 * (8px-cells 50-69, housekeeping referee 2026-08-07): a
+                 * queueing maid draws one of its standing poses, and
+                 * civilians no longer roll a cart by accident — their
+                 * random pick skips that band. */
+                const Person *qpp = &game.sim.people.people[pid - 1];
+                const Tenant *qht = tower_tenant(&game.tower,
+                                                 qpp->home_tenant);
+                int fig;
+                if (qht && qht->type == ITEM_HOUSEKEEPING && qpp->service) {
+                    fig = 25 + (pid % 3);
+                } else {
+                    fig = (pid * 7) % 30;     /* 30 civilian silhouettes */
+                    if (fig >= 25) fig += 10; /* hop the maid-cart band */
+                }
                 SDL_Rect src = { fig * 16, 0, 16, 36 };
                 int px = up ? sx - 16 - ki * 9
                             : sx + shaft_w + ki * 9;
