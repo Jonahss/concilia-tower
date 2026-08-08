@@ -539,6 +539,9 @@ typedef enum {
 #define GUARD_OFFICES_MAX   10
 #define GUARD_SWEEP_FRAMES  2    /* 1 cell / 2 EXE frames (linger 0xDDCC=1) */
 #define GUARD_FLOOR_FRAMES  3    /* transit frames per floor (0xDDCE=3) */
+#define GUARD_DOUSE_FRAMES  5    /* fire-mode action pause before the douse
+                                  * (0xDDDA=5; fire foot-guards referee
+                                  * 2026-08-08 — douse = 6 ticks total) */
 #define GUARD_DEFUSE_FRAMES 2    /* ticks from catch to resolution: the EXE
                                   * reschedules [0xB40C] = now + [0xDDD6] = 2
                                   * (tuning res 0x7F05) at the catch, and
@@ -943,6 +946,7 @@ void game_resolve_event(GameSim *sim, Tower *tower);
  *          pay-off (bomb, no blast). */
 void game_event_proceed(GameSim *sim, Tower *tower);
 void game_event_ransom(GameSim *sim, Tower *tower);
+int  game_fire_call_crew(GameSim *sim, Tower *tower);
 /* Forward clock jump within the day (EXE EventCleanup: caught bomb ->
  * 4PM). Crossed quarter boundaries still close out their books. */
 void game_clock_jump(GameSim *sim, Tower *tower, int hour);

@@ -3294,6 +3294,8 @@ static void guard_hunt_deploy(GameSim *sim, Tower *tower);
 /* Player takes the free path: let the fire burn / send guards bomb-hunting.
  * Refusing the bomb is what ARMS it (TryStartEvent's refuse branch sets the
  * terror flag and the 1:00 PM trigger). */
+static void fire_guards_deploy(GameSim *sim, Tower *tower);
+
 void game_event_proceed(GameSim *sim, Tower *tower)
 {
     (void)tower;
@@ -3304,7 +3306,35 @@ void game_event_proceed(GameSim *sim, Tower *tower)
         ev->active = 1;                       /* detonates at 1PM unless caught */
         play_snd(SND_BOMB_ARM);               /* #10000 armed/refuse dialog (0xBCE) */
         guard_hunt_deploy(sim, tower);        /* GuardT 033d(1) */
+    } else if (ev->type == EVENT_FIRE) {
+        /* The FREE branch is the FOOT RESPONSE: dialog answer 1 →
+         * SetAllGuards(8) — every security office's 6 guards fight the
+         * fire on foot (10e8:017c; fire foot-guards referee 2026-08-08,
+         * which also corrected the old flipped reading that "free" meant
+         * "let it burn"). */
+        fire_guards_deploy(sim, tower);
     }
+}
+
+/* Mid-fire helicopter purchase — the EXE's hidden 10e8:01e2 path behind
+ * menu id 40008 ("Call Fire Rescue"): after taking the free path the
+ * player can still buy the crew; the foot guards keep fighting alongside
+ * (fire foot-guards referee 2026-08-08). Returns 1 if dispatched. */
+int game_fire_call_crew(GameSim *sim, Tower *tower)
+{
+    EventState *ev = &sim->event;
+    if (ev->type != EVENT_FIRE || !ev->active || ev->pending ||
+        ev->chopper_x > 0) return 0;
+    if (tower->money < FIRE_CHOPPER_COST) return 0;
+    int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
+    tower_floor_extents(tower, left, right);
+    int fi = floor_to_index(ev->target_floor);
+    if (fi < 0 || fi >= TOWER_FLOOR_COUNT) return 0;
+    ev->chopper_x = right[fi] - FIRE_FRONT_CELLS;
+    tower->money -= FIRE_CHOPPER_COST;
+    sim->expenses_this_quarter += FIRE_CHOPPER_COST;
+    printf("🚁 Helicopters dispatched mid-fire ($%d)\n", FIRE_CHOPPER_COST);
+    return 1;
 }
 
 /* Player pays: helicopters for a fire, the ransom for a bomb. */
@@ -3427,10 +3457,119 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
                ev->target_floor, ev->damage_cost);
         ev->active = 0;
         ev->chopper_x = 0;
+        ev->hunt.active = 0;   /* SetAllGuards(0) — foot guards stand down;
+                                  guards clearing the last front route here
+                                  too, the same ExtinguishFire the chopper
+                                  uses (10e8:029f) */
         /* Fire's own jump (10e8:02f2) is CONDITIONAL: snap to 4:00 PM only if
          * we're still before it — a burn that outlasts 4PM keeps its own time
          * (the guard blocks the backward write). */
         if (sim->hour < 16) game_clock_jump(sim, tower, 16);
+    }
+}
+
+/* Deploy the fleet in FIRE mode (SetAllGuards(8), fire foot-guards
+ * referee 2026-08-08). hunt.active = 2 marks fire mode (1 = bomb hunt —
+ * same storage, old saves only ever hold 0/1, so no layout change).
+ * In fire mode two bomb fields are reused, both dead here and both
+ * documented: GuardState.below = the douse-pending flag; hunt.defuse =
+ * the [0x77AA] travel boost (all floor-travel instant after the first
+ * douse). Guards start at their office floor, x = -1 (edge state), and
+ * repoll their floor-index-mod-6 partition every frame. */
+static void fire_guards_deploy(GameSim *sim, Tower *tower)
+{
+    GuardHunt *h = &sim->event.hunt;
+    memset(h, 0, sizeof(*h));
+    for (int i = 0; i < tower->tenant_count && h->noffices < GUARD_OFFICES_MAX; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_SECURITY || t->state == TENANT_ABANDONED) continue;
+        GuardOffice *o = &h->o[h->noffices++];
+        o->office = (uint16_t)(i + 1);
+        o->office_floor = (int8_t)t->floor;
+        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+            o->g[gi].floor = (int8_t)t->floor;
+            o->g[gi].x = -1;
+        }
+    }
+    h->active = h->noffices > 0 ? 2 : 0;
+    if (h->active)
+        printf("🧑‍🚒 %d security office(s) send their guards to fight the fire\n",
+               h->noffices);
+}
+
+/* One EXE frame of the fire response (FireGuardTick 10f8:0c06, windows
+ * 10e8:076a, douse 10e8:07d6 — fire foot-guards referee 2026-08-08).
+ * Per guard: transit ticks down invisibly; a 5-tick action pause ends in
+ * a douse that kills the WHOLE front whose 12-cell body the guard stands
+ * in and arms the travel boost; at the floor's left edge the HIGHEST
+ * burning partition floor wins the repoll, mid-floor-on-a-clean-floor
+ * the FIRST; otherwise sweep left 1 cell/2 frames, arming the action
+ * pause on entering a front's leading half ([L,L+6) / [R+6,R+12)). A
+ * fire guard never retires — only the fire's end stands him down. */
+static void fire_guard_step_frame(GameSim *sim, const int16_t *left,
+                                  const int16_t *right)
+{
+    EventState *ev = &sim->event;
+    GuardHunt *h = &ev->hunt;
+    for (int oi = 0; oi < h->noffices; oi++) {
+        GuardOffice *o = &h->o[oi];
+        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+            GuardState *g = &o->g[gi];
+            if (g->transit > 0) { g->transit--; continue; }
+            if (g->pause > 0) {
+                if (--g->pause == 0 && g->below) {
+                    int fi = floor_to_index(g->floor);
+                    if (fi >= 0 && fi < TOWER_FLOOR_COUNT) {
+                        int16_t L = ev->fire_left[fi], R = ev->fire_right[fi];
+                        if (L >= 0 && g->x >= L && g->x < L + FIRE_FRONT_CELLS)
+                            ev->fire_left[fi] = -1;
+                        else if (R >= 0 && g->x >= R &&
+                                 g->x < R + FIRE_FRONT_CELLS)
+                            ev->fire_right[fi] = -1;
+                        h->defuse = 1;            /* [0x77AA] travel boost */
+                    }
+                    g->below = 0;
+                }
+                continue;
+            }
+
+            int fi = floor_to_index(g->floor);
+            int at_edge = fi < 0 || fi >= TOWER_FLOOR_COUNT ||
+                          g->x < 0 || g->x <= left[fi];
+            int floor_clear = !at_edge &&
+                              ev->fire_left[fi] < 0 && ev->fire_right[fi] < 0;
+            if (at_edge || floor_clear) {
+                int pick = -1;
+                for (int f = gi; f < TOWER_FLOOR_COUNT; f += GUARDS_PER_OFFICE) {
+                    if (ev->fire_left[f] >= 0 || ev->fire_right[f] >= 0) {
+                        pick = f;
+                        if (!at_edge) break;   /* mid-floor: first wins */
+                    }                          /* edge: last (highest) wins */
+                }
+                if (pick < 0) continue;        /* idle; repoll next frame */
+                if (right[pick] <= left[pick]) continue;
+                int d = index_to_floor(pick) - g->floor;
+                if (d < 0) d = -d;
+                g->transit = h->defuse ? 0
+                           : (int16_t)(GUARD_FLOOR_FRAMES * d +
+                              (g->floor < o->office_floor ? GUARD_FLOOR_FRAMES
+                                                          : 0));
+                g->floor = (int8_t)index_to_floor(pick);
+                g->x = (int16_t)(right[pick] - 2);
+                continue;
+            }
+
+            g->x--;
+            {
+                int16_t L = ev->fire_left[fi], R = ev->fire_right[fi];
+                int lead =
+                    (L >= 0 && g->x >= L && g->x < L + FIRE_FRONT_CELLS / 2) ||
+                    (R >= 0 && g->x >= R + FIRE_FRONT_CELLS / 2 &&
+                     g->x < R + FIRE_FRONT_CELLS);
+                if (lead) { g->pause = GUARD_DOUSE_FRAMES; g->below = 1; }
+                else        g->pause = GUARD_SWEEP_FRAMES - 1;
+            }
+        }
     }
 }
 
@@ -3592,6 +3731,10 @@ void game_update_event(GameSim *sim, Tower *tower)
     int16_t left[TOWER_FLOOR_COUNT], right[TOWER_FLOOR_COUNT];
     tower_floor_extents(tower, left, right);
     fire_step_frame(sim, tower, left, right);
+    /* Foot guards fight in the same frame (FireGuardTick; hunt.active==2
+     * = fire mode). fire_step_frame may have just ended the fire. */
+    if (ev->active && ev->hunt.active == 2)
+        fire_guard_step_frame(sim, left, right);
 }
 
 void game_resolve_event(GameSim *sim, Tower *tower)

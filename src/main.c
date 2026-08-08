@@ -595,6 +595,8 @@ typedef struct {
 #define ACT_SND_EVENTS    25
 #define ACT_FIND_PERSON   26   /* Windows menu (40019/40020) */
 #define ACT_FIND_TENANT   27
+#define ACT_FIRE_RESCUE   28   /* Options menu 40008 (10e8:01e2 mid-fire
+                                  chopper purchase) */
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -687,9 +689,11 @@ static const MenuItem menu_file[] = {
 #define MENU_FILE_COUNT 10
 
 /* Options menu — the original's Animation/Sound toggle block (menu ids
- * 40009-40013). Fast Mode (40007) lives in the Speed menu; Call Fire
- * Rescue (40008) awaits the FireT response trace. */
+ * 40009-40013) plus Call Fire Rescue (40008): the EXE's hidden mid-fire
+ * chopper purchase (10e8:01e2, fire foot-guards referee 2026-08-08). */
 static const MenuItem menu_options[] = {
+    { "Call Fire Rescue\t$500,000", ITEM_NONE, ACT_FIRE_RESCUE },
+    { NULL, ITEM_NONE, ACT_NONE },
     { "Anim: People",      ITEM_NONE, ACT_ANIM_PEOPLE },
     { "Anim: Effects",     ITEM_NONE, ACT_ANIM_EFFECTS },
     { NULL, ITEM_NONE, ACT_NONE },
@@ -697,7 +701,7 @@ static const MenuItem menu_options[] = {
     { "Sound: Background", ITEM_NONE, ACT_SND_BG },
     { "Sound: Events",     ITEM_NONE, ACT_SND_EVENTS },
 };
-#define MENU_OPTIONS_COUNT 6
+#define MENU_OPTIONS_COUNT 8
 
 /* Windows menu — show/hide the floating windows (menu ids 40014-40016).
  * Find Person... / Find Tenant... (40019/40020) land here once traced. */
@@ -5077,6 +5081,43 @@ static void render_crane(void)
  * so they aren't painted over by building facades). Real EXE art: animated
  * flame (0x8F68-0x8F6B) tiled across the burning span; terror-alert icon over
  * a bomb target. Falls back to the old colored shapes if a sprite is missing. */
+/* The emergency guard fleet, shared by the bomb hunt and the fire foot
+ * response (DrawGuards 10f8:00c9/025e — one sprite set for both modes):
+ * 16x36 frames off the emergency strip, walk A/B (0x5A/0x5C) alternating
+ * per 1-cell step from cell parity, action pose (0x5E) for the bomb
+ * finder through the defuse or a fire guard through the 5-tick douse
+ * pause. Invisible while in floor transit, exactly like the EXE. */
+static void render_guard_fleet(int lobby_sx, int lobby_sy)
+{
+    const GuardHunt *h = &game.sim.event.hunt;
+    Sprite *ges = sprites_find(&game.sprites, SPR_PEOPLE_EMERG);
+    for (int oi = 0; oi < h->noffices; oi++) {
+        const GuardOffice *o = &h->o[oi];
+        for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
+            const GuardState *g = &o->g[gi];
+            if (g->retired || g->transit > 0 || g->x < 0) continue;
+            int gx = lobby_sx + g->x * CELL_W;
+            int gy = lobby_sy - (g->floor * CELL_H);
+            if (ges && ges->texture) {
+                int action = (h->active == 2)
+                                 ? (g->below && g->pause > 0)
+                                 : (h->defuse > 0);
+                int frame = action ? 4 : ((g->x & 1) ? 2 : 0);
+                SDL_Rect src = { 80 + frame * 8, 0, 2 * CELL_W, CELL_H };
+                SDL_Rect dst = { gx, gy, 2 * CELL_W, CELL_H };
+                SDL_RenderCopy(game.renderer, ges->texture, &src, &dst);
+            } else {   /* fallback: the old placeholder figure */
+                SDL_SetRenderDrawColor(game.renderer, 20, 20, 120, 255);
+                SDL_Rect body = { gx + 2, gy + CELL_H - 12, 4, 10 };
+                SDL_RenderFillRect(game.renderer, &body);
+                SDL_SetRenderDrawColor(game.renderer, 230, 200, 160, 255);
+                SDL_Rect head = { gx + 3, gy + CELL_H - 15, 2, 3 };
+                SDL_RenderFillRect(game.renderer, &head);
+            }
+        }
+    }
+}
+
 static void render_events(void)
 {
     if (!game.sim.event.active) return;
@@ -5138,40 +5179,17 @@ static void render_events(void)
                 SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
             }
         }
+
+        /* Foot guards fighting the fire (free-path response; same sprites
+         * as the bomb hunt — DrawGuards 10f8:025e uses base 0x5A
+         * unconditionally, fire referee 2026-08-08). */
+        if (game.sim.event.hunt.active == 2)
+            render_guard_fleet(lobby_sx, lobby_sy);
     } else if (game.sim.event.type == EVENT_BOMB) {
-        /* The hunt: every materialized guard, sweeping right-to-left, drawn
-         * from the real emergency-figure art (DrawGuards 10f8:00c9): 16x36
-         * frames — walk A/B alternating per 1-cell step, and the bomb-
-         * detector action pose held by the finder through the defuse.
-         * Invisible while in floor transit, exactly like the EXE. */
-        Sprite *ges = sprites_find(&game.sprites, SPR_PEOPLE_EMERG);
-        for (int oi = 0; oi < game.sim.event.hunt.noffices; oi++) {
-            const GuardOffice *o = &game.sim.event.hunt.o[oi];
-            for (int gi = 0; gi < GUARDS_PER_OFFICE; gi++) {
-                const GuardState *g = &o->g[gi];
-                if (g->retired || g->transit > 0 || g->x < 0) continue;
-                int gx = lobby_sx + g->x * CELL_W;
-                int gy = lobby_sy - (g->floor * CELL_H);
-                if (ges && ges->texture) {
-                    /* frame 0/2 = walk A/B (strip 0x5A/0x5C), 4 = action
-                     * (0x5E); sheet x = 80 + frame*8. Walk phase from cell
-                     * parity — guards step one cell at a time, so the
-                     * frames alternate just like the EXE's 0<->2 toggle. */
-                    int frame = game.sim.event.hunt.defuse > 0 ? 4
-                              : ((g->x & 1) ? 2 : 0);
-                    SDL_Rect src = { 80 + frame * 8, 0, 2 * CELL_W, CELL_H };
-                    SDL_Rect dst = { gx, gy, 2 * CELL_W, CELL_H };
-                    SDL_RenderCopy(game.renderer, ges->texture, &src, &dst);
-                } else {   /* fallback: the old placeholder figure */
-                    SDL_SetRenderDrawColor(game.renderer, 20, 20, 120, 255);
-                    SDL_Rect body = { gx + 2, gy + CELL_H - 12, 4, 10 };
-                    SDL_RenderFillRect(game.renderer, &body);
-                    SDL_SetRenderDrawColor(game.renderer, 230, 200, 160, 255);
-                    SDL_Rect head = { gx + 3, gy + CELL_H - 15, 2, 3 };
-                    SDL_RenderFillRect(game.renderer, &head);
-                }
-            }
-        }
+        /* The hunt: every materialized guard, sweeping right-to-left,
+         * invisible in floor transit, the finder holding the action pose
+         * through the defuse — exactly like the EXE. */
+        render_guard_fleet(lobby_sx, lobby_sy);
         /* NO marker at the bomb's cell: the EXE never draws one — the
          * location stays genuinely hidden until the explosion dialog
          * names the floor (bomb referee 2026-08-07: exhaustive
@@ -5313,15 +5331,25 @@ static void disaster_close(void)
     game.sim.speed = game.disaster_saved_speed;
 }
 
-/* The free path: let the fire burn / send guards after the bomb. */
+/* The free path: guards fight the fire on foot / hunt the bomb. */
 static void disaster_do_proceed(void)
 {
     int is_fire = (game.sim.event.type == EVENT_FIRE);
     int fl = game.sim.event.target_floor;
     game_event_proceed(&game.sim, &game.tower);
-    char b[64];
-    if (is_fire) snprintf(b, sizeof b, "FIRE on floor %d - burning freely!", fl);
-    else         snprintf(b, sizeof b, "Security deployed - hunting the bomb!");
+    char b[80];
+    if (is_fire) {
+        /* Declined-crew dialog 0xBC6's line (strings survey 2026-08-08);
+         * the guards ARE the free response now (SetAllGuards(8)). */
+        if (game.sim.event.hunt.active == 2)
+            snprintf(b, sizeof b,
+                     "Security is attempting to quench the fire on floor %d",
+                     fl);
+        else
+            snprintf(b, sizeof b, "FIRE on floor %d - burning freely!", fl);
+    } else {
+        snprintf(b, sizeof b, "Security deployed - hunting the bomb!");
+    }
     add_event_message(b);
     disaster_close();
 }
@@ -7628,6 +7656,15 @@ static void execute_menu_item(const MenuItem *item)
     case ACT_WIN_TOOLBAR:  game.win_toolbar ^= 1; break;
     case ACT_WIN_INFOBAR:  game.win_infobar ^= 1; break;
     case ACT_WIN_MAP:      game.win_map ^= 1;     break;
+    case ACT_FIRE_RESCUE:
+        if (game_fire_call_crew(&game.sim, &game.tower))
+            add_event_message("Firefighting helicopters dispatched!");
+        else
+            add_event_message(game.sim.event.type == EVENT_FIRE &&
+                              game.sim.event.active
+                              ? "Cannot call the fire crew right now"
+                              : "There is no fire");
+        break;
     case ACT_ANIM_PEOPLE:  game.anim_people ^= 1;  break;
     case ACT_ANIM_EFFECTS: game.anim_effects ^= 1; break;
     case ACT_SND_ELEV:     game.snd_elev ^= 1;   break;

@@ -2229,7 +2229,11 @@ static void test_fire_spread(void)
     int fi4 = floor_to_index(4), fi5 = floor_to_index(5), fi6 = floor_to_index(6);
     CHECK(sim.event.target_slot == 104, "floor 5 extent [100,136): ignition at 104");
 
-    game_event_proceed(&sim, &tw);        /* let it burn */
+    /* Bypass the dialog WITHOUT deploying anyone — the real free path
+     * now sends foot guards (SetAllGuards(8)); an un-fought burn is a
+     * state the player can't reach, but the front mechanics under test
+     * are independent of it. */
+    sim.event.pending = 0;
 
     game_update_event(&sim, &tw);         /* 1 tick = 1 EXE frame, raw */
     CHECK(tenant(off5a) != NULL, "sanity: origin-floor office exists");
@@ -2270,6 +2274,53 @@ static void test_fire_spread(void)
           "chopper sweep + edge burn-out end the fire");
     CHECK(tenant(off5d)->state != TENANT_ABANDONED,
           "the doused right front never reached the rightmost office");
+}
+
+/* Fire foot response (SetAllGuards(8) + FireGuardTick 10f8:0c06 —
+ * fire foot-guards referee 2026-08-08): the FREE dialog branch sends
+ * every security office's 6 guards; they sweep, douse whole fronts,
+ * gain instant travel after the first douse, and can finish a fire
+ * without the chopper — through the same extinguish path. */
+static void test_fire_footguards(void)
+{
+    printf("fire foot guards (free-path response):\n");
+    fresh();
+    tw.star_rating = 3;
+    fplace(ITEM_SECURITY, 2, 60);
+    for (int i = 0; i < 3; i++) fplace(ITEM_OFFICE, 5, 100 + i * 9);
+    uint16_t off5d = fplace(ITEM_OFFICE, 5, 127);
+    for (int i = 0; i < 3; i++) fplace(ITEM_OFFICE, 6, 100 + i * 9);
+    uint16_t off6d = fplace(ITEM_OFFICE, 6, 127);
+
+    game_start_fire(&sim, &tw, 5);
+    game_event_proceed(&sim, &tw);        /* free path = deploy guards */
+    CHECK(sim.event.hunt.active == 2, "free path deploys guards in fire mode");
+    CHECK(sim.event.hunt.noffices == 1, "one security office responded");
+
+    sim.hour = 11;
+    int i;
+    for (i = 0; i < 2000 && sim.event.active; i++)
+        game_update_event(&sim, &tw);
+    CHECK(!sim.event.active, "guards put the fire out");
+    CHECK(i < 300, "guards end it early (unfought edge burn takes longer)");
+    CHECK(sim.event.hunt.active == 0, "guards stand down at fire end");
+    CHECK(sim.event.hunt.defuse == 1,
+          "first douse armed the travel boost");
+    /* The rightward fronts get doused before reaching the rightmost
+     * offices (the leftward fronts still die at the extent edge — a
+     * guard sweeping in from the right can't beat them there). */
+    CHECK(tenant(off5d)->state != TENANT_ABANDONED,
+          "guards saved the rightmost origin-floor office");
+    CHECK(tenant(off6d)->state != TENANT_ABANDONED,
+          "boosted guard saved the rightmost floor-6 office");
+
+    /* No security -> the free path deploys nobody. */
+    fresh();
+    tw.star_rating = 3;
+    for (int i2 = 0; i2 < 3; i2++) fplace(ITEM_OFFICE, 5, 100 + i2 * 9);
+    game_start_fire(&sim, &tw, 5);
+    game_event_proceed(&sim, &tw);
+    CHECK(sim.event.hunt.active == 0, "no security = no foot response");
 }
 
 /* Bomb resolution (ResolveEvent(0) + DestroyTenants 10c8:02bd): blast box =
@@ -3571,6 +3622,7 @@ int main(void)
     test_occupants();
     test_disaster_schedule();
     test_fire_spread();
+    test_fire_footguards();
     test_bomb_blast();
     test_twr_import();
     test_twr_export();
