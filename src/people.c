@@ -132,6 +132,7 @@ static void record_clean_mark(const Tenant *room)
         PeopleCleanMark *m = &clean_marks[clean_mark_count++];
         m->fidx = (int16_t)floor_to_index(room->floor);
         m->x = (int16_t)room->x;
+        m->w = (int16_t)room->width;
         m->until = until;
     }
 }

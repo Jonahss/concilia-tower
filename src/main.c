@@ -146,6 +146,10 @@
 #define SPR_ELEV_EXP_F1  0xf82b
 #define SPR_ELEV_EXP_F2  0xf92b
 #define SPR_ELEV_QUEUE   0x8468   /* waiting people silhouettes (40 × 16px) */
+#define SPR_MAID_INROOM  0x85EE   /* bitmap 1518: the in-room cleaning maid,
+                                   * 3 16x24 poses (dust/scrub/linens) —
+                                   * bank-8 people sheet frames 0x60-0x62
+                                   * (serviced-room referee 2026-08-07) */
 #define SPR_PEOPLE_EMERG 0x8469   /* emergency figures, 20 cells: firefighters
                                    * (cells 0-9) + security guards (10-15).
                                    * In the EXE it's the tail of the people
@@ -3469,21 +3473,29 @@ static void render_people(void)
     for (int i = 0; i < ps->shaft_count; i++)
         render_shaft(&ps->shafts[i]);
 
-    /* Maids at work: the maid+cart figure (people strip row base 0x32 =
-     * queue sheet cells 50-51) drawn at each room mid-clean. The EXE
-     * never rendered this — our sim genuinely has her there, so we show
-     * the real state (Jonah's ask, 2026-08-07). */
-    Sprite *qs = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
-    if (qs && qs->texture && game.anim_people) {
+    /* Maids at work — THE REAL ANIMATION (serviced-room referee
+     * addendum 2026-08-07, vindicating Jonah's memory): while a room's
+     * person-0 sits at status 3, the EXE's hotel-guest renderer draws a
+     * maid figure INSIDE the room — bitmap 1518 (0x85EE), grey uniform,
+     * pink apron, three poses (dusting / scrubbing / carrying linens) —
+     * at x = rand%(width-1), re-rolled every 16 ticks, for the whole
+     * ~64-tick clean. */
+    Sprite *maid = sprites_find(&game.sprites, SPR_MAID_INROOM);
+    if (maid && maid->texture && game.anim_people) {
         const PeopleCleanMark *marks;
         int nm = people_clean_marks(&marks);
         for (int i = 0; i < nm; i++) {
             int sx, sy;
             grid_to_screen(index_to_floor(marks[i].fidx), marks[i].x,
                            &sx, &sy);
-            SDL_Rect src = { 50 * 8, 0, 16, 36 };
-            SDL_Rect dst = { sx + CELL_W, sy, 16, CELL_H };
-            SDL_RenderCopy(game.renderer, qs->texture, &src, &dst);
+            uint32_t h = ((uint32_t)(game.sim.frame / 16) + i * 7u)
+                         * 2654435761u;
+            int pose = (int)(h % 3);
+            int cells = marks[i].w >= 3 ? marks[i].w - 2 : 0;
+            int xoff = cells ? (int)((h >> 8) % (uint32_t)(cells + 1)) : 0;
+            SDL_Rect src = { pose * 16, 0, 16, 24 };
+            SDL_Rect dst = { sx + xoff * CELL_W, sy + CELL_H - 24, 16, 24 };
+            SDL_RenderCopy(game.renderer, maid->texture, &src, &dst);
         }
     }
 }
@@ -8448,6 +8460,7 @@ int main(int argc, char *argv[])
     /* Queue silhouettes use white as transparent */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_PEOPLE_EMERG);
+    sprites_apply_white_key(&game.sprites, game.renderer, SPR_MAID_INROOM);
     /* person figure sheets (portrait rows) are white-keyed too */
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NORMAL);
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NAMED);

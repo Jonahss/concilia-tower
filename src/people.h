@@ -315,6 +315,7 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
  * state, never saved): the renderer draws the maid+cart figure there. */
 typedef struct {
     int16_t fidx, x;    /* room's floor index and left cell */
+    int16_t w;          /* room width in cells (the EXE rolls x%(w-1)) */
     int32_t until;      /* sim frame the dwell ends */
 } PeopleCleanMark;
 int people_clean_marks(const PeopleCleanMark **out);
