@@ -4361,17 +4361,16 @@ static void render_minimap(void)
         }
     }
 
-    /* Legend strip (the EXE blits bitmap 0x138+mode over the map) at the
-     * original's spot: left edge, y = 200 - height + 18 in the 288-tall
-     * map space (MapPaint 058a-0615, referee 2026-08-08). */
+    /* Legend strip (the EXE blits bitmap 0x138+mode over the map): a
+     * 200x20 full-width bar flush at the BOTTOM of the visible map area
+     * (MapPaint 058a: y = 0xC8 - height + 0x12 with the 200px viewport —
+     * i.e. bottom edge; Jonah confirmed the original's placement). */
     if (game.map_mode > 0) {
         Sprite *lg = sprites_find(&game.sprites, (uint16_t)(0x8138 + game.map_mode));
         if (lg) {
             int lw = lg->w * map_w / 200;       /* legends drawn for a 200px map */
             int lh = lg->h;
-            SDL_Rect dst = { map_x,
-                             map_y + (200 - lg->h + 18) * map_h / 288,
-                             lw, lh };
+            SDL_Rect dst = { map_x, map_y + map_h - lh, lw, lh };
             SDL_RenderCopy(game.renderer, lg->texture, NULL, &dst);
         }
     }
