@@ -326,6 +326,17 @@ static void item_fallback_color(ItemType type, uint8_t *r, uint8_t *g, uint8_t *
     }
 }
 
+/* Minimap elevator line colors — MapPaint 1160:0481 type switch (referee
+ * 2026-08-08): express BLUE, standard BLACK, service RED, each a 1px
+ * solid vertical line. */
+static void minimap_shaft_color(ItemType type,
+                                uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    if (type == ITEM_ELEVATOR_EXPRESS)      { *r = 0;   *g = 0; *b = 255; }
+    else if (type == ITEM_ELEVATOR_SERVICE) { *r = 255; *g = 0; *b = 0;   }
+    else                                    { *r = 0;   *g = 0; *b = 0;   }
+}
+
 /* ---------- Game state ---------- */
 typedef struct {
     NEResourceTable exe;
@@ -4137,10 +4148,39 @@ static void render_minimap(void)
     int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
     
     /* Map background — use original bitmap 0x8160 (200×288) if available.
-     * Top 264px = sky, bottom 24px = ground strip (from OpenSkyscraper). */
+     * Top 264px = sky, bottom 24px = ground strip (from OpenSkyscraper).
+     * The EXE's map sky is live (referee_minimap_2026-08-08): its pixels
+     * sit in the palette's animated day/night gradient slots (0xBC-0xC1),
+     * so it darkens with the main view — emulated here with the shared
+     * sky tint as a color-mod — and MapPaint 1160:0284-0340 scrolls the
+     * sky band ((frame_time>>4)%20)*10 px with wraparound for cloud
+     * drift. Ground strip is static and untinted. */
     if (game.ui_map) {
-        SDL_Rect dst = { map_x, map_y, map_w, map_h };
-        SDL_RenderCopy(game.renderer, game.ui_map, NULL, &dst);
+        const int art_w = 200, art_h = 288, sky_h = 264;
+        int ft = game.sim.quarter * GAME_TICKS_PER_QUARTER + game.sim.tick;
+        int shift = ((ft >> 4) % 20) * 10;              /* art px, 0..190 */
+        int sky_dst_h = map_h * sky_h / art_h;
+        uint8_t tr, tg, tb, ta;
+        game_sky_tint(&game.sim, &tr, &tg, &tb, &ta);
+        SDL_SetTextureColorMod(game.ui_map,
+                               255 - (int)ta * (255 - (int)tr) / 255,
+                               255 - (int)ta * (255 - (int)tg) / 255,
+                               255 - (int)ta * (255 - (int)tb) / 255);
+        /* Wrapped two-piece blit: src [shift..200) then [0..shift). */
+        int w1 = art_w - shift;
+        int dw1 = map_w * w1 / art_w;
+        SDL_Rect s1 = { shift, 0, w1, sky_h };
+        SDL_Rect d1 = { map_x, map_y, dw1, sky_dst_h };
+        SDL_RenderCopy(game.renderer, game.ui_map, &s1, &d1);
+        if (shift > 0) {
+            SDL_Rect s2 = { 0, 0, shift, sky_h };
+            SDL_Rect d2 = { map_x + dw1, map_y, map_w - dw1, sky_dst_h };
+            SDL_RenderCopy(game.renderer, game.ui_map, &s2, &d2);
+        }
+        SDL_SetTextureColorMod(game.ui_map, 255, 255, 255);
+        SDL_Rect gs = { 0, sky_h, art_w, art_h - sky_h };
+        SDL_Rect gd = { map_x, map_y + sky_dst_h, map_w, map_h - sky_dst_h };
+        SDL_RenderCopy(game.renderer, game.ui_map, &gs, &gd);
     } else {
         /* Fallback: sky gradient + earth */
         uint8_t tr, tg, tb, ta;
@@ -4174,7 +4214,10 @@ static void render_minimap(void)
     {
         int16_t dleft[TOWER_FLOOR_COUNT], dright[TOWER_FLOOR_COUNT];
         tower_floor_extents(&game.tower, dleft, dright);
-        SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+        /* EXE silhouette fill is light gray RGB(204,204,204) — MapPaint
+         * paints the tower shell pale so the black/red/blue shaft lines
+         * read against it (referee 2026-08-08). */
+        SDL_SetRenderDrawColor(game.renderer, 204, 204, 204, 255);
         for (int fi = 0; fi < TOWER_FLOOR_COUNT; fi++) {
             if (dright[fi] <= dleft[fi]) continue;
             int fl = fi + TOWER_MIN_FLOOR;
@@ -4218,12 +4261,14 @@ static void render_minimap(void)
         uint8_t r, g, b;
         int is_shell = (t->type == ITEM_FLOOR) || item_is_transport(t->type);
         if (game.map_mode == 0) {
-            if (t->type == ITEM_FLOOR) { r = 70; g = 70; b = 70; }
+            if (t->type == ITEM_FLOOR) { r = 204; g = 204; b = 204; }
+            else if (item_is_elevator(t->type))
+                minimap_shaft_color(t->type, &r, &g, &b);
             else item_fallback_color(t->type, &r, &g, &b);
             if (t->state == TENANT_ABANDONED) { r = 100; g = 30; b = 30; }
             else if (t->state == TENANT_CONSTRUCTION) { r = 200; g = 180; b = 0; }
         } else if (is_shell) {
-            r = 70; g = 70; b = 70;        /* shell only in overlay modes */
+            r = 204; g = 204; b = 204;     /* shell only in overlay modes */
         } else if (game.map_mode == 1) {
             /* Eval = the JUDGE'S verdict byte, exactly like the EXE
              * (FUN_11d0_0363 switches on +0x15): 0 red / 1 yellow / 2-3
@@ -4252,7 +4297,7 @@ static void render_minimap(void)
             else if (item_is_hotel_room(t->type) &&
                      t->condition == ROOM_INFESTED)
                 { r = 230; g = 40; b = 40; }
-            else { r = 70; g = 70; b = 70; }
+            else { r = 204; g = 204; b = 204; }
         }
 
         SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
@@ -4275,8 +4320,8 @@ static void render_minimap(void)
         int tx = map_x + (s->x * map_w / TOWER_WIDTH);
         int tw = map_x + ((s->x + 4) * map_w / TOWER_WIDTH) - tx;
         uint8_t r, g, b;
-        if (game.map_mode == 0) item_fallback_color(s->type, &r, &g, &b);
-        else { r = 70; g = 70; b = 70; }        /* shell in overlays */
+        if (game.map_mode == 0) minimap_shaft_color(s->type, &r, &g, &b);
+        else { r = 204; g = 204; b = 204; }     /* shell in overlays */
         SDL_SetRenderDrawColor(game.renderer, r, g, b, 255);
         SDL_Rect line = { tx + tw / 2, ty, 1, by - ty };
         SDL_RenderFillRect(game.renderer, &line);
