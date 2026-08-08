@@ -292,7 +292,10 @@ typedef struct {
     uint8_t  hosted;       /* Hotel room: guests stayed overnight */
     uint8_t  condition;    /* Hotel room: RoomCondition (clean/dirty/infested) */
     uint8_t  burned;       /* Destroyed by fire — renders as rubble until rebuilt */
-    uint8_t  cleaned_today;/* Housekeeping unit: rooms cleaned since dawn */
+    uint8_t  fill_state;   /* Recycling center: TrashT fill 0-5 + 6 = the
+                            * 7:00-7:24AM garbage-truck frame (tenant +0x0B
+                            * in the EXE). Occupies the dead HK quota byte
+                            * (cleaned_today) — layout unchanged. */
     uint8_t  patients_today; /* Medical center: patients admitted since 7AM
                                 (hard cap 40/day — InMedicalPeple 1170:0291;
                                 a full center turns patients away SILENTLY) */

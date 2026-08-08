@@ -1636,10 +1636,20 @@ static void render_tower(void)
                               : (tenant->space_ordinal < parked)
                                     ? 2 + (tenant->id % 13) : 0;
                 } else if (tenant->type == ITEM_RECYCLING && nframes >= 5) {
-                    /* Recycling (Jonah): the frames are a trash-accumulation
-                     * cycle. We don't model a fill level, so loop it slowly —
-                     * trash piles up then the truck clears it back to empty. */
-                    frame_idx = (game.sim.frame / 96) % nframes;
+                    /* Recycling: the SIM's TrashT fill state drives the
+                     * art now (stages 5PM-5:58AM, tower-wide level —
+                     * every center sharing one look is authentic). Comp
+                     * frames = fill 1-5; empty and the 7:00-7:24AM truck
+                     * state use the whole-center empty sheet (0x88E8),
+                     * the truck itself overlaid below. */
+                    int fs = tenant->fill_state;
+                    if (fs >= 1 && fs <= 5) frame_idx = fs - 1;
+                    else {
+                        Sprite *emp = sprites_find(&game.sprites,
+                                                   SPR_RECYCLING_EMPTY);
+                        if (emp) { spr = emp; nframes = 1; }
+                        frame_idx = 0;
+                    }
                 } else if (tenant->type == ITEM_METRO && nframes >= 3) {
                     /* Metro: frame 0 = TRAIN at the platform (sheet 0x8C29,
                      * eyeballed 2026-07-11), 1 = empty day, 2 = night. The
@@ -1742,24 +1752,21 @@ static void render_tower(void)
                     SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
                 }
 
-                /* Recycling collection truck (0x892E): pulls up to empty the
-                 * center when the trash cycle is at its fullest, then it's gone
-                 * (collected). Slides in from the left, parks, slides back. */
+                /* The garbage truck (fill state 6, 7:00-7:24 AM): 0x892E
+                 * is the whole empty LOWER FLOOR with the truck parked
+                 * by the door — a full-row frame, not a vehicle sprite
+                 * (the old code shrank it to a third and slid it around,
+                 * which read as a squished second building). Drawn over
+                 * the lower band of the empty center. */
                 if (tenant->type == ITEM_RECYCLING &&
-                    ((game.sim.frame / 96) % nframes) == nframes - 1) {
+                    tenant->fill_state == 6) {
                     Sprite *truck = sprites_find(&game.sprites, 0x892E);
                     if (truck) {
-                        int win = game.sim.frame % 96;          /* 0..95 */
-                        float p = (win < 32) ? win / 32.0f
-                                : (win < 64) ? 1.0f
-                                : 1.0f - (win - 64) / 32.0f;    /* arrive/hold/leave */
-                        int tk_w = tw / 3;
-                        int parked = tx + tw / 2 - tk_w / 2;
-                        int off = tx - tk_w;
-                        SDL_Rect td = { off + (int)((parked - off) * p),
-                                        draw_y + draw_h - truck->h,
-                                        tk_w, truck->h };
-                        SDL_RenderCopy(game.renderer, truck->texture, NULL, &td);
+                        /* sheet split: 24px upper + 36px lower of 60 */
+                        SDL_Rect td = { tx, draw_y + draw_h * 24 / 60,
+                                        tw, draw_h * 36 / 60 };
+                        SDL_RenderCopy(game.renderer, truck->texture,
+                                       NULL, &td);
                     }
                 }
             } else if (spr) {

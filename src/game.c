@@ -14,6 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 0xB92C. The EXE saves this flag; the port keeps it file-static to
+ * leave the v16 save layout untouched — after a load the gate simply
+ * re-verifies at the next 5:58 AM stage call (worst case a promotion
+ * waits a day). Promote into GameSim at the next SAVE_VERSION bump. */
+static int g_recycling_adequate;
+
 /* Forward declarations */
 static int calc_lobby_maintenance(Tower *tower);
 
@@ -228,9 +234,11 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
 
     /* TrashT (seg_1088): adequate while population stays under 2500 per
      * recycling center; inadequate flips trucks off and blocks star 4/5. */
-    sim->promo.recycling_adequate =
-        recycling_centers > 0 &&
-        sim->standing_population / recycling_centers < 2500;
+    /* 0xB92C is maintained by the TrashT daily schedule (the 5:58AM
+     * stage-5 call is the end-of-day capacity verdict); the promo scan
+     * just reads it, like medical. */
+    (void)recycling_centers;
+    sim->promo.recycling_adequate = g_recycling_adequate;
 
     /* 0xB92D lives on the sim (armed 7AM, cleared by the no-center path);
      * the scan just mirrors it into the flag bank */
@@ -1045,6 +1053,84 @@ void game_update_reachability(GameSim *sim, Tower *tower)
  * an invention and is gone; a room no maid can route to simply stays
  * dirty and feeds the 3-day neglect fuse, exactly like the EXE. */
 
+/* --- Recycling (TrashT seg_1088, decode 2026-07-02) ---
+ * The fill level is TOWER-WIDE state, not per-center: every center
+ * shows required = f(population / center_count) capped by the stage,
+ * written to all centers at the same TimeT rows — all centers sharing
+ * one look is authentic. Trucks come at 7:00 AM only while capacity is
+ * adequate; a tower over 2500 pop/center never gets collected (sticky
+ * full at stage 5) and the star-4/5 gate stays shut. */
+
+static int trash_required_level(const Tower *tower, int centers)
+{
+    long ratio = centers > 0 ? tower->population / centers : 999999;
+    return ratio <  500 ? 1
+         : ratio < 1000 ? 2
+         : ratio < 1500 ? 3
+         : ratio < 2000 ? 4
+         : ratio < 2500 ? 5 : 6;
+}
+
+static int trash_center_count(const Tower *tower)
+{
+    int n = 0;
+    for (int i = 0; i < tower->tenant_count; i++)
+        if (tower->tenants[i].type == ITEM_RECYCLING &&
+            tower->tenants[i].state != TENANT_EMPTY &&
+            tower->tenants[i].state != TENANT_CONSTRUCTION) n++;
+    return n;
+}
+
+/* UpdateTrashFill(stage) — 1088:0000. Stages fire at ft 1600/1800/2000/
+ * 2200/2400/2566 (5PM..5:58AM); stage 5 is the day's capacity verdict. */
+static void game_trash_fill(GameSim *sim, Tower *tower, int stage)
+{
+    if (tower->star_rating <= 2) return;
+    int centers = trash_center_count(tower);
+    if (centers == 0) { g_recycling_adequate = 0; return; }
+    int required = trash_required_level(tower, centers);
+    int level, adequate;
+    if (stage < required) { level = stage; adequate = 0; }
+    else                  { level = required; adequate = 1; }
+    g_recycling_adequate = adequate;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_RECYCLING) continue;
+        /* sticky full: an inadequate tower's stage-5 centers stay
+         * visibly full across days until capacity recovers */
+        if (adequate || t->fill_state != 5)
+            t->fill_state = (uint8_t)level;
+    }
+}
+
+/* CollectTrash — 1088:00de, ft 0 = 7:00 AM: trucks empty the centers,
+ * but ONLY while adequate — the punish mechanic is that they simply
+ * don't come. The truck frame (6) sits on the lower floor until 7:24. */
+static void game_trash_collect(GameSim *sim, Tower *tower)
+{
+    if (tower->star_rating <= 2) return;
+    if (trash_center_count(tower) == 0) { g_recycling_adequate = 0; return; }
+    int any = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_RECYCLING) continue;
+        if (t->fill_state != 0 && g_recycling_adequate) {
+            t->fill_state = 6;
+            any = 1;
+        }
+    }
+    if (any) play_snd(SND_GARBAGE);   /* truck engine, once (1088:01a9) */
+}
+
+/* ClearTruckSprite — 1088:01d1, ft 0x20 = 7:24 AM. */
+static void game_trash_truck_clear(Tower *tower)
+{
+    for (int i = 0; i < tower->tenant_count; i++)
+        if (tower->tenants[i].type == ITEM_RECYCLING &&
+            tower->tenants[i].fill_state == 6)
+            tower->tenants[i].fill_state = 0;
+}
+
 /* --- The daily 5PM hotel pass ---
  * Ported from the TimeT 17:00 dispatch (ft 0x640): roach spread
  * (ExpandoBadHotel 1130:01e2) runs FIRST, then JudgeAllHotel's neglect
@@ -1383,21 +1469,8 @@ void game_update(GameSim *sim, Tower *tower)
     sim->frame++;
     sim->tick++;
 
-    /* Garbage truck (#2280): the renderer's trash cycle steps the 5-frame
-     * recycling sheet every 96 frames and parks the collection truck on the
-     * last phase — ring the truck sound once as it pulls up, if the tower
-     * has a working recycling center. (One play covers every center: the
-     * cycle is a single frame-derived clock they all share.) */
-    if (sim->frame % (96 * 5) == 96 * 4) {
-        for (int i = 0; i < tower->tenant_count; i++) {
-            const Tenant *t = &tower->tenants[i];
-            if (t->type == ITEM_RECYCLING &&
-                (t->state == TENANT_OCCUPIED || t->state == TENANT_VACANT)) {
-                play_snd(SND_GARBAGE);
-                break;
-            }
-        }
-    }
+    /* (The old frame-derived recycling truck-sound cycle is gone: the
+     * TrashT schedule below owns the real 7:00 AM collection.) */
 
     /* Drain the settlement cha-ching queue: one ka-ching every ~26 ticks so a
      * rich morning rings a clear run of them (each cash WAV is ~0.5s). */
@@ -1417,6 +1490,20 @@ void game_update(GameSim *sim, Tower *tower)
     int tick_in_day = (int)sim->quarter * GAME_TICKS_PER_QUARTER + sim->tick;
     game_tick_clock(tick_in_day, &sim->hour, &sim->minute);
     sim->time_of_day = hour_to_tod(sim->hour);
+
+    /* TrashT daily rows (TimeT dispatch, seg_1088 decode): fill stages
+     * climb through the evening/night; the 5:58 AM stage is the
+     * capacity verdict; trucks at 7:00 sharp, driving off at 7:24. */
+    switch (tick_in_day % GAME_DAY_TICKS) {
+    case 1600: game_trash_fill(sim, tower, 0); break;   /*  5:00 PM */
+    case 1800: game_trash_fill(sim, tower, 1); break;   /*  7:00 PM */
+    case 2000: game_trash_fill(sim, tower, 2); break;   /*  9:00 PM */
+    case 2200: game_trash_fill(sim, tower, 3); break;   /* 11:00 PM */
+    case 2400: game_trash_fill(sim, tower, 4); break;   /*  1:00 AM */
+    case 2566: game_trash_fill(sim, tower, 5); break;   /*  5:58 AM */
+    case 0:    game_trash_collect(sim, tower); break;   /*  7:00 AM */
+    case 0x20: game_trash_truck_clear(tower);  break;   /*  7:24 AM */
+    }
 
     /* Star evaluation, hourly — fires on every displayed-hour change
      * (stateless edge against the previous tick's decode; on the
