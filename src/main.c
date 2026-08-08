@@ -3237,9 +3237,12 @@ static void render_shaft(ElevatorShaft *s)
     Sprite *queue_spr = sprites_find(&game.sprites, SPR_ELEV_QUEUE);
 
     if (!s->active) return;
-    /* Show Off hides cars and queues with the shaft body (caps stay — they
-     * are the extend handles). Edit mode always shows the shaft it's editing. */
-    if (s->hidden && !game.elv_edit_mode) queue_spr = NULL;
+    /* Show Off makes only the shaft BODY transparent — the waiting queue
+     * still draws over the exposed building, exactly like the cars. The
+     * EXE's queue-person draw (ElvPeple 10a8:0507) is passed the SHOW
+     * word and draws in BOTH modes (normal GDI path / show-off sprite
+     * composite) — neither branch skips (byte-verified 2026-08-07,
+     * Jonah's catch). Caps stay as the extend handles. */
     {
         int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
 
@@ -6223,7 +6226,8 @@ static uint16_t person_hit_test(int mx, int my)
     for (int i = 0; i < ps->shaft_count; i++) {
         ElevatorShaft *s = &ps->shafts[i];
         if (!s->active) continue;
-        if (s->hidden && !game.elv_edit_mode) continue;
+        /* Show-Off queues still render (see render_shaft), so they stay
+         * clickable — no hidden-shaft skip here either. */
         int shaft_w = ITEM_WIDTH[s->type] * CELL_W;
         for (int f = s->lo; f <= s->hi; f++) {
             const ElevatorStop *st = &s->stop[f];
