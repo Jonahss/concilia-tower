@@ -3375,7 +3375,12 @@ static void render_shaft(ElevatorShaft *s)
         for (int ci = 0; ci < s->num_cars; ci++) {
             ElevatorCar *c = &s->car[ci];
             if (!c->active) continue;
-            if (s->hidden && !game.elv_edit_mode) continue;
+            /* Show-Off (the SHOW word, group+0x3C) makes only the shaft
+             * BODY transparent — DrawElevator (1090:0b10) draws every
+             * active car with no SHOW-word gate, so cars stay visible
+             * against the exposed building (Jonah 2026-08-07,
+             * byte-verified). The old `if (s->hidden) continue` here
+             * wrongly hid them. */
             float truef = (float)index_to_floor(c->floor);
             if (c->target != c->floor && c->move_total) {
                 float prog = (float)(c->move_total - c->move_timer) /
