@@ -2225,16 +2225,14 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     }
 
     /* 8. Too far from Lobby or Skylobby (#21, LobbyZoneLine 1108:0520) —
-     * shop/food outside any commercial zone. The EXE's FloorToZone
-     * (JudgeT seg54:166b): internal (floor-5)/15 with remainder <= 9,
-     * else no zone — so each lobby at 15k anchors a 10-floor band from
-     * 5 below it to 4 above; a shop outside every band gets this line
-     * explaining the dead business. */
-    if ((is_shop || is_food) && n < max) {
-        int in = t->floor + 10 - 5;   /* internal floor (ground=10) - 5 */
-        if (in < 0 || in % 15 > 9)
-            PUSH("Too far from Lobby or Skylobby");
-    }
+     * shop/food whose floor is outside every venue band (zone_of_venue,
+     * FloorToZone 166b): the dead floors 6-10, 21-25, ... explain the
+     * dead business. NEVER fires below ground — the IDIV truncation
+     * quirk keeps all basements valid zone 0 (retail-zone referee
+     * 2026-08-08; the old in<0 branch here was wrong and matched the
+     * port's old routing, not the EXE). */
+    if ((is_shop || is_food) && n < max && zone_of_venue(t->floor) < 0)
+        PUSH("Too far from Lobby or Skylobby");
 
     /* 9. Opens tomorrow (#24) — restaurant/fast food still under construction. */
     if (is_food && t->state == TENANT_CONSTRUCTION && n < max)

@@ -436,10 +436,18 @@ static const int TENANT_ACTIVE_TIMES[][TOD_COUNT] = {
     /* HOUSEKEEPING */   {0, 1, 1, 0, 0},  /* Cleans after morning checkout */
 };
 
-/* --- Zone system (from JudgeT seg_11a8) ---
- * Tower divided into 7 vertical zones of 15 floors each.
- * Commercial tenants within same zone compete for customers.
- * Too many restaurants/shops in one zone = stress. */
+/* --- Zone system (retail-zone referee 2026-08-08, seg_11a8) ---
+ * The EXE uses TWO different zone formulas:
+ * - CUSTOMERS resolve their zone with 15-floor bands aligned to the
+ *   sky-lobby floors (PickRestaurantForFloor 11a8:1498), never invalid;
+ *   basements truncate to zone 0 (x86 IDIV). floor_to_zone below IS
+ *   this formula in port floors.
+ * - VENUES join a zone's pick-list only inside the 10-floor
+ *   lobby-centered band (FloorToZone 11a8:166b, signed remainder <= 9).
+ *   The IDIV truncation quirk makes EVERY basement valid zone-0 ground —
+ *   deep-basement retail authentically thrives. The dead bands (floors
+ *   6-10, 21-25, ... in port numbering) hold venues no zone-routed
+ *   customer can ever pick; only their own street walk-ins feed them. */
 #define NUM_ZONES       7
 #define FLOORS_PER_ZONE 15
 
@@ -451,6 +459,17 @@ static inline int floor_to_zone(int floor) {
     if (floor < 0) return 0;
     int z = floor / FLOORS_PER_ZONE;
     return (z >= NUM_ZONES) ? NUM_ZONES - 1 : z;
+}
+
+/* Venue-side zone (FloorToZone 11a8:166b): the zone this venue's
+ * pick-list membership lands in, or -1 outside every band. C99 trunc
+ * division/remainder = x86 IDIV, so basements (negative remainders)
+ * pass the <= 9 test exactly like the EXE. */
+static inline int zone_of_venue(int floor) {
+    int n = floor + 4;
+    int z = n / FLOORS_PER_ZONE, rem = n % FLOORS_PER_ZONE;
+    if (z < 0 || z >= NUM_ZONES || rem > 9) return -1;
+    return z;
 }
 
 /* --- Disasters (EventT seg_10c8 + FireT seg_10e8) ---

@@ -2231,11 +2231,15 @@ static int is_retail_kind(ItemType ty)
 }
 
 /* Pick a same-kind retail venue for a customer on `floor` — the EXE's
- * PickRestaurant (11a8:12dc): uniform random over the 15-floor zone's
- * venues of that kind, falling back to the ground zone, and THEN the
- * validity check — a closed pick fails the whole attempt, no re-roll.
- * This selection IS the competition mechanic: more same-kind venues in a
- * zone = fewer expected customers each. Returns NULL on a failed attempt. */
+ * PickRestaurant (11a8:12dc): uniform random over the customer zone's
+ * venue list, falling back to the ground zone only when that list is
+ * EMPTY, and THEN the validity check — a closed pick fails the whole
+ * attempt, no re-roll. This selection IS the competition mechanic: more
+ * same-kind venues in a zone = fewer expected customers each. The two
+ * sides use DIFFERENT band formulas (retail-zone referee 2026-08-08):
+ * the customer's zone is floor_to_zone; a venue is only in a list at
+ * all when zone_of_venue says so — dead-band venues (floors 6-10,
+ * 21-25, ...) are unreachable here, while basements are valid zone 0. */
 static Tenant *pick_retail(Tower *tower, ItemType kind, int floor, int seed,
                            const uint8_t *reach)
 {
@@ -2249,14 +2253,14 @@ static Tenant *pick_retail(Tower *tower, ItemType kind, int floor, int seed,
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
             if (t->type == kind && t->state == TENANT_OCCUPIED &&
-                floor_to_zone(t->floor) == zone) n++;
+                zone_of_venue(t->floor) == zone) n++;
         }
         if (!n) continue;                  /* empty zone -> ground fallback */
         int pick = ((seed % n) + n) % n, k = 0;
         for (int i = 0; i < tower->tenant_count; i++) {
             Tenant *t = &tower->tenants[i];
             if (t->type == kind && t->state == TENANT_OCCUPIED &&
-                floor_to_zone(t->floor) == zone && k++ == pick) {
+                zone_of_venue(t->floor) == zone && k++ == pick) {
                 int f = floor_to_index(t->floor);
                 if (!t->retail_open) return NULL;   /* closed pick = fail */
                 if (f < 0 || f >= TOWER_FLOOR_COUNT || !reach[f]) return NULL;
