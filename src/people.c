@@ -2331,9 +2331,14 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
         if (tod == TOD_DAWN) {
             memset(ps->spawned, 0, sizeof(ps->spawned));
         } else {
+            /* Metro pools are per-day; cinema counters also survive the
+             * afternoon->evening flip so the 3PM-staged evening crowd
+             * (schedule census gap #3) counts against ONE cumulative
+             * matinee+evening cap instead of double-dipping. */
             for (int zi = 0; zi < MAX_TENANTS; zi++)
                 if (zi >= tower->tenant_count ||
-                    tower->tenants[zi].type != ITEM_METRO)
+                    (tower->tenants[zi].type != ITEM_METRO &&
+                     tower->tenants[zi].type != ITEM_CINEMA))
                     ps->spawned[zi] = 0;
         }
         memset(ps->dinner_sent, 0, sizeof(ps->dinner_sent));
@@ -2438,10 +2443,17 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
          * fill the matinee through the afternoon and the evening show after
          * five; the party hall summons its 50 guests in the evening */
         int show_cap = 0;
-        if (t->type == ITEM_CINEMA)
-            show_cap = (tod == TOD_AFTERNOON) ? t->quota_matinee
-                     : (tod == TOD_EVENING)   ? t->quota_evening : 0;
-        else if (t->type == ITEM_PARTY_HALL)
+        if (t->type == ITEM_CINEMA) {
+            /* Evening pool staged from 3:00 PM (VenueT ft 0x578 summon —
+             * schedule census gap #3); the cap is CUMULATIVE across the
+             * day since cinema spawn counters survive the phase flip. */
+            if (tod == TOD_AFTERNOON)
+                show_cap = hour >= 15
+                             ? t->quota_matinee + t->quota_evening
+                             : t->quota_matinee;
+            else if (tod == TOD_EVENING)
+                show_cap = t->quota_matinee + t->quota_evening;
+        } else if (t->type == ITEM_PARTY_HALL)
             show_cap = (tod == TOD_EVENING) ? t->quota_evening : 0;
         int patron = show_cap > 0;
         /* Maids (MainteT, referee 2026-08-07): six permanent staff per

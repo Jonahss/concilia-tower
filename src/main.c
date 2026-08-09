@@ -368,6 +368,7 @@ typedef struct {
                                    * unique identity; Jonah 2026-08-07) */
     int             elv_day;      /* schedule editor: 0 weekday / 1 weekend */
     int             elv_period;   /* schedule editor: selected period 0..6 */
+    int             elv_mode_pop; /* Local/Express selector popup open */
     int             elv_scroll;   /* faithful grid: bottom visible floor offset */
     int             elv_x, elv_y; /* dialog window position (draggable) */
     int             elv_edit_mode;   /* Simulate: full-screen shaft-edit surface (seg_10f0) */
@@ -2723,6 +2724,29 @@ static void render_elv_dialog_faithful(void)
         }
     }
 
+    /* Local / Express To Top / Express To Bottom selector (art 0x195
+     * normal / 0x196 pressed; ElvDlogT 1098:234e loaders — bitmap
+     * survey gap #3), popped under the selected period cell. The
+     * current mode's row draws from the pressed sheet. */
+    if (game.elv_mode_pop) {
+        Sprite *mn = sprites_find(&game.sprites, 0x8195);
+        Sprite *mp = sprites_find(&game.sprites, 0x8196);
+        int px = ELV_PCELL_X0 + game.elv_period * ELV_PCELL_PITCH - 30;
+        if (px < 4) px = 4;
+        if (px > ELV_DLG_W - 86) px = ELV_DLG_W - 86;
+        int py = ELV_PCELL_Y + ELV_PCELL_H + 2;
+        if (mn && mn->texture) {
+            SDL_Rect dst = { bx + px, by + py, mn->w, mn->h };
+            SDL_RenderCopy(game.renderer, mn->texture, NULL, &dst);
+            int cur = s->sched_mode[game.elv_day][game.elv_period];
+            if (mp && mp->texture && cur >= 0 && cur < 3) {
+                SDL_Rect src = { 0, cur * 22, 82, 22 };
+                SDL_Rect pd  = { bx + px, by + py + cur * 22, 82, 22 };
+                SDL_RenderCopy(game.renderer, mp->texture, &src, &pd);
+            }
+        }
+    }
+
     /* The two tuning spinner values for the selected (day, period). */
     {
         int d = game.elv_day, p = game.elv_period;
@@ -3087,15 +3111,30 @@ static int elv_dialog_click_faithful(int mx, int my)
     if (pt_in(mx, my, bx, by, ELV_WD_TAB)) { game.elv_day = 0; return 1; }
     if (pt_in(mx, my, bx, by, ELV_WE_TAB)) { game.elv_day = 1; return 1; }
 
-    /* schedule period cells (0..5) */
+    /* An open mode selector: row click sets the period's mode (art
+     * 0x195/0x196 — Local / Express To Top / Express To Bottom; bitmap
+     * survey gap #3). Any other click just closes it. */
+    if (game.elv_mode_pop) {
+        int px = ELV_PCELL_X0 + game.elv_period * ELV_PCELL_PITCH - 30;
+        if (px < 4) px = 4;
+        if (px > ELV_DLG_W - 86) px = ELV_DLG_W - 86;
+        int py = ELV_PCELL_Y + ELV_PCELL_H + 2;
+        for (int m = 0; m < 3; m++) {
+            if (pt_in(mx, my, bx, by, px, py + m * 22, 82, 22)) {
+                s->sched_mode[game.elv_day][game.elv_period] = (uint8_t)m;
+                game.elv_mode_pop = 0;
+                return 1;
+            }
+        }
+        game.elv_mode_pop = 0;
+    }
+
+    /* schedule period cells (0..5): click selects + opens the selector */
     for (int p = 0; p < ELV_PERIODS; p++) {
         if (pt_in(mx, my, bx, by, ELV_PCELL_X0 + p * ELV_PCELL_PITCH,
                   ELV_PCELL_Y, ELV_PCELL_W, ELV_PCELL_H)) {
-            if (p == game.elv_period) {            /* re-click cycles mode */
-                uint8_t *m = &s->sched_mode[game.elv_day][p];
-                *m = (uint8_t)((*m + 1) % 3);
-            }
             game.elv_period = p;
+            game.elv_mode_pop = 1;
             return 1;
         }
     }
@@ -9860,17 +9899,23 @@ int main(int argc, char *argv[])
              * at a time in the EXE, so the single loop channel suffices.
              * One-shots (outbreak #10006, explosion #10004) fire from game.c. */
             {
-                static int prev_loop = 0;   /* 0 none / 1 fire / 2 hunt */
-                int want = !game.sim.event.active ? 0
-                         : game.sim.event.type == EVENT_FIRE ? 1
-                         : (game.sim.event.type == EVENT_BOMB &&
-                            game.sim.event.hunt.active) ? 2 : 0;
+                /* Corrected per the fire referee + sound census
+                 * (2026-08-08): the EXE rings alarm #10014 every 16
+                 * frames whenever a fire or hunt is active (flags&9),
+                 * and the #10009 loop is CHOPPER-only — the port had
+                 * been playing the chopper loop for every fire and
+                 * looping the alarm for hunts. */
+                static int prev_loop = 0;   /* 0 none / 1 chopper */
+                int want = (game.sim.event.active &&
+                            game.sim.event.type == EVENT_FIRE &&
+                            game.sim.event.chopper_x > 0) ? 1 : 0;
                 if (want != prev_loop) {
                     audio_stop_loop();
                     if (want == 1) audio_start_loop(SND_FIRE_LOOP, 0.5f);
-                    if (want == 2) audio_start_loop(SND_GUARD_STEP, 0.5f);
                     prev_loop = want;
                 }
+                if (game.sim.event.active && game.sim.frame % 16 == 0)
+                    play_snd(SND_GUARD_STEP);
             }
 
             /* A freshly proposed disaster pauses the game for the player's
