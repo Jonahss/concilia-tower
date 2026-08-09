@@ -1882,10 +1882,12 @@ void game_update(GameSim *sim, Tower *tower)
                 }
                 for (int i = 0; i < tower->tenant_count; i++)
                     if (tower->tenants[i].type == ITEM_ESCALATOR) {
-                        /* Per GAP (MoneyT 1178:0c4c: res 0x3EA row x
-                         * ((kind>>1)+1)) — a tall grand-lobby escalator
-                         * pays for each floor it spans. Stairs stay free
-                         * (their 0x3EA row is 0). */
+                        /* MoneyT 1178:0c4c: res 0x3EA row x ((kind>>1)+1).
+                         * Escalator kind = 2*(height-2), so (kind>>1)+1
+                         * == height-1 — this expression IS the EXE's
+                         * (tower-together comparison E4 was a false
+                         * positive; checked 2026-08-08). Stairs stay
+                         * free (their 0x3EA row is 0). */
                         int gaps = tower->tenants[i].height - 1;
                         if (gaps < 1) gaps = 1;
                         upkeep += TUNING.maint_escalator * gaps;
@@ -1910,11 +1912,22 @@ void game_update(GameSim *sim, Tower *tower)
                     }
                     if (mt->type == ITEM_HOUSEKEEPING) {
                         /* $10,000 per unit per settlement — res 0x3EA row
-                         * 0xF = 100 (maid referee 2026-08-07). The
-                         * security/medical rows are still unverified, so
-                         * they stay unbilled rather than guessed. */
+                         * 0xF = 100 (maid referee 2026-08-07). */
                         upkeep += 10000;
                         sim->fin_expense_q[FINEXP_HOUSEKEEPING] += 10000;
+                    }
+                    if (mt->type == ITEM_SECURITY) {
+                        /* $20,000/settlement — res 0x3EA row 0xE = 200
+                         * (seg_1178_MoneyT.c:90-92; tower-together
+                         * comparison E2 — byte-cited, was never billed). */
+                        upkeep += 20000;
+                        sim->fin_expense_q[FINEXP_SECURITY] += 20000;
+                    }
+                    if (mt->type == ITEM_RECYCLING) {
+                        /* $50,000/settlement — res 0x3EA row 0x14 = 500
+                         * (same E2 finding). */
+                        upkeep += 50000;
+                        sim->fin_expense_q[FINEXP_RECYCLING] += 50000;
                     }
                 }
             }
@@ -2685,7 +2698,11 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
             if (is_movie) {
                 if (t->venue_state >= 1) t->venue_state = 3;
             } else {
-                int pay = venue_income(t->patrons_today);
+                /* Party halls bank a FLAT $20,000 whenever anyone came
+                 * (MoneyT @131a, flat 200 x $100 — tower-together
+                 * comparison E1, byte-verified; routing them through
+                 * the cinema tier ladder capped them at $2,000). */
+                int pay = t->patrons_today > 0 ? 20000 : 0;
                 if (pay > 0) {
                     tower->money += pay;
                     sim->income_this_quarter += pay;

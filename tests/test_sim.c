@@ -2455,8 +2455,8 @@ static void test_venues(void)
     p->patrons_today = 50;
     money0 = tw.money;
     sim.hour = 17; game_venue_hourly(&sim, &tw);
-    CHECK(tw.money == money0 + 2000 && p->venue_state == 0,
-          "the party banks its tier and closes at 5PM");
+    CHECK(tw.money == money0 + 20000 && p->venue_state == 0,
+          "the party banks its flat $20,000 and closes at 5PM");
 }
 
 /* In-tenant occupants (AnimPeple seg_1028): counts, frame bands and the
