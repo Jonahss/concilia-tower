@@ -2711,7 +2711,13 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
             if (is_movie) { if (t->venue_state >= 1) t->venue_state = 3; }
             else if (t->venue_state == 0) t->venue_state = 1;
             break;
-        case 16:   /* matinee crowd out */
+        case 16:   /* matinee crowd out (EXE EndShow(0,1) at ft 0x5DC;
+                    * show-end referee 2026-08-09 confirmed this whole
+                    * hourly ladder byte-for-byte: matinee end 4PM, party
+                    * teardown+income 5PM, evening end+income 8PM, and
+                    * the 10AM reset never touching state. Micro-nuance
+                    * not modeled: the EXE sets state = patrons_in ? 2:1
+                    * here, briefly showing the egress crowd. */
             if (is_movie) t->venue_state = 1;
             break;
         case 17:   /* evening show; party hall closes + banks its income */
