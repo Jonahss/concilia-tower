@@ -309,45 +309,17 @@ static const int TENANT_RENT_BY_CLASS[][4] = {
     [ITEM_HOUSEKEEPING] = { 0 },  /* pad the designated array to full size */
 };
 
-/* Venue income approximations, per quarter — NOT rent: these types earn
- * per-patron sales in the EXE (no 0x3E9 row), a system the port hasn't
- * built yet. Values are the port's stand-ins pending the patron-AI work. */
-static const int TENANT_INCOME[] = {
-    [ITEM_NONE] = 0,
-    [ITEM_LOBBY] = 0,
-    [ITEM_FLOOR] = 0,
-    [ITEM_OFFICE] = 0,          /* real rent: TENANT_RENT_BY_CLASS */
-    [ITEM_CONDO] = 0,           /* real one-time sale: TENANT_RENT_BY_CLASS */
-    [ITEM_HOTEL_SINGLE] = 0,    /* real rent: TENANT_RENT_BY_CLASS */
-    [ITEM_HOTEL_TWIN] = 0,
-    [ITEM_HOTEL_SUITE] = 0,
-    [ITEM_RESTAURANT] = 0,      /* real: nightly patron-sales settle (11PM) */
-    [ITEM_FAST_FOOD] = 0,       /* real: nightly patron-sales settle (9PM) */
-    [ITEM_SHOP] = 0,            /* real rent: TENANT_RENT_BY_CLASS */
-    [ITEM_CINEMA] = 0,          /* real: tiered show income (VenueT) */
-    [ITEM_PARTY_HALL] = 0,      /* real: tiered event income (VenueT) */
-    [ITEM_METRO] = 0,           /* Service, no direct income */
-    [ITEM_PARKING] = 0,         /* $0 PROVEN (2026-07-11 referee: no 0x3E9
-                                   row, no cash-writer anywhere in ParkingT
-                                   — parking is a pure cost center + the
-                                   lobby-bypass traffic valve) */
-    [ITEM_CATHEDRAL] = 0,
-    [ITEM_MEDICAL] = 0,         /* Service */
-    [ITEM_SECURITY] = 0,        /* Service */
-    [ITEM_RECYCLING] = 0,       /* Service */
-    [ITEM_STAIRS] = 0,
-    [ITEM_ESCALATOR] = 0,
-    [ITEM_ELEVATOR_SHAFT] = 0,
-    [ITEM_ELEVATOR_SERVICE] = 0,
-    [ITEM_ELEVATOR_EXPRESS] = 0,
-    [ITEM_HOUSEKEEPING] = 0,    /* Service, no direct income */
-};
+/* Where every other type's money comes from (no rent row): restaurants/
+ * fast food settle nightly patron sales (11PM/9PM), cinema/party hall
+ * bank tiered show income (VenueT), and parking is $0 PROVEN (2026-07-11
+ * referee: no 0x3E9 row, no cash-writer anywhere in ParkingT — a pure
+ * cost center + the lobby-bypass traffic valve). The old TENANT_INCOME
+ * stand-in table those systems replaced was deleted 2026-08-09. */
 
 /* The rent a tenant pays at its current rate class (0 for venue/service
- * types — they use TENANT_INCOME above). VALUES are byte-real; the payout
- * CADENCE is the port's quarter — the EXE-side consumers (MoneyT
- * 1178:0854/08ec) have an undecoded call schedule, queued as a decomp
- * loose end. */
+ * types — see above). VALUES are byte-real; the payout CADENCE is the
+ * port's quarter — the EXE-side consumers (MoneyT 1178:0854/08ec) have
+ * an undecoded call schedule, queued as a decomp loose end. */
 /* The EXE weekend flag [0xB3A0]: every 3rd day is the weekend. */
 static inline int game_is_weekend(const Tower *t) { return t->day % 3 == 2; }
 
