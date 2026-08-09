@@ -2402,16 +2402,22 @@ void game_parking_recompute(GameSim *sim, Tower *tower)
         int f = floor_to_index(t->floor);
         int ok = f >= 0 && f < TOWER_FLOOR_COUNT && chained[f];
         if (ok) {
-            /* Walk from the ramp toward the space; a run of >= 4 bare
-             * cells severs the floor past it (referee verdict 6). */
+            /* Walk from the ramp toward the space (SetParkingUsable
+             * 1198:09ce, coverage referee 2026-08-09): the drive path
+             * runs over parking spaces and short bare-deck stretches
+             * only — a bare run of >= 4 cells severs it, and ANY other
+             * object (recycling, metro edge, a second ramp...) kills it
+             * outright. The old gap-on-unexcavated logic could never
+             * fire: mid-deck cells are ITEM_FLOOR, not ITEM_NONE. */
             int rx = ramp_x[f], step = (t->x > rx) ? 1 : -1;
             int from = (step > 0) ? rx + ITEM_WIDTH[ITEM_RAMP] : rx - 1;
             int gap = 0;
             for (int cx = from; ok && cx != t->x && cx >= 0 &&
                                 cx < TOWER_WIDTH; cx += step) {
-                if (tower->grid[f][cx].type == ITEM_NONE) {
-                    if (++gap >= 4) ok = 0;
-                } else gap = 0;
+                ItemType ct = tower->grid[f][cx].type;
+                if (ct == ITEM_PARKING) gap = 0;
+                else if (ct == ITEM_FLOOR) { if (++gap >= 4) ok = 0; }
+                else ok = 0;
             }
         }
         t->space_usable = (uint8_t)ok;
@@ -3069,13 +3075,16 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
          * (as we did) silently killed both the train animation and its
          * sound on every real save. */
         if (t->type == ITEM_METRO) {
-            if (sim->hour >= 10 && sim->hour < 17) {
-                if (rand() % 7 == 0) {
-                    t->venue_state = !t->venue_state;
-                    play_snd(SND_METRO);   /* train in/out (referee row 11) */
-                }
-            } else {
-                t->venue_state = 0;
+            /* Carrier referee 2026-08-09 (11e8:0287): the toggle's first
+             * gate is [0xB406]&9 — trains STOP during a bomb or fire;
+             * the ding fires on ARRIVALS only (the 0->in branch); and
+             * outside the 10AM-5PM window the state FREEZES where it is
+             * rather than clearing (a train in the station overnight
+             * stays parked there). */
+            if (!sim->event.active && sim->hour >= 10 && sim->hour < 17 &&
+                rand() % 7 == 0) {
+                t->venue_state = !t->venue_state;
+                if (t->venue_state) play_snd(SND_METRO);  /* arrival only */
             }
             continue;
         }

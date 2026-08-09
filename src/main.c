@@ -1640,6 +1640,14 @@ static void render_tower(void)
                         frame_idx = night ? 6 : 5;   /* needs housekeeping */
                     else if (tenant->capacity > CAP_EMPTY)
                         frame_idx = night ? 2 : 1;   /* guest in the room */
+                    else if (game.sim.hour >= 4 && game.sim.hour < 7)
+                        frame_idx = 2;               /* the EXE's 4AM sync
+                                                      * clamp (<0x18 -> 0x10):
+                                                      * pre-dawn, even clean
+                                                      * vacant rooms sit in
+                                                      * the lights-out band
+                                                      * (hotel-steps referee
+                                                      * 2026-08-09) */
                     else
                         frame_idx = night ? 4 : 3;   /* clean, vacant */
                 } else if (tenant->type == ITEM_OFFICE) {
@@ -6183,6 +6191,7 @@ typedef struct {
     SDL_Rect picture;
     TiField fields[6];
     int nf, price_field;              /* index of the FLD_PRICE row, or -1 */
+    int price_locked;                 /* row shown grayed + inert (sold condo) */
     SDL_Rect price_box, price_items[4];
     int has_newmovie;
     SDL_Rect newmovie_btn, rename_btn, ok_btn;
@@ -6211,6 +6220,13 @@ static void ti_build(const Tenant *t, TiLayout *L)
         inspect_length_str(t, f[nf].value, 40); nf++;
         f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, ty == ITEM_CONDO ? "Price" : "Rent");
         L->price_field = nf; nf++;
+        /* A SOLD condo's price row is grayed and inert in the EXE
+         * (dlgproc @098a: status < 0x18 -> EnableWindow(FALSE), condo
+         * category only — placement/economy referee 2026-08-09). Every
+         * other priced family stays editable forever. */
+        L->price_locked = (ty == ITEM_CONDO &&
+                           t->state >= TENANT_OCCUPIED &&
+                           t->state != TENANT_ABANDONED);
         /* Status word (res 0x2c8): condos sell, offices rent. */
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
         snprintf(f[nf].value, 40, "%s",
@@ -6484,19 +6500,26 @@ static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
     SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
     SDL_RenderDrawRect(game.renderer, &box);
 }
-static void draw_price_dropdown(const Tenant *t, SDL_Rect box, const SDL_Rect *items)
+static void draw_price_dropdown(const Tenant *t, SDL_Rect box, const SDL_Rect *items,
+                                int locked)
 {
-    SDL_Color ink = { 0, 0, 0, 255 };
+    /* locked = the EXE's EnableWindow(FALSE) look: Win31 gray field,
+     * dim text, no arrow, dropdown never opens (sold condos). */
+    SDL_Color ink = locked ? (SDL_Color){ 128, 128, 128, 255 }
+                           : (SDL_Color){ 0, 0, 0, 255 };
     char m[24]; format_money(tenant_rent(t->type, t->rent_class), m, sizeof m);
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    if (locked) SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    else        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
     SDL_RenderFillRect(game.renderer, &box);
     SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
     SDL_RenderDrawRect(game.renderer, &box);
     stats_label(box.x + 6, box.y + 2, m, ink);
-    int ax = box.x + box.w - 15, ay = box.y + 7;
-    SDL_Point tri[4] = { { ax, ay }, { ax + 8, ay }, { ax + 4, ay + 5 }, { ax, ay } };
-    SDL_RenderDrawLines(game.renderer, tri, 4);
-    if (game.rent_dd_open) {
+    if (!locked) {
+        int ax = box.x + box.w - 15, ay = box.y + 7;
+        SDL_Point tri[4] = { { ax, ay }, { ax + 8, ay }, { ax + 4, ay + 5 }, { ax, ay } };
+        SDL_RenderDrawLines(game.renderer, tri, 4);
+    }
+    if (game.rent_dd_open && !locked) {
         for (int k = 0; k < 4; k++) {
             SDL_Rect r = items[k];
             int sel = (k == t->rent_class);
@@ -6952,7 +6975,7 @@ static void render_inspect_popup(void)
         for (int k = 0; k < 4; k++)
             items[k] = (SDL_Rect){ wx + L.price_items[k].x, wy + L.price_items[k].y,
                                    L.price_items[k].w, L.price_items[k].h };
-        draw_price_dropdown(t, box, items);
+        draw_price_dropdown(t, box, items, L.price_locked);
     }
 
     if (L.occ_n)
@@ -7188,7 +7211,8 @@ static int inspect_popup_click(int mx, int my)
         game.rent_dd_open = 0;
     }
     if (L.price_field >= 0 && point_in_rect(mx, my, TIABS(L.price_box))) {
-        game.rent_dd_open = !game.rent_dd_open;
+        if (!L.price_locked)
+            game.rent_dd_open = !game.rent_dd_open;
         return 1;
     }
     if (point_in_rect(mx, my, TIABS(L.rename_btn))) { open_name_editor(t); return 1; }

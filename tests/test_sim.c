@@ -526,7 +526,7 @@ static void test_parking_cars(void)
 
     /* a real garage now: B1 ramp + space, on the chain */
     uint16_t rmp = fplace(ITEM_RAMP, -1, 120);
-    uint16_t spc = fplace(ITEM_PARKING, -1, 100);
+    uint16_t spc = fplace(ITEM_PARKING, -1, 136);
     tenant(rmp)->state = TENANT_OCCUPIED;
     tenant(spc)->state = TENANT_OCCUPIED;
     place(ITEM_ELEVATOR_SHAFT, -1, 250);
@@ -559,7 +559,7 @@ static void test_parking_cars(void)
     Tenant *st = tenant(ste);
     st->state = TENANT_OCCUPIED; st->demand_armed = 1;
     uint16_t rmp2 = fplace(ITEM_RAMP, -1, 120);
-    uint16_t spc2 = fplace(ITEM_PARKING, -1, 100);
+    uint16_t spc2 = fplace(ITEM_PARKING, -1, 136);
     tenant(rmp2)->state = TENANT_OCCUPIED;
     tenant(spc2)->state = TENANT_OCCUPIED;
     place(ITEM_ELEVATOR_SHAFT, -1, 250);
@@ -711,7 +711,7 @@ static void test_vip_visit(void)
     Tenant *st = tenant(ste);
     st->state = TENANT_OCCUPIED; st->demand_armed = 1;
     uint16_t rmp = fplace(ITEM_RAMP, -1, 120);
-    uint16_t spc = fplace(ITEM_PARKING, -1, 100);
+    uint16_t spc = fplace(ITEM_PARKING, -1, 136);
     tenant(rmp)->state = TENANT_OCCUPIED;
     tenant(spc)->state = TENANT_OCCUPIED;
     place(ITEM_ELEVATOR_SHAFT, -1, 250);
@@ -1688,7 +1688,7 @@ static void test_parking_model(void)
     uint16_t r1 = place(ITEM_RAMP, -1, 120);
     CHECK(r1 != 0, "a B1 ramp places");
     CHECK(place(ITEM_RAMP, -1, 140) == 0, "one ramp per floor");
-    uint16_t s1 = place(ITEM_PARKING, -1, 100);
+    uint16_t s1 = place(ITEM_PARKING, -1, 136);
     CHECK(s1 != 0, "a space places once the ramp exists");
 
     /* chain: B2 ramp at a DIFFERENT x doesn't chain; same x does
@@ -1714,17 +1714,22 @@ static void test_parking_model(void)
     CHECK(!tenant(s2)->space_usable && tw.usable_spaces == 1,
           "a same-x ramp chains, but bare floor severs the far space");
 
-    /* pave the drive path except a 4-cell hole at 196..199 — still
-     * severed; close the hole to 3 cells and the space comes back */
+    /* Byte rule (coverage referee 2026-08-09): the drive path rides over
+     * PARKING cells — bare deck severs at a 4-cell run, so you cannot
+     * "pave" a path with empty floor. Line the path with spaces, leaving
+     * a 4-cell deck hole at 196..199 — still severed; close the hole to
+     * 3 cells and the far space comes back. */
     for (int cx = 136; cx < 196; cx++)
-        tw.grid[floor_to_index(-2)][cx].type = ITEM_FLOOR;
+        tw.grid[floor_to_index(-2)][cx].type = ITEM_PARKING;
+    for (int cx = 196; cx < 200; cx++)
+        tw.grid[floor_to_index(-2)][cx].type = ITEM_FLOOR;   /* the deck hole */
     game_parking_recompute(&sim, &tw);
     CHECK(!tenant(s2)->space_usable,
           "a 4-cell bare gap severs the floor past it");
-    tw.grid[floor_to_index(-2)][196].type = ITEM_FLOOR;
+    tw.grid[floor_to_index(-2)][196].type = ITEM_PARKING;
     game_parking_recompute(&sim, &tw);
     CHECK(tenant(s2)->space_usable && tw.usable_spaces == 2,
-          "shrinking the gap to 3 cells restores the space");
+          "shrinking the deck gap to 3 cells restores the space");
 
     /* quotas: 2 usable spaces -> 4 cars per category (2N each,
      * double-parking is real — the quota is the only limiter) */
