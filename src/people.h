@@ -99,6 +99,13 @@ const char *people_take_noroute_msg(void);
  * -1 otherwise); take_result returns 1 favorable / 2 unfavorable once
  * the stay is judged, 0 while pending. */
 void people_vip_arm(int on);
+
+/* Office presence counter (UniPeple +0x0B, referee 2026-08-09): live
+ * workers per office + the night/weekend idle sentinel. Drives the
+ * lit/dark office face, ambience, and interior sprites. */
+int  people_office_lit(const Tower *tower, const Tenant *t);
+int  people_office_workers(const Tower *tower, const Tenant *t);
+void people_office_daystart(Tower *tower, int weekend);
 int  people_vip_is(int idx);
 int  people_vip_take_tagged(void);
 int  people_vip_take_result(void);
@@ -302,6 +309,7 @@ void people_init(PeopleSim *ps);
 /* Rebuild gap map + shafts from the tower. Cheap when nothing changed
  * (diffs the transport layout; resets cars/queues only on change). */
 void people_rebuild_transport(PeopleSim *ps, Tower *tower);
+void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend);
 /* Car assignment (UseCarPerson 1198:06e7): uniform-random usable space,
  * 2N-per-category quota. Returns the space's floor index (and counts
  * the car) or -1. suite selects the category. Exposed for tests. */

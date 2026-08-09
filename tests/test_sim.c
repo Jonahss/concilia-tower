@@ -2503,8 +2503,11 @@ static void test_occupants(void)
     CHECK(ro->count == 2 && ro->frame[0] >= 0x49 && ro->frame[0] <= 0x4B &&
           ro->x[0] <= 2, "restaurant staff behind the counter, waiter band");
 
-    /* presence gates: night office, unhosted room, closed restaurant */
+    /* presence gates: night office, unhosted room, closed restaurant.
+     * Offices key on the live presence counter now (referee 2026-08-09) —
+     * the evening drain leaves it at 0, which daystart(weekday) models. */
     sim.time_of_day = TOD_NIGHT; sim.hour = 23;
+    people_office_daystart(&tw, 0);
     tw2->hosted = 0; r->retail_open = 0;
     for (int f = 0; f < 64; f++) { sim.frame = f; game_animate_occupants(&sim, &tw); }  /* one full re-roll period (the 64-frame wall-clock stagger) */
     CHECK(sim.occupants[tindex(off)].count == 0, "offices empty out at night");

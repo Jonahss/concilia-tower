@@ -177,6 +177,74 @@ const char *people_take_noroute_msg(void)
     return noroute_msg;
 }
 
+/* ---------- Office presence (UniPeple +0x0B, referee 2026-08-09) ----------
+ * The EXE's office status byte is a LIVE worker counter: +1 per arrival
+ * (capped at the 6-worker pool), -1 once per outbound trip, and a
+ * night/weekend IDLE sentinel — the renderer draws the workday face for
+ * any live count (arrivals pending included) and the dark face only when
+ * idle. Ephemeral sim state, rebuilt on load, like the EXE (the .TDT
+ * byte is reseeded by the daily cycle).
+ * Port divergence, documented: the port's lunch-rush customers are
+ * spawned doubles rather than the desk workers themselves, so the
+ * EXE's brief intra-lunch presence dip is not modeled — presence here
+ * tracks the commute cycle (morning fill, evening drain). */
+static uint8_t office_present[MAX_TENANTS];  /* live workers, 0..6 */
+static uint8_t office_idle[MAX_TENANTS];     /* the '8' sentinel */
+
+static int tenant_slot(const Tower *tower, const Tenant *t)
+{
+    return (int)(t - tower->tenants);
+}
+
+int people_office_lit(const Tower *tower, const Tenant *t)
+{
+    return !office_idle[tenant_slot(tower, t)];
+}
+
+int people_office_workers(const Tower *tower, const Tenant *t)
+{
+    return office_present[tenant_slot(tower, t)];
+}
+
+static void office_arrive(const Tower *tower, const Tenant *t)
+{
+    int s = tenant_slot(tower, t);
+    office_idle[s] = 0;                       /* 8 -> 1 arm */
+    if (office_present[s] < 6) office_present[s]++;
+}
+
+static void office_depart(const Tower *tower, const Tenant *t, int evening)
+{
+    int s = tenant_slot(tower, t);
+    if (office_present[s] > 0) office_present[s]--;
+    if (office_present[s] == 0 && evening)    /* ==0 && daypart>=4 -> 8 */
+        office_idle[s] = 1;
+}
+
+/* 7AM DayMiddleUpdate arm: weekends seed the idle sentinel, weekdays
+ * clear to an empty-but-lit office awaiting its commuters. */
+void people_office_daystart(Tower *tower, int weekend)
+{
+    for (int i = 0; i < tower->tenant_count; i++) {
+        if (tower->tenants[i].type != ITEM_OFFICE) continue;
+        office_present[i] = 0;
+        office_idle[i] = (uint8_t)(weekend ? 1 : 0);
+    }
+}
+
+/* Load-time rebuild: recount workers already at their desks. */
+void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend)
+{
+    people_office_daystart(tower, weekend);
+    for (int i = 0; i < ps->people_high; i++) {
+        const Person *p = &ps->people[i];
+        if (!p->home_tenant || p->state != PERSON_AT_DEST || p->going_home)
+            continue;
+        Tenant *t = tower_tenant(tower, p->home_tenant);
+        if (t && t->type == ITEM_OFFICE) office_arrive(tower, t);
+    }
+}
+
 /* ---------- VIP visit (VipT seg_1240, byte-traced 2026-07-29) ----------
  * The VIP is a real suite guest: member 1 (the driver) of tonight's
  * suite check-in. Judged on HIS OWN banked elevator stress vs the
@@ -1536,10 +1604,13 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
             }
         }
     }
-    /* A worker at their desk — candidate for the sick-worker roll */
-    if (t && !p->going_home && t->type == ITEM_OFFICE &&
-        ps->office_arrivals < (int)(sizeof ps->office_arrival_floor))
-        ps->office_arrival_floor[ps->office_arrivals++] = (int8_t)t->floor;
+    /* A worker at their desk — candidate for the sick-worker roll, and
+     * the presence counter's arrival arm (UniPeple 1c8c). */
+    if (t && !p->going_home && t->type == ITEM_OFFICE) {
+        office_arrive(tower, t);
+        if (ps->office_arrivals < (int)(sizeof ps->office_arrival_floor))
+            ps->office_arrival_floor[ps->office_arrivals++] = (int8_t)t->floor;
+    }
     /* A patron at the box office — the venue pass counts attendance */
     if (t && !p->going_home &&
         (t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL) &&
@@ -2420,6 +2491,9 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 p->going_home = 1;
                 p->dest_floor = GROUND_IDX;
                 p->state = PERSON_PLANNING;
+                /* outbound trip = the presence counter's single
+                 * decrement site (journey tail @2dff) */
+                if (is_office) office_depart(tower, t, tod == TOD_EVENING);
             }
         }
     }
@@ -2557,6 +2631,12 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (!depart_roll(frame, i, 8)) continue;  /* irregular trickle */
         }
         int fidx = floor_to_index(t->floor);
+        /* Venue patrons enter at the UPPER story (GetVenueMainFloor
+         * 1180:0d96 feeds TryStartTrip dest @1220:58ef — cinema/party
+         * referee 2026-08-09); the interior carries them down and every
+         * departure originates at the lower story (see the journey tail). */
+        if (patron && (t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL))
+            fidx = floor_to_index(t->floor + 1);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
 
         /* one kid / one adult per condo — skip if they're already home */
@@ -3036,6 +3116,13 @@ void people_update(PeopleSim *ps, Tower *tower, int frame, int tod, int hour,
                  * ground-entry walkin heuristic doesn't double-count. */
                 if (ht && (ht->type == ITEM_CINEMA ||
                            ht->type == ITEM_PARTY_HALL)) {
+                    /* The show lets out downstairs: every venue departure
+                     * originates at the LOWER story (GetVenueLowerFloor
+                     * 1180:0dcc @ the journey tails — referee 2026-08-09),
+                     * the mirror of the upper-floor entrance. */
+                    int lf = floor_to_index(ht->floor);
+                    if (lf >= 0 && lf < TOWER_FLOOR_COUNT)
+                        p->cur_floor = (uint8_t)lf;
                     static const ItemType SKINDS[3] =
                         { ITEM_RESTAURANT, ITEM_FAST_FOOD, ITEM_SHOP };
                     int sseed = frame * 31 + i;

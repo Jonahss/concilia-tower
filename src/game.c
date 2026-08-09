@@ -1578,6 +1578,10 @@ void game_update(GameSim *sim, Tower *tower)
         /* 7AM: MedicalDailyTick re-arms adequacy at star>=3 and the
          * patient-per-day counters start fresh (cap 40/center/day). */
         if (sim->hour == 7) {
+            /* DayMiddleUpdate's 7AM office arm (presence referee
+             * 2026-08-09): weekends seed the idle sentinel, weekdays
+             * open the office for the commute. */
+            people_office_daystart(tower, game_is_weekend(tower));
             if (tower->star_rating >= 3)
                 sim->medical_adequate = 1;
             for (int i = 0; i < tower->tenant_count; i++)
@@ -3080,9 +3084,10 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
 
         switch (t->type) {
         case ITEM_OFFICE:
-            /* PROXY: workers shown during office hours (EXE: per-person
-             * trip status) */
-            if (TENANT_ACTIVE_TIMES[ITEM_OFFICE][sim->time_of_day])
+            /* Workers shown while the presence counter holds live
+             * arrivals (referee 2026-08-09) — replaces the old
+             * office-hours proxy, so weekend/evening desks sit empty. */
+            if (people_office_workers(tower, t) > 0)
                 occ_roll_office(t, o);
             break;
         case ITEM_CONDO:

@@ -829,8 +829,10 @@ static int ambient_gate_ok(const Tenant *at)
     case ITEM_FAST_FOOD:
         return at->retail_open && at->patrons_now > 0;
     case ITEM_OFFICE:
-        return at->state == TENANT_OCCUPIED && at->capacity > CAP_EMPTY &&
-               TENANT_ACTIVE_TIMES[ITEM_OFFICE][game.sim.time_of_day];
+        /* the EXE's status&7 != 0 = live workers at their desks
+         * (presence counter, referee 2026-08-09) */
+        return at->state == TENANT_OCCUPIED &&
+               people_office_workers(&game.tower, at) > 0;
     case ITEM_HOTEL_SINGLE:
     case ITEM_HOTEL_TWIN:
     case ITEM_HOTEL_SUITE:
@@ -1656,15 +1658,23 @@ static void render_tower(void)
                      * time-of-day. Supersedes the earlier tier-based guess, which
                      * predated finding sheets 0x85a9..0x85ab (it only had 0x85a8
                      * and mistook its second furniture pair for a tier variant). */
-                    int night = (game.sim.time_of_day == TOD_NIGHT ||
-                                 game.sim.time_of_day == TOD_EVENING);
+                    /* Lit follows the PRESENCE COUNTER, not the clock
+                     * (referee 2026-08-09: renderer draws (+0x0B)>>3 —
+                     * any live count 0..6 = workday face, the idle
+                     * sentinel = dark): offices now darken when the
+                     * last worker actually leaves and stay dark all
+                     * weekend. Vacant units keep the day/night pair. */
+                    int leased = (tenant->state >= TENANT_OCCUPIED &&
+                                  tenant->state != TENANT_ABANDONED);
+                    int night = leased
+                        ? !people_office_lit(&game.tower, tenant)
+                        : (game.sim.time_of_day == TOD_NIGHT ||
+                           game.sim.time_of_day == TOD_EVENING);
                     /* MOVING_IN = still on the market (a fresh office
                      * waiting for movers, maybe unreachable) — bare
                      * 0x85ab art until someone actually leases it.
                      * (2026-08-03: fresh unreachable offices rendered
                      * furnished.) */
-                    int leased = (tenant->state >= TENANT_OCCUPIED &&
-                                  tenant->state != TENANT_ABANDONED);
                     uint16_t office_sheet;
                     if (!leased) {
                         office_sheet = 0x85ab;             /* bare vacant room */
@@ -7902,6 +7912,8 @@ static void do_load_game(void)
     elv_edit_exit();
     if (game_load(&game.sim, &game.tower, save_path()) == 0) {
         game.elv_open = 0;          /* dialog target may be gone */
+        people_office_rebuild(&game.sim.people, &game.tower,
+                              game_is_weekend(&game.tower));
         add_event_message("Game loaded.");
     } else {
         add_event_message("Load failed (no/old save).");
