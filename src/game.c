@@ -344,6 +344,8 @@ void game_purge_person_names(Tower *tower, int hotels, int visitors)
             switch (t->type) {
             case ITEM_RESTAURANT: case ITEM_FAST_FOOD: case ITEM_SHOP:
             case ITEM_CINEMA: case ITEM_PARTY_HALL: case ITEM_METRO:
+            case ITEM_CATHEDRAL:   /* 7th visitor class (PurgeVisitorNames
+                                    * @CS:0x0A04, referee 2026-08-09) */
                 drop = 1; break;
             default: break;
             }
@@ -1552,6 +1554,12 @@ void game_update(GameSim *sim, Tower *tower)
     case 0x20: game_trash_truck_clear(tower);  break;   /*  7:24 AM */
     case 1200: sim->checkout_ctr = 0;          break;   /* ka-ching throttle
                                                            reset (MoneyT 0x31b8) */
+    case 2500: game_purge_person_names(tower, 0, 1); break;
+                                                        /* 4:33AM: visitor
+                                                           names expire
+                                                           (PurgeVisitorNames,
+                                                           ft 0x9C4 referee
+                                                           2026-08-09) */
     }
 
     /* Star evaluation, hourly — fires on every displayed-hour change
@@ -1732,7 +1740,6 @@ void game_update(GameSim *sim, Tower *tower)
              * settlement, as in the EXE (eval then move-outs). */
             game_judge_daily(sim, tower);
             game_parking_nag_daily(sim, tower);
-            game_purge_person_names(tower, 0, 1);   /* visitor names expire */
 
             /* THE QUARTERLY SETTLEMENT (every 3rd day = the EXE quarter;
              * JudgeT MainLoop's day%3 gate + the TimeT maintenance row,
