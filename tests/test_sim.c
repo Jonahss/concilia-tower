@@ -3540,7 +3540,8 @@ static void test_load_renormalize(void)
           "5:00PM lands on ft 1600 exactly");
     CHECK(sim.ticks_per_quarter == GAME_TICKS_PER_QUARTER,
           "ticks_per_quarter renormalized to 650");
-    CHECK(tw.day == 7, "daytime resume keeps the day number");
+    /* v17: pre-v17 saves also shed the old 1-based day (7 -> 6) */
+    CHECK(tw.day == 6, "daytime resume keeps the day number (0-based shift)");
 
     /* Small-hours case: old TURBO clock at 2AM -> ft 2433, day bumped
      * (the new scheme already incremented at the ft-2300 midnight) */
@@ -3559,7 +3560,8 @@ static void test_load_renormalize(void)
           "old 2AM resumes at ft 2433 (the 2AM anchor, floored)");
     CHECK(sim.hour == 2 || (sim.hour == 1 && sim.minute == 59),
           "resumed clock within one displayed minute of 2AM");
-    CHECK(tw.day == 8, "post-midnight resume bumps the day (settlement cadence)");
+    /* midnight bump (7 -> 8) then the v17 0-based shift (8 -> 7) */
+    CHECK(tw.day == 7, "post-midnight resume bumps the day (settlement cadence)");
     CHECK(sim.speed <= SPEED_FAST, "TURBO stays clamped to FAST");
 
     /* A v15 save (current format) must NOT be renormalized */

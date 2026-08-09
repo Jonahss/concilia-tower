@@ -43,7 +43,8 @@ void tower_init(Tower *tower)
                                 corner-click money doubler needs the
                                 exact $2M balance to arm. */
     tower->next_tenant_id = 1;
-    tower->day = 1;
+    tower->day = 0;   /* the EXE starts at day 0 (InitTime; survey row 7) —
+                       * 1-based start skewed every modulo event by a day */
     tower->quarter = 0;
     
     /* Center camera on lobby */
@@ -713,6 +714,26 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
             REJECT("Item no longer available");
         if (type == ITEM_SECURITY && securities >= 10)
             REJECT("Item no longer available");
+    }
+
+    /* Recycling proximity (TrashT 1088:02c8, comparison C4): every center
+     * after the first must land NEAR an existing one — the new span
+     * expanded ±25 cells must reach an existing center on floors −2..+1
+     * relative to the new base. No overlap required, adjacency is enough;
+     * the first center places freely. */
+    if (type == ITEM_RECYCLING) {
+        int have = 0, near = 0;
+        int w = ITEM_WIDTH[type];
+        for (int i = 0; i < tower->tenant_count; i++) {
+            const Tenant *e = &tower->tenants[i];
+            if (e->type != ITEM_RECYCLING) continue;
+            have = 1;
+            if (e->floor >= floor - 2 && e->floor <= floor + 1 &&
+                e->x + e->width - 1 >= x - 25 && e->x <= x + w - 1 + 25)
+                near = 1;
+        }
+        if (have && !near)
+            REJECT("Must be placed near an existing Recycling Center");
     }
 
     /* Metro area rules (11f8:2fab + the metro handler at 11f8:3010):

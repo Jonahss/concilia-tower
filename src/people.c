@@ -2503,13 +2503,15 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
          * five; the party hall summons its 50 guests in the evening */
         int show_cap = 0;
         if (t->type == ITEM_CINEMA) {
-            /* Evening pool staged from 3:00 PM (VenueT ft 0x578 summon —
-             * schedule census gap #3); the cap is CUMULATIVE across the
-             * day since cinema spawn counters survive the phase flip. */
+            /* Matinee pool summoned at ft 1000 = 12:45 PM, evening pool
+             * staged from ft 1400 = 3:00 PM (VenueT ft 0x3e8/0x578
+             * summons — schedule census gap #3 + comparison E5); the cap
+             * is CUMULATIVE across the day since cinema spawn counters
+             * survive the phase flip. */
             if (tod == TOD_AFTERNOON)
                 show_cap = hour >= 15
                              ? t->quota_matinee + t->quota_evening
-                             : t->quota_matinee;
+                             : (ps->ft_in_day >= 1000 ? t->quota_matinee : 0);
             else if (tod == TOD_EVENING)
                 show_cap = t->quota_matinee + t->quota_evening;
         } else if (t->type == ITEM_PARTY_HALL)

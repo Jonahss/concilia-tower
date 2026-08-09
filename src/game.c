@@ -105,6 +105,7 @@ void game_init(GameSim *sim)
     sim->time_of_day = TOD_NIGHT;
     sim->hotel_pass_day = -1;   /* so the day-0 5PM pass still fires */
     sim->disaster_sched_day = -1;
+    sim->last_day_num = -1;     /* no completed day yet (day 0 is real now) */
     people_init(&sim->people);
 }
 
@@ -833,11 +834,15 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                         income += stay;
                         fin_bank_income(sim, t->type, stay);
                     }
-                    /* Cash "ka-ching" is the EXE's checkout sound, throttled
-                     * to ~every 2nd checkout (MoneyT counter 0x31b8). Queued so
-                     * a nightful of checkouts rings a spaced run, not a blob. */
-                    static int checkout_ctr = 0;
-                    if ((++checkout_ctr & 1) == 0 && sim->cash_pending < 30)
+                    /* Cash "ka-ching" is the EXE's checkout sound (MoneyT
+                     * counter 0x31b8): every 2nd checkout while the counter
+                     * is under 20, every 8th after — a busy hotel's morning
+                     * rush rings often, then settles into a slower cadence.
+                     * The counter resets at ft 1200. Queued so a nightful of
+                     * checkouts rings a spaced run, not a blob. */
+                    int c = ++sim->checkout_ctr;
+                    int ring = (c < 20) ? (c & 1) == 0 : (c % 8) == 0;
+                    if (ring && sim->cash_pending < 30)
                         sim->cash_pending++;
                 }
             }
@@ -1545,6 +1550,8 @@ void game_update(GameSim *sim, Tower *tower)
     case 2566: game_trash_fill(sim, tower, 5); break;   /*  5:58 AM */
     case 0:    game_trash_collect(sim, tower); break;   /*  7:00 AM */
     case 0x20: game_trash_truck_clear(tower);  break;   /*  7:24 AM */
+    case 1200: sim->checkout_ctr = 0;          break;   /* ka-ching throttle
+                                                           reset (MoneyT 0x31b8) */
     }
 
     /* Star evaluation, hourly — fires on every displayed-hour change
@@ -1589,6 +1596,7 @@ void game_update(GameSim *sim, Tower *tower)
     {
         int per = (tick_in_day % GAME_DAY_TICKS) / 400;
         sim->people.sched_period = (uint8_t)(per > 6 ? 6 : per);
+        sim->people.ft_in_day = (int16_t)(tick_in_day % GAME_DAY_TICKS);
     }
 
     /* Grand-lobby prestige: a 2/3-story ground lobby forgives 25/50 ticks of
@@ -1712,7 +1720,7 @@ void game_update(GameSim *sim, Tower *tower)
      * at midnight, as in the EXE. Rows use equality: ticks advance by 1
      * and clock jumps never cross this ft (game_clock_jump guards). */
     if (tick_in_day == FT_MIDNIGHT)
-        tower->day++;
+        tower->day = (tower->day + 1) % GAME_DAY_WRAP;
 
     /* THE 4:59AM ROW (TimeT ft 0x9E5 = 2533): the daily judge and the
      * finance settlement — the EXE's dawn bookkeeping tick. */
@@ -1956,7 +1964,8 @@ void game_update(GameSim *sim, Tower *tower)
          * (ft 2300), so the finished 7AM-7AM span was mostly day-1. */
         if (sim->quarter >= QUARTER_COUNT) {
             sim->quarter = 0;
-            sim->last_day_num      = tower->day - 1;
+            sim->last_day_num      = tower->day > 0 ? tower->day - 1
+                                                    : GAME_DAY_WRAP - 1;
             sim->last_day_income   = sim->day_income;
             sim->last_day_expenses = sim->day_expenses;
             sim->day_income = 0;
@@ -3885,7 +3894,11 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 16u  /* v16: legacy-stress dead padding dropped —
+#define SAVE_VERSION 17u  /* v17: 0-based day counter with the EXE's 11988
+                             wrap (struct layout UNCHANGED — v16 saves
+                             load; their 1-based day is decremented so
+                             every modulo event lands on the EXE's dates).
+                             v16: legacy-stress dead padding dropped —
                              Tenant.stress/complaints (8 B/record) and
                              GameSim.zones[7]+last_stress_day (144 B).
                              v15/v14 saves load via a byte repack
@@ -4014,7 +4027,8 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
     int ok = fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == SAVE_MAGIC;
     int legacy = 0;
     if (ok) {
-        if (hdr[1] == SAVE_VERSION) {
+        if (hdr[1] == SAVE_VERSION || hdr[1] == 16u) {
+            /* v16 = identical layout, 1-based day (migrated below) */
             ok = hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
                  hdr[4] == sizeof(Tuning);
         } else if (hdr[1] == 15u || hdr[1] == 14u) {
@@ -4071,6 +4085,15 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
         sim->time_of_day = hour_to_tod(sim->hour);
         printf("Save clock renormalized: %d:%02d -> ft %d (day %d)\n",
                h, m, ft, tower->day);
+    }
+    /* v17 migration: pre-v17 saves carry the port's old 1-based day
+     * counter — shift to the EXE's 0-based calendar so the modulo
+     * events (fire %84, bomb %60, Santa %12, VIP %9, rainy %8, rent %3)
+     * land on the original's dates from here on. */
+    if (ok && hdr[1] < 17u && tower->day > 0) {
+        tower->day--;
+        printf("Save calendar shifted to the EXE's 0-based days (day %d)\n",
+               tower->day);
     }
     if (ok) sim->ticks_per_quarter = GAME_TICKS_PER_QUARTER;
     /* The EXE zeroes the style rotation on load (tower_clear runs

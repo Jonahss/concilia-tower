@@ -238,9 +238,12 @@ typedef struct {
     uint32_t layout_stamp;      /* transport layout change detection */
 
     /* Schedule clock, set by game_update each tick (EXE 0xB3A0/0xB3A1):
-     * sched_day 0 weekday / 1 weekend; sched_period 0..6 across the day */
+     * sched_day 0 weekday / 1 weekend; sched_period 0..6 across the day.
+     * ft_in_day = the raw frame_time 0..2599, for gates the EXE keys to
+     * exact ticks rather than periods (e.g. the ft-1000 matinee summon). */
     uint8_t  sched_day;
     uint8_t  sched_period;
+    int16_t  ft_in_day;
 
     /* Day-phase spawn bookkeeping (one byte per tenant slot) */
     uint8_t  spawned[MAX_TENANTS];

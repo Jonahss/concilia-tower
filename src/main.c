@@ -814,6 +814,45 @@ static void grid_to_screen(int floor, int cell, int *sx, int *sy)
     *sy = world_y - (int)game.cam_fy + game.screen_h / 2;
 }
 
+/* Shared ambient occupancy gate (ambient-gates referee 2026-08-09, SoundT
+ * classifier 11c8:06b6): both the roaming pump and the info-popup ambience
+ * use the SAME per-type "people are actually in it" conditions — offices
+ * need live workers in the day band, hotel an occupied room in the pre-5PM
+ * band, retail patrons inside, parking a car on the probed space, venues a
+ * running show. Port fields stand in for the EXE's status-byte bands (the
+ * same conditions the occupant animator draws by). */
+static int ambient_gate_ok(const Tenant *at)
+{
+    switch (at->type) {
+    case ITEM_RESTAURANT:
+    case ITEM_SHOP:
+    case ITEM_FAST_FOOD:
+        return at->retail_open && at->patrons_now > 0;
+    case ITEM_OFFICE:
+        return at->state == TENANT_OCCUPIED && at->capacity > CAP_EMPTY &&
+               TENANT_ACTIVE_TIMES[ITEM_OFFICE][game.sim.time_of_day];
+    case ITEM_HOTEL_SINGLE:
+    case ITEM_HOTEL_TWIN:
+    case ITEM_HOTEL_SUITE:
+        /* the EXE's < 0x10 band = the day variant (7AM/5PM flip) with
+         * live guests — the night band is excluded */
+        return at->hosted && game.sim.hour >= 7 && game.sim.hour < 17;
+    case ITEM_CONDO:
+        return at->state == TENANT_OCCUPIED && at->capacity > CAP_EMPTY;
+    case ITEM_PARKING:
+        /* status >= 2 = a car on this space (usable + ordinal covered) */
+        return at->space_usable &&
+               at->space_ordinal < game.tower.cars_office +
+                                   game.tower.cars_suite;
+    case ITEM_PARTY_HALL:
+        return at->venue_state >= 2;       /* party running */
+    case ITEM_CINEMA:
+        return at->venue_state == 3;       /* show running */
+    default:
+        return 0;
+    }
+}
+
 /* Ambient background murmur (referee event #24 + referee_ambient_timing):
  * each tick, 1-in-16, sample one of 6 on-screen probe points and play the
  * ambient tied to the tenant type there — so the bed reflects what's on
@@ -849,6 +888,11 @@ static void ambient_tick(void)
         return;
     }
 
+    /* Occupancy gates (ambient-gates referee 2026-08-09, SoundT 11c8:06b6):
+     * a unit only sounds like people when people are actually in it. */
+    Tenant *at = tower_tenant(&game.tower,
+                              game.tower.grid[fidx][cell].tenant_id);
+    if (!at || !ambient_gate_ok(at)) return;
     int id = 0;
     switch (game.tower.grid[fidx][cell].type) {
     case ITEM_RESTAURANT:   id = (rand() & 1) ? AMB_RESTAURANT_A : AMB_RESTAURANT_B; break;
@@ -861,18 +905,14 @@ static void ambient_tick(void)
     case ITEM_FAST_FOOD:    id = (rand() & 1) ? AMB_RESTAURANT_B : AMB_SHOP_FF_B; break;
     case ITEM_PARKING:      id = (rand() & 1) ? AMB_PARKING_A : AMB_PARKING_B; break;
     case ITEM_PARTY_HALL:   id = AMB_PARTY; break;
-    case ITEM_CINEMA: {
-        /* A running show (venue_state 3, SoundT 11c8:0875) plays that film's
-         * OWN theme: sound resource 9001 + movie_id (11c8:0895 `add ax,0x2329`)
-         * — a fixed per-film mapping, no pool (referee 2026-07-30, HIGH).
-         * Films 3 and 6 point at non-RIFF resources (0xA32C/0xA32F) in our
-         * EXE — the original most likely runs those two films silent, and so
-         * do we (play_snd no-ops on an unloaded clip). */
-        Tenant *ct = tower_tenant(&game.tower, game.tower.grid[fidx][cell].tenant_id);
-        if (!ct || ct->venue_state != 3) return;   /* silent unless showing */
-        id = (uint16_t)(0xA329 + ct->movie_id);
+    case ITEM_CINEMA:
+        /* A running show plays that film's OWN theme: sound resource
+         * 9001 + movie_id (11c8:0895 `add ax,0x2329`) — fixed per-film
+         * mapping, no pool (referee 2026-07-30, HIGH). Films 3 and 6
+         * point at non-RIFF resources in our EXE — silent, like the
+         * original (play_snd no-ops on an unloaded clip). */
+        id = (uint16_t)(0xA329 + at->movie_id);
         break;
-    }
     default: return;   /* other/infrastructure types silent */
     }
     play_snd(id);
@@ -2240,7 +2280,7 @@ static void render_daily_rollup(int gx, int gy)
              today_net < 0 ? "-" : "+", labs(today_net));
     stats_label(gx, gy, line, (SDL_Color){ 0, 0, 0, 255 });
     gy += 16;
-    if (game.sim.last_day_num > 0) {
+    if (game.sim.last_day_num >= 0) {
         long y_net = game.sim.last_day_income - game.sim.last_day_expenses;
         snprintf(line, sizeof(line), "Day %d total:  in $%ld  out $%ld  net %s$%ld",
                  game.sim.last_day_num, (long)game.sim.last_day_income,
@@ -3428,27 +3468,30 @@ static void render_shaft(ElevatorShaft *s)
                 if (up ? (px < llim_px) : (px + 16 > rlim_px))
                     continue;                 /* past the clip limit */
                 SDL_Rect dst = { px, sy, 16, CELL_H };
-                /* The original's frustration display: the longer a person
-                 * waits, the pinker then redder their silhouette (wait_accum
-                 * against the wait cap — the eval-stress input). */
+                /* The original's frustration display, byte-faithful
+                 * (stress-tint referee 2026-08-09): banked wait (+0xC)
+                 * PLUS the live wait so far, against two fixed bars —
+                 * >= 80 ([0xDD76]) tints the figure PINK 255,127,127
+                 * (palette 0x16); >= 150, or 200 at 4 stars+ ([0xDD78])
+                 * tints RED 255,25,25 (0x1A). Discrete bands, not a
+                 * gradient, and staff never tint (the EXE forces
+                 * housekeeping's metric to 0). */
                 {
-                    const Person *qp = &game.sim.people.people[pid - 1];
-                    int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
-                    /* banked frustration PLUS the wait they're suffering
-                     * right now — wait_accum only banks at board/give-up,
-                     * so queues never reddened while actually waiting */
-                    int live = game.sim.frame - qp->wait_start;
+                    int staff = qht && qht->type == ITEM_HOUSEKEEPING &&
+                                qpp->service;
+                    int live = game.sim.frame - qpp->wait_start;
                     if (live < 0) live = 0;
-                    float wr = (float)(qp->wait_accum + live) / (float)cap;
-                    if (wr > 1.0f) wr = 1.0f;
-                    if (wr > 0.25f && game.queue_hot) {
+                    int w = qpp->wait_accum + live;
+                    int bar2 = game.tower.star_rating >= 4 ? 200 : 150;
+                    if (!staff && w >= 80 && game.queue_hot) {
                         /* swap to the white clone — mod can only darken,
                          * so the black sheet itself can never redden */
-                        uint8_t sub = (uint8_t)(220.0f * (wr - 0.25f) / 0.75f);
-                        SDL_SetTextureColorMod(game.queue_hot,
-                                               160 + (uint8_t)(95.0f * wr),
-                                               160 - sub > 0 ? (uint8_t)(160 - sub) : 0,
-                                               160 - sub > 0 ? (uint8_t)(160 - sub) : 0);
+                        if (w >= bar2)
+                            SDL_SetTextureColorMod(game.queue_hot,
+                                                   255, 25, 25);
+                        else
+                            SDL_SetTextureColorMod(game.queue_hot,
+                                                   255, 127, 127);
                         SDL_RenderCopy(game.renderer, game.queue_hot,
                                        &src, &dst);
                         continue;
@@ -6272,10 +6315,12 @@ static void open_tenant_popup_at(uint16_t tid, int x, int y)
     game.inspect_tid = tid;
     game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
     /* The EXE plays the tenant's own ambience as its info dialog opens
-     * (hidden fn 11c8:03fb; sound census MED gap #2). */
+     * (hidden fn 11c8:03fb; sound census MED gap #2) — through the SAME
+     * occupancy classifier as the roaming pump (ambient-gates referee
+     * 2026-08-09): an empty office or carless space opens silent. */
     {
         Tenant *at = tower_tenant(&game.tower, tid);
-        if (at && game.snd_bg) {
+        if (at && game.snd_bg && ambient_gate_ok(at)) {
             uint16_t aid = 0;
             switch (at->type) {
             case ITEM_RESTAURANT:   aid = AMB_RESTAURANT_A; break;
@@ -6287,6 +6332,8 @@ static void open_tenant_popup_at(uint16_t tid, int x, int y)
             case ITEM_FAST_FOOD:    aid = AMB_SHOP_FF_B; break;
             case ITEM_PARKING:      aid = AMB_PARKING_A; break;
             case ITEM_PARTY_HALL:   aid = AMB_PARTY; break;
+            case ITEM_CINEMA:
+                aid = (uint16_t)(0xA329 + at->movie_id); break;
             default: break;
             }
             if (aid) play_snd(aid);
@@ -9876,6 +9923,7 @@ int main(int argc, char *argv[])
             int prev_pop = game.tower.population;
             int prev_unreach = game.sim.unreachable_tenants;
             int prev_event_active = game.sim.event.active;
+            static int event_outcome_delay = 0;
             int prev_day = game.tower.day;
             /* The day is ALWAYS 2600 ticks (authentic TimeT clock). The
              * EXE ticks once per rendered frame with NO pacing beyond an
@@ -9990,10 +10038,17 @@ int main(int argc, char *argv[])
                              game.sim.event.target_floor);
                 add_event_message(buf);
             } else if (!game.sim.event.active && prev_event_active) {
-                /* Resolution: the EXE pops a one-button dialog (0xBCF
-                 * caught / 0xBD0 exploded / 0xBC5 fire out) — shown as a
-                 * notice modal with its wording and button; the feed keeps
-                 * a short log line. */
+                /* Resolution: the EXE waits [0xDDD6] = 2 ticks between the
+                 * resolution and its dialog — a beat between boom and
+                 * verdict. Arm the countdown; the sim leaves type/caught/
+                 * damage_cost intact until the next event starts. */
+                event_outcome_delay = 2;
+            }
+            if (event_outcome_delay > 0 && --event_outcome_delay == 0) {
+                /* The one-button outcome dialog (0xBCF caught / 0xBD0
+                 * exploded / 0xBC5 fire out) — shown as a notice modal
+                 * with its wording and button; the feed keeps a short
+                 * log line. */
                 char buf[EVENT_MSG_LEN];
                 if (game.sim.event.type == EVENT_BOMB && game.sim.event.caught) {
                     show_notice_modal(

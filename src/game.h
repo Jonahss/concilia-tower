@@ -54,6 +54,9 @@ typedef enum {
  * are RAW frame-time counts — never convert them to clock time. */
 #define GAME_DAY_TICKS          2600
 #define GAME_TICKS_PER_QUARTER  (GAME_DAY_TICKS / QUARTER_COUNT)  /* 650 */
+#define GAME_DAY_WRAP           11988 /* day counter wraps to 0 here (TimeT
+                                       * @04b3/@04b8) — days are 0-based,
+                                       * matching every EXE modulo event */
 #define FT_MIDNIGHT             2300  /* 0:00 — day++ (TimeT 1200:04ab, 0x8FC) */
 #define FT_DAILY_SETTLE         2533  /* 4:59AM — judge + finance row (0x9E5);
                                        * also the EXE's new-game start ft
@@ -719,6 +722,10 @@ typedef struct {
                                         drained over frames so a rich morning rings
                                         a run of them (the EXE's income-refresh chime) */
     int           cash_snd_timer;    /* ticks until the next queued cha-ching */
+    int           checkout_ctr;      /* MoneyT 0x31b8: hotel-checkout counter for
+                                        the ka-ching throttle — rings every 2nd
+                                        while < 20, every 8th after; reset at
+                                        ft 1200 (seg_1178_MoneyT.c:355-359) */
 
     /* --- Quarterly finance breakdown for the CountT report (bitmap 0x81f4) ---
      * Two category lists, exactly as the report's baked art: a REVENUE list
