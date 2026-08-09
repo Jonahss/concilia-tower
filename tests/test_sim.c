@@ -1715,21 +1715,35 @@ static void test_parking_model(void)
           "a same-x ramp chains, but bare floor severs the far space");
 
     /* Byte rule (coverage referee 2026-08-09): the drive path rides over
-     * PARKING cells — bare deck severs at a 4-cell run, so you cannot
-     * "pave" a path with empty floor. Line the path with spaces, leaving
-     * a 4-cell deck hole at 196..199 — still severed; close the hole to
-     * 3 cells and the far space comes back. */
-    for (int cx = 136; cx < 196; cx++)
-        tw.grid[floor_to_index(-2)][cx].type = ITEM_PARKING;
-    for (int cx = 196; cx < 200; cx++)
-        tw.grid[floor_to_index(-2)][cx].type = ITEM_FLOOR;   /* the deck hole */
+     * parking RECORDS — bare deck severs at a 4-cell run, so a far space
+     * needs a line of spaces (deck gaps <= 3) leading to it. Lay spaces
+     * from the ramp to cell 195, leaving a 4-cell deck hole at 196..199
+     * before s2 — severed; plug the hole and it comes back. */
+    uint16_t path[16]; int npath = 0;
+    for (int cx = 136; cx + 4 <= 196; cx += 4) {
+        path[npath] = fplace(ITEM_PARKING, -2, cx);
+        tenant(path[npath])->state = TENANT_OCCUPIED;
+        npath++;
+    }
     game_parking_recompute(&sim, &tw);
     CHECK(!tenant(s2)->space_usable,
           "a 4-cell bare gap severs the floor past it");
-    tw.grid[floor_to_index(-2)][196].type = ITEM_PARKING;
+    uint16_t plug = fplace(ITEM_PARKING, -2, 196);
+    tenant(plug)->state = TENANT_OCCUPIED;
     game_parking_recompute(&sim, &tw);
-    CHECK(tenant(s2)->space_usable && tw.usable_spaces == 2,
-          "shrinking the deck gap to 3 cells restores the space");
+    CHECK(tenant(s2)->space_usable,
+          "plugging the deck gap restores the far space");
+
+    /* back to the 2-space garage: clear the B2 path experiment */
+    for (int k = 0; k < npath; k++) tower_remove(&tw, path[k]);
+    tower_remove(&tw, plug);
+    tower_remove(&tw, s2);
+    game_parking_recompute(&sim, &tw);
+    CHECK(tw.usable_spaces == 1, "B2 experiment cleared, B1 space remains");
+    uint16_t s3 = fplace(ITEM_PARKING, -1, 140);   /* beside s1, on-chain */
+    tenant(s3)->state = TENANT_OCCUPIED;
+    game_parking_recompute(&sim, &tw);
+    CHECK(tw.usable_spaces == 2, "two usable spaces on B1");
 
     /* quotas: 2 usable spaces -> 4 cars per category (2N each,
      * double-parking is real — the quota is the only limiter) */

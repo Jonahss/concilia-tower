@@ -2395,28 +2395,48 @@ void game_parking_recompute(GameSim *sim, Tower *tower)
         chained[f] = 1;
     }
 
+    /* Floor-map view for the drive sweep (SetParkingUsable 1198:09ce,
+     * coverage referee 2026-08-09 + the shaft amendment): the EXE walks
+     * FLOOR-MAP records — parking spaces continue the path, any other
+     * record (shop, recycling, stairs, a second ramp...) kills it, and
+     * bare deck severs at a >= 4-cell run. Elevator shafts are NOT
+     * floor-map records: the sweep sees whatever lies behind the shaft
+     * — a space tucked behind it carries the path, an empty shaft
+     * crossing reads as bare deck (and a 4-wide shaft therefore severs).
+     * Build that record layer from the tenant array, since the port's
+     * grid gives shafts the cells. Kinds: 0 bare, 1 parking, 2 killer. */
+    enum { NBAS = -TOWER_MIN_FLOOR };
+    static uint8_t kind[NBAS][TOWER_WIDTH];
+    memset(kind, 0, sizeof kind);
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type == ITEM_NONE || t->type == ITEM_FLOOR ||
+            item_is_elevator(t->type)) continue;
+        for (int f = t->floor; f < t->floor + t->height; f++) {
+            if (f >= 0 || f < TOWER_MIN_FLOOR) continue;
+            uint8_t *row = kind[-f - 1];
+            uint8_t k = (t->type == ITEM_PARKING) ? 1 : 2;
+            for (int cx = t->x; cx < t->x + t->width && cx < TOWER_WIDTH; cx++)
+                if (cx >= 0 && row[cx] < k) row[cx] = k;
+        }
+    }
+
     tower->usable_spaces = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_PARKING) continue;
         int f = floor_to_index(t->floor);
-        int ok = f >= 0 && f < TOWER_FLOOR_COUNT && chained[f];
+        int ok = f >= 0 && f < TOWER_FLOOR_COUNT && chained[f] &&
+                 t->floor < 0;
         if (ok) {
-            /* Walk from the ramp toward the space (SetParkingUsable
-             * 1198:09ce, coverage referee 2026-08-09): the drive path
-             * runs over parking spaces and short bare-deck stretches
-             * only — a bare run of >= 4 cells severs it, and ANY other
-             * object (recycling, metro edge, a second ramp...) kills it
-             * outright. The old gap-on-unexcavated logic could never
-             * fire: mid-deck cells are ITEM_FLOOR, not ITEM_NONE. */
+            const uint8_t *row = kind[-t->floor - 1];
             int rx = ramp_x[f], step = (t->x > rx) ? 1 : -1;
             int from = (step > 0) ? rx + ITEM_WIDTH[ITEM_RAMP] : rx - 1;
             int gap = 0;
             for (int cx = from; ok && cx != t->x && cx >= 0 &&
                                 cx < TOWER_WIDTH; cx += step) {
-                ItemType ct = tower->grid[f][cx].type;
-                if (ct == ITEM_PARKING) gap = 0;
-                else if (ct == ITEM_FLOOR) { if (++gap >= 4) ok = 0; }
+                if (row[cx] == 1) gap = 0;
+                else if (row[cx] == 0) { if (++gap >= 4) ok = 0; }
                 else ok = 0;
             }
         }
