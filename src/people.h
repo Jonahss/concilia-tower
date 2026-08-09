@@ -99,6 +99,7 @@ const char *people_take_noroute_msg(void);
  * -1 otherwise); take_result returns 1 favorable / 2 unfavorable once
  * the stay is judged, 0 while pending. */
 void people_vip_arm(int on);
+int  people_vip_is(int idx);
 int  people_vip_take_tagged(void);
 int  people_vip_take_result(void);
 

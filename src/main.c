@@ -6546,6 +6546,10 @@ static void person_where_line(const Person *p, char *buf, int bufn)
         if (p->errand == 1 || p->errand == 2) {
             /* status 0x40/0x21: "Lobby" + STRL 0x2BD #1 */
             snprintf(buf, bufn, "Lobby for sales calls");
+        } else if (p->errand == 9) {
+            /* eats-outside trip (status 0x41 dest<0: "Lobby" + " to
+             * eat", bank 0x2BD #3 — InfoPeple referee 2026-08-08) */
+            snprintf(buf, bufn, "Lobby%s", exe_str(0x2BD, 3, " to eat"));
         } else if (p->errand == 5) {
             person_fmt_floor(index_to_floor(p->dest_floor), fl, sizeof fl);
             snprintf(buf, bufn, "Medical Center, %s", fl);
@@ -6757,8 +6761,13 @@ static void render_person_popup(void)
     SDL_Rect d = person_popup_rect();
     char title[48], line[64], fl[12];
     person_fmt_floor(index_to_floor(p->cur_floor), fl, sizeof fl);
+    /* Title priority: given name > "VIP" > generic label (InfoPeple
+     * referee 2026-08-08; the name case is handled by person_title). */
     snprintf(title, sizeof title, "%s  -  %s",
-             person_kind_label(person_kind(p)), fl);
+             people_vip_is(game.person_pid - 1)
+                 ? exe_str(0x2BC, 2, "VIP")
+                 : person_kind_label(person_kind(p)),
+             fl);
     draw_win31_titlebar(d.x, d.y, d.w, title);
     draw_win31_rect(d.x, d.y + WIN_TITLEBAR_H, d.w, d.h - WIN_TITLEBAR_H, 1);
 
@@ -6794,11 +6803,19 @@ static void render_person_popup(void)
         draw_text(line, lx, ly, ink); ly += 18;
     }
     {
-        int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
-        int pct = (int)(100L * p->wait_accum / cap);
-        if (pct > 100) pct = 100;
-        snprintf(line, sizeof line, "Stress: %d%%", pct);
-        draw_text(line, lx, ly, ink);
+        /* Staff get the 0x2FC dialog variant with the stress/eval rows
+         * DELETED — guards and maids are stress-exempt (InfoPeple
+         * referee 2026-08-08). */
+        Tenant *ph = tower_tenant(&game.tower, p->home_tenant);
+        int staff = ph && (ph->type == ITEM_SECURITY ||
+                           ph->type == ITEM_HOUSEKEEPING);
+        if (!staff) {
+            int cap = TUNING.wait_cap > 0 ? TUNING.wait_cap : 1;
+            int pct = (int)(100L * p->wait_accum / cap);
+            if (pct > 100) pct = 100;
+            snprintf(line, sizeof line, "Stress: %d%%", pct);
+            draw_text(line, lx, ly, ink);
+        }
     }
 
     draw_dlg_button(person_btn_name(d), "Name...", 1);

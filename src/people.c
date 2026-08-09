@@ -202,6 +202,13 @@ int people_vip_take_tagged(void)
 {
     int t = vip_tagged; vip_tagged = -1; return t;
 }
+/* Is this person index (0-based) the VIP under judgment? The popup
+ * titles them "VIP" (bank 0x2BC entry 2 outranks the generic label —
+ * InfoPeple referee 2026-08-08). */
+int people_vip_is(int idx)
+{
+    return idx >= 0 && idx == vip_watch;
+}
 int people_vip_take_result(void)
 {
     int r = vip_result;
@@ -2230,6 +2237,22 @@ static int is_retail_kind(ItemType ty)
     return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD;
 }
 
+/* A failed GoRestProc pick still costs a trip: the person rides to the
+ * ground lobby, "eats outside" (status 0x41 dest<0 — "Lobby to eat"),
+ * and comes back. Zero bookkeeping, real elevator load (retail-zone +
+ * InfoPeple referees 2026-08-08). errand 9 tags the trip for the popup.
+ * Metro visitors do NOT take this fallback (their fail = give-up). */
+static void spawn_eats_outside(PeopleSim *ps, Tower *tower, Tenant *home,
+                               int from_fidx, int i)
+{
+    int sp = spawn_person(ps, tower, home, from_fidx, GROUND_IDX, 0);
+    if (!sp) return;
+    Person *np = &ps->people[sp - 1];
+    np->stay = (uint8_t)(8 + (i * 3) % 10);
+    np->entry_floor = (uint8_t)from_fidx;
+    np->errand = 9;
+}
+
 /* Pick a same-kind retail venue for a customer on `floor` — the EXE's
  * PickRestaurant (11a8:12dc): uniform random over the customer zone's
  * venue list, falling back to the ground zone only when that list is
@@ -2582,7 +2605,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                            hour >= 13 ? 1 : 12)) continue;
             v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
                             reach_public);
-            if (v) ps->spawned[i]++;
+            ps->spawned[i]++;
+            if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
         } else if (item_is_hotel_room(t->type)) {
             /* Hotel dinners (1220:382c): guests of EVEN tenant slots go
              * out for a RESTAURANT dinner, 5-9PM, once per stay. */
@@ -2591,7 +2615,8 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (!pool_roll(frame, i, 1, 6)) continue;   /* rand%6 per visit */
             v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
                             reach_public);
-            if (v) ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
+            ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
+            if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
         } else if (t->type == ITEM_CONDO) {
             /* Condo excursions (1220:3a1a): weekdays the Homebody's one
              * shopping trip after 10AM (rand%12 per visit); weekends
@@ -2606,21 +2631,24 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                     continue;
                 v = pick_retail(tower, ITEM_SHOP, t->floor, seed,
                                 reach_public);
-                if (v) ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
+                ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
+                if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
             } else if ((i & 3) == 0) {
                 if (ps->spawned[i] >= 2) continue;
                 if (hour < 17 || hour >= 21 || !pool_roll(frame, i, 1, 6))
                     continue;
                 v = pick_retail(tower, ITEM_RESTAURANT, t->floor, seed,
                                 reach_public);
-                if (v) ps->spawned[i]++;
+                ps->spawned[i]++;
+                if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
             } else {
                 if (ps->spawned[i] >= 2) continue;
                 if (hour < 10 || hour >= 17 || !pool_roll(frame, i, 1, 12))
                     continue;
                 v = pick_retail(tower, ITEM_FAST_FOOD, t->floor, seed,
                                 reach_public);
-                if (v) ps->spawned[i]++;
+                ps->spawned[i]++;
+                if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
             }
         } else if (t->type == ITEM_CATHEDRAL) {
             /* Daily congregation (ChurchT: OpenChurch at 7AM summons ~8
