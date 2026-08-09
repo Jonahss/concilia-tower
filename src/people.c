@@ -1336,6 +1336,21 @@ static void deliver_stress(PeopleSim *ps, Tower *tower, Person *p)
 /* ---------- trip planning (TryStartTrip port) ---------- */
 
 static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame);
+
+/* The 80/125-cell walk-distance penalty is charged ONCE PER TRIP, at
+ * the trip's first leg resolution — re-plans and later legs pass
+ * walkdist=0 in the EXE (TryStartTrip caller census, bucket-B referee
+ * 2026-08-08; the port had charged every leg). The latch is a side
+ * bitmask, deliberately NOT saved: worst case after a reload an
+ * in-flight person is re-evaluated once. Bit set = this trip's one
+ * evaluation is spent; cleared at spawn and at trip completion. */
+static uint8_t walk_charged[MAX_PEOPLE / 8];
+static inline int  walk_latch_test(int pi)
+{ return (walk_charged[pi >> 3] >> (pi & 7)) & 1; }
+static inline void walk_latch_set(int pi)
+{ walk_charged[pi >> 3] |= (uint8_t)(1u << (pi & 7)); }
+static inline void walk_latch_clear(int pi)
+{ walk_charged[pi >> 3] &= (uint8_t)~(1u << (pi & 7)); }
 static int is_retail_kind(ItemType ty);
 
 static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int frame)
@@ -1356,9 +1371,13 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
          * every penalty gate (referee M3, 2026-08-02). */
         if (!p->service) {
             add_penalty(p, span_pen * rise);
-            int xd = st->x - p->x; if (xd < 0) xd = -xd;
-            if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
-            else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
+            /* Walk-distance part: once per TRIP (bucket-B referee). */
+            if (!walk_latch_test(pi)) {
+                int xd = st->x - p->x; if (xd < 0) xd = -xd;
+                if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
+                else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
+                walk_latch_set(pi);
+            }
         }
         p->state = PERSON_WALKING;
         p->leg_floor = (uint8_t)r.hop_to;
@@ -1380,11 +1399,14 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
          * exempts the EXPRESS (TryStartTrip 1210:02d8-02e7, type != 0 —
          * consistent with express choice-scoring ignoring distance).
          * The port had the polarity inverted (referee H3, 2026-08-02).
-         * Staff are exempt regardless (charge=0, referee M3). */
-        if (!p->service && s->type != ITEM_ELEVATOR_EXPRESS) {
+         * Staff are exempt regardless (charge=0, referee M3). Once per
+         * TRIP (bucket-B referee) — the latch spends the evaluation. */
+        if (!p->service && s->type != ITEM_ELEVATOR_EXPRESS &&
+            !walk_latch_test(pi)) {
             int xd = s->x - p->x; if (xd < 0) xd = -xd;
             if (xd >= 125) add_penalty(p, PENALTY_WALK_125);
             else if (xd >= 80) add_penalty(p, PENALTY_WALK_80);
+            walk_latch_set(pi);
         }
         p->state = PERSON_QUEUED;
         p->shaft = (uint8_t)r.shaft;
@@ -1415,6 +1437,7 @@ static void plan_person(PeopleSim *ps, Tower *tower, Person *p, int pi, int fram
 static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
 {
     (void)frame;
+    walk_latch_clear((int)(p - ps->people));   /* next trip charges anew */
     /* Simulate settle pre-sim: an arrival must not check anyone in, park
      * a car, count a trip, or bank stress — the person array is rewound
      * wholesale after the settle, so parking the body AT_DEST is enough
@@ -2141,6 +2164,7 @@ static int spawn_person(PeopleSim *ps, Tower *tower, Tenant *t,
         if (!ps->people[i].home_tenant) { slot = i; break; }
     if (slot < 0) return 0;
     if (slot >= ps->people_high) ps->people_high = slot + 1;
+    walk_latch_clear(slot);          /* fresh trip, fresh walk penalty */
     Person *p = &ps->people[slot];
     memset(p, 0, sizeof(*p));
     p->home_tenant = t->id;
@@ -2235,6 +2259,18 @@ static int pool_roll(int frame, int idx, int pool, int width)
 static int is_retail_kind(ItemType ty)
 {
     return ty == ITEM_SHOP || ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD;
+}
+
+/* A condo's slot index within its floor's tenant list, mod 4 — the
+ * EXE's weekend diner selector divides the per-floor slot (person
+ * record +1), not the global tenant index (bucket-B referee
+ * 2026-08-08). O(ti) scan; only condos in the weekend window pay it. */
+static int condo_floor_slot4(const Tower *tower, int ti)
+{
+    int slot = 0;
+    for (int k = 0; k < ti; k++)
+        if (tower->tenants[k].floor == tower->tenants[ti].floor) slot++;
+    return slot & 3;
 }
 
 /* A failed GoRestProc pick still costs a trip: the person rides to the
@@ -2633,7 +2669,12 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                                 reach_public);
                 ps->dinner_sent[i >> 3] |= (uint8_t)(1 << (i & 7));
                 if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
-            } else if ((i & 3) == 0) {
+            } else if (condo_floor_slot4(tower, i) == 0) {
+                /* The EXE's %4 divides the condo's PER-FLOOR tenant-slot
+                 * index, not the global/tenant-array one (bucket-B
+                 * referee 2026-08-08, refuting tower-together's
+                 * per-resident reading): every 4th condo ON ITS FLOOR
+                 * dines out on weekends. */
                 if (ps->spawned[i] >= 2) continue;
                 if (hour < 17 || hour >= 21 || !pool_roll(frame, i, 1, 6))
                     continue;
@@ -2651,12 +2692,14 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
                 if (!v) { spawn_eats_outside(ps, tower, t, fidx, i); continue; }
             }
         } else if (t->type == ITEM_CATHEDRAL) {
-            /* Daily congregation (ChurchT: OpenChurch at 7AM summons ~8
-             * guests per cathedral piece, CloseChurch at 1PM — TimeT rows
-             * @02ce/@03af, schedule-census survey 2026-08-08). The old
-             * weekend-only gate came from reading 1220:5edd's period gate
-             * as the whole mechanism; the dispatcher runs it every day. */
-            if (hour < 7 || hour >= 13) continue;
+            /* Weekend congregation. Two-stage in the EXE (bucket-B
+             * referee 2026-08-08, superseding the schedule census's
+             * "daily" reading): TimeT's 7AM OpenChurch row runs every
+             * day, but the per-sim handler 1220:5edd gates all TRAVEL
+             * on the weekend flag — weekday sims park untraveled. Net
+             * observable: weekend-only visits, dispatched 7-10AM,
+             * home after the 1PM CloseChurch. */
+            if (!ps->sched_day || hour < 7 || hour >= 10) continue;
             if (ps->spawned[i] >= 40) continue;
             /* rand-gated until 10:00, deterministic after — aggregated
              * over the congregation still to arrive */
