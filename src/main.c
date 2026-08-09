@@ -6246,6 +6246,13 @@ static void ti_build(const Tenant *t, TiLayout *L)
     } else if (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) {
         f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Riders");
         riders_field = nf; nf++;
+    } else if (ty == ITEM_MEDICAL) {
+        /* The EXE's panel counter (MedicalT +0x02, comparison C11 /
+         * A31): today's admissions against the 40-a-day cap — full
+         * centers turn the sick away until tomorrow. */
+        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Patients");
+        snprintf(f[nf].value, 40, "%d / 40 today", t->patients_today);
+        nf++;
     }
     L->nf = nf;
 
