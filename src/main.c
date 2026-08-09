@@ -7913,7 +7913,8 @@ static void do_load_game(void)
     if (game_load(&game.sim, &game.tower, save_path()) == 0) {
         game.elv_open = 0;          /* dialog target may be gone */
         people_office_rebuild(&game.sim.people, &game.tower,
-                              game_is_weekend(&game.tower));
+                              game_is_weekend(&game.tower),
+                              game.sim.hour >= 17 || game.sim.hour < 7);
         add_event_message("Game loaded.");
     } else {
         add_event_message("Load failed (no/old save).");

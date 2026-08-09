@@ -309,7 +309,8 @@ void people_init(PeopleSim *ps);
 /* Rebuild gap map + shafts from the tower. Cheap when nothing changed
  * (diffs the transport layout; resets cars/queues only on change). */
 void people_rebuild_transport(PeopleSim *ps, Tower *tower);
-void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend);
+void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend,
+                           int night);
 /* Car assignment (UseCarPerson 1198:06e7): uniform-random usable space,
  * 2N-per-category quota. Returns the space's floor index (and counts
  * the car) or -1. suite selects the category. Exposed for tests. */

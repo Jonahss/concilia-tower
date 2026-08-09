@@ -232,8 +232,12 @@ void people_office_daystart(Tower *tower, int weekend)
     }
 }
 
-/* Load-time rebuild: recount workers already at their desks. */
-void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend)
+/* Load-time rebuild: recount workers already at their desks. `night`
+ * covers a post-5PM/pre-7AM load — an empty office then is one the
+ * evening drain already idled, so it re-seeds the sentinel rather
+ * than sitting lit until 7AM. */
+void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend,
+                           int night)
 {
     people_office_daystart(tower, weekend);
     for (int i = 0; i < ps->people_high; i++) {
@@ -243,6 +247,11 @@ void people_office_rebuild(PeopleSim *ps, Tower *tower, int weekend)
         Tenant *t = tower_tenant(tower, p->home_tenant);
         if (t && t->type == ITEM_OFFICE) office_arrive(tower, t);
     }
+    if (night)
+        for (int i = 0; i < tower->tenant_count; i++)
+            if (tower->tenants[i].type == ITEM_OFFICE &&
+                office_present[i] == 0)
+                office_idle[i] = 1;
 }
 
 /* ---------- VIP visit (VipT seg_1240, byte-traced 2026-07-29) ----------

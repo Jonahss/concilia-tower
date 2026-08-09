@@ -597,11 +597,15 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     }
 
     /* Shaft clearance (CheckElevatorClearance 10a0:10e8 — seg44 drag trace
-     * 2026-07-28, correcting the earlier "no spacing rule" note): the
+     * 2026-07-28, re-verified by the spacing referee 2026-08-09): the
      * candidate rect, inflated 8 CELLS horizontally and (-2,+1) floors
      * vertically, must not touch ANOTHER shaft; stairs/escalators are
      * checked against the un-inflated rect. The EXE runs this on the
-     * initial click AND on every drag extension (msg 0x16 "too close"). */
+     * initial click AND on every drag extension (msg 0x16 "too close").
+     * (Nuance: the EXE rect is half-open [bottom-2, top+1) — our
+     * inclusive +1 row is one row stricter when growing up toward an
+     * upper shaft; kept, since the EXE's own asymmetry there looks like
+     * an artifact of each side enforcing only its below-gap.) */
     if (item_is_elevator(type)) {
         for (int f = floor - 2; f <= floor + 1; f++) {
             int fi2 = floor_to_index(f);
