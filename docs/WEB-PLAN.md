@@ -132,3 +132,6 @@ native assumptions are system font paths and /tmp screenshot paths.
       the static bundle lands.
 - [ ] B6. Supported-builds registry: hashes + per-build notes, PR-able;
       the wrong-EXE screen links the decompile-and-contribute recipe.
+
+## Beta testers (quiet-launch list, Jonah 2026-08-09)
+nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
