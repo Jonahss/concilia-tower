@@ -135,3 +135,17 @@ native assumptions are system font paths and /tmp screenshot paths.
 
 ## Beta testers (quiet-launch list, Jonah 2026-08-09)
 nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
+
+## Phase F — analytics (added by Jonah 2026-08-09)
+- [ ] F1. Anonymous aggregate telemetry: visitors, total days simulated,
+      star-ups counted per level (how many towers hit 1★, 2★, ... TOWER),
+      total/peak population, "things like that."
+- [ ] F2. Needs the stage's ONE backend exception (static hosting has no
+      server): a tiny counter endpoint (Cloudflare Worker + KV or
+      similar) or a privacy-light service (Plausible) with custom
+      events. Fire-and-forget beacons: session start, day milestones,
+      star-up(level), pop milestones.
+- [ ] F3. Privacy stance stays loud: counters only — no tower data, no
+      files, and the EXE-never-leaves-your-browser promise is untouched.
+- [ ] F4. Fun option: a public "community stats" page on kvetch.io
+      (all-time days simulated, TOWER count) — nice launch-day flex.
