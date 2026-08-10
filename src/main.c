@@ -8919,10 +8919,14 @@ static void handle_event(SDL_Event *ev)
     }
         
     case SDL_WINDOWEVENT:
+#ifndef __EMSCRIPTEN__
+        /* Web canvas is fixed 960x720 — browser-side CSS resize events
+         * must never shrink the game's render size. */
         if (ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             game.screen_w = ev->window.data1;
             game.screen_h = ev->window.data2;
         }
+#endif
         break;
     }
 }
@@ -9088,9 +9092,17 @@ int main(int argc, char *argv[])
     
     game.screen_w = WINDOW_W;
     game.screen_h = WINDOW_H;
+    Uint32 wflags = SDL_WINDOW_SHOWN;
+#ifndef __EMSCRIPTEN__
+    /* Fixed canvas on the web: under Emscripten RESIZABLE binds the
+     * window to the canvas's CSS box, whose transition fired a
+     * SIZE_CHANGED that shrank the render target to a dot (Jonah's
+     * first web bug report, 2026-08-09). */
+    wflags |= SDL_WINDOW_RESIZABLE;
+#endif
     game.window = SDL_CreateWindow("ConcilliaTower",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        WINDOW_W, WINDOW_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        WINDOW_W, WINDOW_H, wflags);
     
     /* Software renderer for VNC visibility */
     game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
