@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ConcilliaTower</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    background: #10141c; color: #cfd6e4;
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+  h1 { font-size: 28px; letter-spacing: 3px; margin: 0; color: #e8ded0; }
+  h1 small { display: block; font-size: 12px; letter-spacing: 1px;
+             color: #8a93a6; margin-top: 6px; }
+  #setup {
+    background: #1a2130; border: 1px solid #2c3648; border-radius: 8px;
+    padding: 24px 32px; max-width: 560px; text-align: center;
+  }
+  #setup p { font-size: 14px; line-height: 1.55; color: #aab3c5; }
+  #setup .privacy { font-size: 12px; color: #77809a; }
+  input[type=file] { display: none; }
+  label.pick, button.start {
+    display: inline-block; cursor: pointer; margin: 8px 6px 0;
+    background: #2b4a86; color: #eef2fa; border: 0; border-radius: 5px;
+    padding: 10px 22px; font-size: 15px; font-family: inherit;
+  }
+  label.pick:hover, button.start:hover { background: #36599e; }
+  button.start[disabled] { background: #2a3040; color: #6a7288;
+                           cursor: default; }
+  #status { font-size: 13px; color: #9fb7d8; min-height: 18px; }
+  #canvaswrap { display: none; }
+  canvas {
+    display: block; image-rendering: pixelated;
+    border: 1px solid #2c3648; background: #000;
+  }
+  a { color: #7fa7dd; }
+</style>
+</head>
+<body>
+  <div id="setup">
+    <h1>ConcilliaTower<small>the faithful SimTower port &mdash; in your browser</small></h1>
+    <p>Bring your own copy of <b>SIMTOWER.EXE</b> (from the original 1994
+       Maxis release). It is parsed <b>entirely in your browser</b> to load
+       the game's art and sound &mdash; there is no server, and the file
+       never leaves your machine.</p>
+    <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile"></label>
+    <button class="start" id="startbtn" disabled>Start</button>
+    <div id="status">Waiting for your EXE&hellip;</div>
+    <p class="privacy">Saves live in your browser's local storage.
+       Sound starts with your first click (browser rule, not ours).</p>
+  </div>
+  <div id="canvaswrap">
+    <canvas id="canvas" width="960" height="720"
+            oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  </div>
+
+<script>
+  var exeBytes = null;
+  var statusEl = document.getElementById('status');
+  var startBtn = document.getElementById('startbtn');
+
+  /* Dev hook: ?exe=NAME fetches the EXE from the server and auto-starts
+   * (headless testing). In production no such file is served — the
+   * fetch 404s and the normal upload flow stands. */
+  var devExe = new URLSearchParams(location.search).get('exe');
+  if (devExe && /^[A-Za-z0-9._-]+$/.test(devExe)) {
+    fetch(devExe).then(function (r) {
+      if (!r.ok) throw new Error('no dev exe');
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      exeBytes = new Uint8Array(buf);
+      statusEl.textContent = 'dev: ' + devExe + ' fetched, auto-starting';
+      startBtn.disabled = false;
+      startBtn.click();
+    }).catch(function () {});
+  }
+
+  document.getElementById('exefile').addEventListener('change', function (e) {
+    var f = e.target.files[0];
+    if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      exeBytes = new Uint8Array(r.result);
+      statusEl.textContent = f.name + ' loaded (' +
+          (exeBytes.length / 1024 | 0) + ' KB). Ready.';
+      startBtn.disabled = false;
+    };
+    r.readAsArrayBuffer(f);
+  });
+
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    noInitialRun: true,
+    preRun: [function () {
+      /* Persistent save mount + env before main ever runs. */
+      ENV.CT_SAVE = '/persist/concilliatower.sav';
+      ENV.CT_AUTOLOAD = '1';           /* boot-load the save + daily autosave */
+      FS.mkdir('/persist');
+      FS.mount(IDBFS, {}, '/persist');
+      Module.addRunDependency('idbfs');
+      FS.syncfs(true, function (err) {
+        if (err) console.warn('idbfs load failed', err);
+        Module.removeRunDependency('idbfs');
+      });
+    }],
+    onRuntimeInitialized: function () {
+      statusEl.textContent = exeBytes ? statusEl.textContent
+                                      : 'Engine ready. Waiting for your EXE…';
+      Module.engineReady = true;
+    },
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.warn(t); }
+  };
+
+  startBtn.addEventListener('click', function () {
+    if (!exeBytes) return;
+    var boot = function () {
+      FS.writeFile('/SIMTOWER.EXE', exeBytes);
+      document.getElementById('setup').style.display = 'none';
+      document.getElementById('canvaswrap').style.display = 'block';
+      Module.callMain(['/SIMTOWER.EXE']);
+      Module.canvas.focus();
+    };
+    if (Module.engineReady) boot();
+    else {
+      statusEl.textContent = 'Engine still loading…';
+      var wait = setInterval(function () {
+        if (Module.engineReady) { clearInterval(wait); boot(); }
+      }, 150);
+    }
+  });
+
+  /* Hidden tab mutes audio but the sim keeps running (design D5). */
+  document.addEventListener('visibilitychange', function () {
+    if (typeof SDL2 !== 'undefined' && SDL2.audioContext) {
+      if (document.hidden) SDL2.audioContext.suspend();
+      else SDL2.audioContext.resume();
+    }
+  });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

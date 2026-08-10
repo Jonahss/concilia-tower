@@ -4018,11 +4018,17 @@ int game_save(const GameSim *sim, const Tower *tower, const char *path)
 #define V15_TENANT_EXTRA   8u
 #define V15_GS_ZONES_BYTES 140u
 #define V15_GS_EXTRA       (V15_GS_ZONES_BYTES + 4u)
+/* These offsets (and the repack itself) describe the 64-bit NATIVE
+ * layout only — the wasm32 build has different alignment, so binary
+ * .sav files are architecture-specific and pre-v16 native saves can
+ * never appear in a browser FS anyway. .TDT is the portable format. */
+#ifndef __EMSCRIPTEN__
 _Static_assert(sizeof(Tenant) == 108, "v15 repack: Tenant layout moved");
 _Static_assert(offsetof(Tenant, zone) == 36, "v15 repack: cut point moved");
 _Static_assert(offsetof(GameSim, santa) == 384, "v15 repack: zones cut moved");
 _Static_assert(offsetof(GameSim, hotel_pass_day) == 1592,
                "v15 repack: last_stress_day cut moved");
+#endif
 
 static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
 {

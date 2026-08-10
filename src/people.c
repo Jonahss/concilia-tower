@@ -603,8 +603,13 @@ void people_rebuild_transport(PeopleSim *ps, Tower *tower)
         }
     }
 
-    /* Contiguous same-type column runs = shafts (as in reachability) */
-    ElevatorShaft fresh[MAX_SHAFTS];
+    /* Contiguous same-type column runs = shafts (as in reachability).
+     * STATIC: 24 shafts x ~21KB = ~500KB — fine on an 8MB native stack,
+     * but it silently overflowed Emscripten's 64KB wasm stack straight
+     * into the data section (TUNING was the neighbor it wiped — the
+     * 2026-08-09 wasm ghost-promotion bug). Single-threaded, so a
+     * static scratch is safe. */
+    static ElevatorShaft fresh[MAX_SHAFTS];
     memset(fresh, 0, sizeof(fresh));
     int count = 0;
     for (int x = 0; x < TOWER_WIDTH && count < MAX_SHAFTS; x++) {

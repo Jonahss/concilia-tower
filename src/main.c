@@ -18,6 +18,9 @@
 #include "sprites.h"
 #include "tower.h"
 #include "game.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include "twr.h"
 #include "audio.h"
 #include "sound_hook.h"
@@ -4079,6 +4082,18 @@ static const char *save_path(void)
     return env && *env ? env : "concilliatower.sav";
 }
 
+/* Web build: flush MEMFS writes down to IndexedDB after a save lands —
+ * without the sync, an IDBFS-mounted save evaporates with the tab.
+ * (The shell page sets CT_SAVE to the /persist mount.) No-op natively. */
+static void web_syncfs(void)
+{
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ FS.syncfs(false, function(err) {
+        if (err) console.warn('syncfs failed', err);
+    }); });
+#endif
+}
+
 static void add_event_message(const char *msg)
 {
     snprintf(event_messages[event_msg_head], EVENT_MSG_LEN, "%s", msg);
@@ -5691,6 +5706,7 @@ static void quit_confirm_click(int mx, int my)
 {
     if (point_in_rect(mx, my, quitc_btn(0))) {
         game_save(&game.sim, &game.tower, save_path());
+        web_syncfs();
         game.running = 0;
     } else if (point_in_rect(mx, my, quitc_btn(1))) {
         game.running = 0;
@@ -7955,9 +7971,10 @@ static void do_save_game(void)
      * Resume was pressed. In the EXE this can't arise — every other
      * window is disabled while the elevator dialog is open. */
     elv_edit_exit();
-    if (game_save(&game.sim, &game.tower, save_path()) == 0)
+    if (game_save(&game.sim, &game.tower, save_path()) == 0) {
         add_event_message("Game saved.");
-    else
+        web_syncfs();
+    } else
         add_event_message("Save FAILED!");
 }
 
@@ -8918,8 +8935,12 @@ static void init_fonts(void)
         return;
     }
     
-    /* Try fonts in order of preference */
+    /* Try fonts in order of preference. The /fonts/ entries are the
+     * wasm build's embedded copies (web/fonts/, SIL OFL) — they don't
+     * exist natively and simply fall through to the system paths. */
     const char *font_paths[] = {
+        "/fonts/LiberationSans-Bold.ttf",
+        "/fonts/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -10029,10 +10050,12 @@ int main(int argc, char *argv[])
              * lesson in code. */
             if (game.tower.day != prev_day && getenv("CT_AUTOLOAD") &&
                 game.tower.tenant_count > 0) {
-                if (game_save(&game.sim, &game.tower, save_path()) == 0)
+                if (game_save(&game.sim, &game.tower, save_path()) == 0) {
                     printf("Autosave: day %d (tenants=%d pop=%d money=%ld)\n",
                            game.tower.day, game.tower.tenant_count,
                            game.tower.population, (long)game.tower.money);
+                    web_syncfs();
+                }
                 else
                     printf("Autosave FAILED on day %d\n", game.tower.day);
             }
