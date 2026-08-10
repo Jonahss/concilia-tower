@@ -57,9 +57,10 @@ native assumptions are system font paths and /tmp screenshot paths.
 - [ ] C3. `.TDT` export (twr_export, F6) → browser download. A browser
       tower openable in real 1994 SimTower under DOSBox is a launch
       demo that sells itself.
-- [ ] C4. Decide: optional periodic autosave on web (a web nicety the
-      native port doesn't have — flag as port-web behavior if added).
-      (Open question Q4.)
+- [ ] C4. `.TDT` IMPORT via upload too (twr_load exists — original
+      1995/96 towers playable in the browser). Decided 2026-08-09.
+- [ ] C5. Web autosave: YES (Jonah 2026-08-09) — periodic IDBFS
+      autosave, flagged as web-port behavior.
 
 ## Phase D — input & UX adaptation
 - [ ] D1. Keyboard capture: browsers steal F-keys — **F5 is
@@ -107,15 +108,27 @@ native assumptions are system font paths and /tmp screenshot paths.
 - Decomp repo to GitHub once Jonah creates it (backup currently on
   sexica).
 
-## Open questions for Jonah (planning)
-- Q1. Code license when the repo goes public? (MIT/GPL/other — affects
-  contributions and the tower-together exchange.)
-- Q2. Hosting home: `jonahss.github.io/concilia-tower` via Pages, a
-  custom domain, or both? Same repo or a separate site repo?
-- Q3. Wrong-EXE policy: hard reject, or warn-and-attempt with a
-  "mechanics verified against build X only" banner?
-- Q4. Web autosave: add it (worldly) or keep native parity (pure)?
-- Q5. Hidden-tab behavior: pause the sim, or let it throttle and
-  catch up?
-- Q6. Launch shape: quiet URL for friends first, then the full launch
-  (errata send, OS errata, announcements) — or one big bang?
+## Decisions (Jonah, 2026-08-09 evening)
+- D1. License: **GPL** — keeps mods open.
+- D2. Hosting: **kvetch.io** (Jonah's domain, currently idle). Game at
+  a path (e.g. kvetch.io/tower); **root gets a small portfolio site**
+  linking to his other things (new scope item, see E7).
+- D3. Wrong-EXE policy: reject with a **contributor call-to-action** —
+  "here's the prompt/recipe to decompile your build and send a PR
+  adding it to the supported list." Hash-check against known builds;
+  the supported-builds table is designed to grow via PRs.
+- D4. Web autosave: yes (C5).
+- D5. Hidden tab: **mute sounds, keep the sim running** — the game has
+  a pause button for pausing.
+- D6. Launch: **quiet URL first**, big launch later. Launch channels to
+  hit when it's time (Jonah's list): his blog, r/tycoon, r/SimTower,
+  Hacker News, Twitter. (Same window: errata send to tower-together +
+  OpenSkyscraper errata publication.)
+
+## Added scope from decisions
+- [ ] E7. Portfolio stub at kvetch.io root (links out; the tower lives
+      at a path). Keep minimal — its own mini-project, Jonah's content.
+- [ ] E8. DNS/hosting wiring for kvetch.io → Pages (CNAME) or wherever
+      the static bundle lands.
+- [ ] B6. Supported-builds registry: hashes + per-build notes, PR-able;
+      the wrong-EXE screen links the decompile-and-contribute recipe.
