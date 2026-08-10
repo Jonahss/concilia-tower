@@ -359,7 +359,7 @@ typedef struct {
     int             tune_x, tune_y;   /*  -1,-1 = default placement) */
     int             map_mode;     /* 0 map / 1 eval / 2 rent / 3 hotel
                                      (EXE global 0x7840; legends 0x139..) */
-    int             elv_open;     /* Elevator dialog (double-click a shaft) */
+    int             elv_open;     /* Elevator dialog (finger/inspect a shaft) */
     int             elv_sx;       /* shaft column the dialog is bound to */
     int             elv_stype;    /* shaft ItemType */
     int             elv_sfloor;   /* a floor the shaft serves — disambiguates
@@ -2833,6 +2833,28 @@ static void render_elv_dialog_faithful(void)
             if (f > s->hi) break;
             int cy = gy0 + (14 - r) * 13;
 
+            /* Floor number, right-aligned into the left margin (the
+             * original prints them along the schedule grid; same L/B%d
+             * convention as the world-view ruler). */
+            if (game.font_small) {
+                char fl[8]; int wf = index_to_floor(f);
+                if (wf < 0)       snprintf(fl, sizeof fl, "B%d", -wf);
+                else if (wf == 0) snprintf(fl, sizeof fl, "L");
+                else              snprintf(fl, sizeof fl, "%d", wf);
+                SDL_Color ink = { 40, 40, 40, 255 };
+                SDL_Surface *ts =
+                    TTF_RenderText_Blended(game.font_small, fl, ink);
+                if (ts) {
+                    SDL_Texture *tt =
+                        SDL_CreateTextureFromSurface(game.renderer, ts);
+                    SDL_Rect dst = { gx0 - 3 - ts->w, cy + 6 - ts->h / 2,
+                                     ts->w, ts->h };
+                    SDL_RenderCopy(game.renderer, tt, NULL, &dst);
+                    SDL_DestroyTexture(tt);
+                    SDL_FreeSurface(ts);
+                }
+            }
+
             /* service column (col -1, local x=0) */
             SDL_Rect sc = { gx0, cy, 12, 12 };
             if (!elv_structural_stop(s, f))
@@ -3322,6 +3344,9 @@ static int open_elv_dialog_at_mouse(int btn_x, int btn_y)
     Tenant *t = tower_tenant(&game.tower, cell->tenant_id);
     if (!t) return 0;
     game.elv_open = 1;
+    game.inspect_open = 0;   /* one inspection dialog at a time */
+    game.rent_dd_open = 0;
+    game.person_open = 0;
     game.elv_sx = t->x;
     game.elv_stype = t->type;
     game.elv_sfloor = fidx;        /* the clicked floor picks the right shaft */
@@ -6347,6 +6372,11 @@ static void open_tenant_popup_at(uint16_t tid, int x, int y)
     game.inspect_open = 1;
     game.inspect_tid = tid;
     game.rent_dd_open = 0;   /* fresh dialog, dropdown shut */
+    /* One inspection dialog at a time (Jonah 2026-08-09: stacked
+     * tenant + elevator dialogs could only be dismissed in z-order) —
+     * opening this one dismisses the others. */
+    game.elv_open = 0;
+    game.person_open = 0;
     /* The EXE plays the tenant's own ambience as its info dialog opens
      * (hidden fn 11c8:03fb; sound census MED gap #2) — through the SAME
      * occupancy classifier as the roaming pump (ambient-gates referee
@@ -6822,6 +6852,9 @@ static uint16_t person_strip_hit(const uint16_t *pids, int n, int x, int y,
 static void open_person_popup_at(uint16_t pid, int x, int y)
 {
     game.person_open = 1;
+    game.elv_open = 0;       /* one inspection dialog at a time (the
+                              * tenant popup may stay: person popups are
+                              * its own occupants-row drill-down) */
     game.person_pid = pid;
     game.person_x = x + 16;
     game.person_y = y - 30;
@@ -8721,17 +8754,18 @@ static void handle_event(SDL_Event *ev)
                 break;
             }
 
-            /* Finger/pointer tool: grabbing a motor room / pit starts the
-             * extend drag; a single click on a shaft body opens its dialog
-             * (where cars are added). Double-click still works without the
-             * tool — handy since double-click can be flaky over VNC. */
-            if (game.finger_mode || ev->button.clicks >= 2) {
-                if (game.finger_mode && game.build_type == ITEM_NONE &&
-                    try_cap_drag())
+            /* Finger tool: grabbing a motor room / pit starts the extend
+             * drag; a single click on a shaft body opens its dialog
+             * (where cars are added). The old double-click-any-tool
+             * opener was a port invention — and it misfired while
+             * rapid-clicking cars onto a shaft (Jonah 2026-08-09).
+             * The original opens the dialog only via the tool click. */
+            if (game.finger_mode) {
+                if (game.build_type == ITEM_NONE && try_cap_drag())
                     break;
                 if (open_elv_dialog_at_mouse(ev->button.x, ev->button.y))
                     break;
-                if (game.finger_mode) break;   /* tool consumes the click */
+                break;                         /* tool consumes the click */
             }
 
             /* Plain pointer on a shaft's motor room or pit: the extend drag. */
