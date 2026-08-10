@@ -157,3 +157,9 @@ nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
       before the big launch; link from kvetch.io and the README.
       (Pairs with F4's community stats + the queued shareable-tower
       links.)
+- [ ] C6. Save MANAGER on the splash page (Jonah 2026-08-09): named
+      save slots in IndexedDB with metadata pulled from the header
+      (tower name, day, stars, money — maybe a minimap thumbnail),
+      load/rename/duplicate/delete, plus the import/export buttons
+      (C2-C4). The splash menu = load screen; autosave (C5) gets its
+      own visible slot.
