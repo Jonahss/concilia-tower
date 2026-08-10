@@ -149,3 +149,11 @@ nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
       files, and the EXE-never-leaves-your-browser promise is untouched.
 - [ ] F4. Fun option: a public "community stats" page on kvetch.io
       (all-time days simulated, TOWER count) — nice launch-day flex.
+
+## Community (added 2026-08-09)
+- [ ] G1. ConcilliaTower Discord server for the community — tower-file
+      sharing channel (.TDT/.sav uploads play in browser OR real 1994
+      SimTower), bug reports, build-registry contributions. Spin up
+      before the big launch; link from kvetch.io and the README.
+      (Pairs with F4's community stats + the queued shareable-tower
+      links.)
