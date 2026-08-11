@@ -1,0 +1,48 @@
+# Builds the wasm bundle and deploys it to GitHub Pages on every push to
+# master. The Pi never needs emsdk for production — CI owns the toolchain
+# (Phase E of docs/WEB-PLAN.md).
+#
+# The deployed dist contains ONLY our own artifacts (index.html/js/wasm
+# with embedded Liberation fonts). SIMTOWER.EXE is never in git or CI:
+# players bring their own copy, parsed client-side.
+#
+# One-time setup owed by the repo owner: Settings -> Pages -> Source:
+# "GitHub Actions". Custom domain (kvetch.io) comes later with DNS.
+name: deploy-web
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.6   # match the Pi's emsdk — same wasm we've been testing
+      - run: make web
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
