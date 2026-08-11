@@ -3972,6 +3972,18 @@ static void render_build_ghost(void)
         } else {
             SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
         }
+        /* First-click lobby preview grows with the held height choice
+         * (Ctrl/Cmd = 2, +Shift = 3, or held 2/3) so you see what you're
+         * about to commit to (Jonah, 2026-08-10). */
+        if (game.build_type == ITEM_LOBBY && game.tower.lobby_height == 0) {
+            SDL_Keymod m = SDL_GetModState();
+            const Uint8 *ks = SDL_GetKeyboardState(NULL);
+            int lh = (m & (KMOD_CTRL | KMOD_GUI))
+                         ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
+            if (ks[SDL_SCANCODE_3]) lh = 3;
+            else if (ks[SDL_SCANCODE_2]) lh = 2;
+            floors = lh;
+        }
         int ghost_h = game.build_type == ITEM_FLOOR
                           ? CEIL_H : floors * CELL_H;
         int ghost_y = gy - (floors - 1) * CELL_H;
