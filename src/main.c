@@ -8824,6 +8824,10 @@ static void handle_event(SDL_Event *ev)
                         game.mouse_floor == TOWER_MIN_FLOOR &&
                         game.mouse_cell == 0) {
                         game.tower.money *= 2;
+                        /* The EXE's egg is silent; the ka-ching is a
+                         * port nicety by Jonah's request (2026-08-10) —
+                         * a secret this good deserves its ring. */
+                        play_snd(SND_CASH);
                         printf("Corner click doubled the starting "
                                "funds\n");
                         break;
