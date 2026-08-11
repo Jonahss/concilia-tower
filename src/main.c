@@ -7660,10 +7660,16 @@ static void drag_place_units(void)
         play_snd(SND_BUILD_PLACE);   /* place/stamp confirm (referee row 17) */
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
-    } else if (tower_reject_reason()[0]) {
-        /* Nothing went down — tell the player why (the original shows the
-         * res-0x3eb placement error; ours lands in the event feed). */
-        add_event_message(tower_reject_reason());
+    } else {
+        /* Rejected stamp: the EXE's post-placement tail beeps 0x1B5A on
+         * fail (seg_11f8 @0de4-0ecf; drag arms skip it and just reset
+         * their counter — they never reach this stamp path). */
+        play_snd(SND_BUILD_TOOL);
+        if (tower_reject_reason()[0]) {
+            /* Nothing went down — tell the player why (the original shows
+             * the res-0x3eb placement error; ours lands in the event feed). */
+            add_event_message(tower_reject_reason());
+        }
     }
 }
 
@@ -10024,10 +10030,18 @@ int main(int argc, char *argv[])
         }
 
         /* Build-drag clatter (#7001, referee row 18): a looping sound that
-         * rings while a build is being dragged out and stops on release. */
+         * rings while a build is being dragged out and stops on release.
+         * ONLY the EXE's three drag arms loop it — floor, elevator shaft,
+         * stairs/escalator (0x11f8:2555/268b/2e50); stamp tools got a
+         * jackhammer blip on every click here, including rejected spots
+         * (Jonah's sound report, 2026-08-10). */
         {
             static int prev_drag = 0;
-            int drag_now = game.dragging && game.build_type != ITEM_NONE;
+            int drag_arm = game.build_type == ITEM_FLOOR ||
+                           item_is_elevator(game.build_type) ||
+                           game.build_type == ITEM_STAIRS ||
+                           game.build_type == ITEM_ESCALATOR;
+            int drag_now = game.dragging && drag_arm;
             if (drag_now && !prev_drag)      audio_start_loop(SND_BUILD_DRAG, 0.5f);
             else if (!drag_now && prev_drag) audio_stop_loop();
             prev_drag = drag_now;

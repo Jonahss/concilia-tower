@@ -31,11 +31,18 @@
   button.start[disabled] { background: #2a3040; color: #6a7288;
                            cursor: default; }
   #status { font-size: 13px; color: #9fb7d8; min-height: 18px; }
-  #canvaswrap { display: none; }
+  #canvaswrap { display: none; position: relative; }
   canvas {
     display: block; image-rendering: pixelated;
     border: 1px solid #2c3648; background: #000;
   }
+  #mutebtn {
+    position: absolute; top: 6px; right: 6px; z-index: 5;
+    background: rgba(16,20,28,.75); color: #cfd6e4;
+    border: 1px solid #2c3648; border-radius: 5px;
+    padding: 4px 10px; font-size: 14px; cursor: pointer;
+  }
+  #mutebtn:hover { background: rgba(43,74,134,.85); }
   a { color: #7fa7dd; }
 </style>
 </head>
@@ -53,6 +60,7 @@
        Sound starts with your first click (browser rule, not ours).</p>
   </div>
   <div id="canvaswrap">
+    <button id="mutebtn" title="Mute sound">&#128266;</button>
     <canvas id="canvas" width="960" height="720"
             oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
   </div>
@@ -133,13 +141,30 @@
     }
   });
 
-  /* Hidden tab mutes audio but the sim keeps running (design D5). */
-  document.addEventListener('visibilitychange', function () {
-    if (typeof SDL2 !== 'undefined' && SDL2.audioContext) {
-      if (document.hidden) SDL2.audioContext.suspend();
-      else SDL2.audioContext.resume();
-    }
+  /* Audio gate — hidden tab OR the mute button suspends the Web Audio
+   * context; the sim keeps running either way (design D5). The SDL audio
+   * object lives at Module.SDL2 (emscripten scopes it there, NOT a global
+   * — the old `typeof SDL2` check never fired, hence tab-switching kept
+   * playing; Jonah's report 2026-08-10). */
+  var userMuted = false;
+  var muteBtn = document.getElementById('mutebtn');
+  function audioCtx() {
+    return (Module.SDL2 && Module.SDL2.audioContext) || null;
+  }
+  function applyAudioGate() {
+    var ctx = audioCtx();
+    if (!ctx) return;
+    if (userMuted || document.hidden) ctx.suspend();
+    else ctx.resume();
+    muteBtn.innerHTML = userMuted ? '&#128263;' : '&#128266;';
+    muteBtn.title = userMuted ? 'Unmute sound' : 'Mute sound';
+  }
+  muteBtn.addEventListener('click', function () {
+    userMuted = !userMuted;
+    applyAudioGate();
+    Module.canvas.focus();     /* give the keys back to the tower */
   });
+  document.addEventListener('visibilitychange', applyAudioGate);
 </script>
 {{{ SCRIPT }}}
 </body>
