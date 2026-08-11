@@ -8454,9 +8454,15 @@ static void handle_event(SDL_Event *ev)
             game.show_tuning = !game.show_tuning;
             break;
 
-        /* Save / load (whole state, including people mid-ride and mods) */
+        /* Save / load (whole state, including people mid-ride and mods).
+         * Ctrl/Cmd+S aliases F5 — in a browser F5 fights the reload key
+         * (Phase D1). */
         case SDLK_F5:
             do_save_game();
+            break;
+        case SDLK_s:
+            if (ev->key.keysym.mod & (KMOD_CTRL | KMOD_GUI))
+                do_save_game();
             break;
         /* Export as an original-format save (SimTower 1.1 .TDT) */
         case SDLK_F6:

@@ -268,6 +268,17 @@
     Module.canvas.focus();     /* give the keys back to the tower */
   });
   document.addEventListener('visibilitychange', applyAudioGate);
+
+  /* Once the game is up, F5 and Ctrl/Cmd+S belong to the tower (save
+   * keys), not the browser (reload / save-page). Capture-phase so the
+   * default is dead before anything else sees it; SDL still receives
+   * the event. The landing page keeps normal browser keys. */
+  document.addEventListener('keydown', function (ev) {
+    if (document.getElementById('canvaswrap').style.display !== 'block') return;
+    if (ev.key === 'F5' ||
+        ((ev.ctrlKey || ev.metaKey) && (ev.key === 's' || ev.key === 'S')))
+      ev.preventDefault();
+  }, true);
 </script>
 {{{ SCRIPT }}}
 </body>
