@@ -8902,9 +8902,23 @@ static void handle_event(SDL_Event *ev)
                           elev_add_car_at(px, game.drag_start_floor))) {
                         int pf = build_origin_floor(game.build_type,
                                                     game.drag_start_floor);
-                        if (!tower_place(&game.tower, game.build_type, pf, px) &&
-                            tower_reject_reason()[0])
-                            add_event_message(tower_reject_reason());
+                        if (tower_place(&game.tower, game.build_type, pf, px)) {
+                            /* Same EXE post-placement tail as the drag path:
+                             * stamp #7000 on success — except the floor tool,
+                             * a drag arm, whose click plays the #7001 one-shot
+                             * clatter (row 18's one-shot @0x11f8:253e). This
+                             * click path bypassed drag_place_units and placed
+                             * in silence (Jonah, 2026-08-10). */
+                            play_snd(game.build_type == ITEM_FLOOR
+                                         ? SND_BUILD_DRAG : SND_BUILD_PLACE);
+                        } else {
+                            /* fail -> beep 0x1B5A; drag arms stay silent
+                             * (they just reset their counter in the EXE) */
+                            if (game.build_type != ITEM_FLOOR)
+                                play_snd(SND_BUILD_TOOL);
+                            if (tower_reject_reason()[0])
+                                add_event_message(tower_reject_reason());
+                        }
                     }
                 } else {
                     drag_place_units();
