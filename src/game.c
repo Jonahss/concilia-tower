@@ -2763,6 +2763,7 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
                     tower->money += pay;
                     sim->income_this_quarter += pay;
                     fin_bank_income(sim, t->type, pay);
+                    if (sim->cash_pending < 30) sim->cash_pending++;
                 }
                 t->venue_state = 0;
             }
@@ -2774,6 +2775,7 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
                     tower->money += pay;
                     sim->income_this_quarter += pay;
                     fin_bank_income(sim, t->type, pay);
+                    if (sim->cash_pending < 30) sim->cash_pending++;
                 }
                 t->venue_state = 0;
             }
@@ -2891,6 +2893,10 @@ static void retail_close_one(GameSim *sim, Tower *tower, Tenant *t)
     int amount = retail_income_tier(t->type, t->customers_today);
     t->yesterday_profit = amount;   /* the info dialog's "Yesterday's Profit" */
     tower->money += amount;
+    /* Every real income bank dings the register in the EXE (row 1: the
+     * money-HUD refresh with income pending) — retail's nightly settle
+     * was banking silently (Jonah, 2026-08-10). Losses stay quiet. */
+    if (amount > 0 && sim->cash_pending < 30) sim->cash_pending++;
     /* Signed into the financial-report row too — a loss day pulls the
      * quarter's restaurant/fast-food figure down. (These rows rendered
      * blank before: the nightly settle never posted to the ledger —
@@ -3181,6 +3187,7 @@ void game_relet_arrivals(GameSim *sim, Tower *tower)
         sim->income_this_quarter += lump;
         fin_bank_income(sim, t->type, lump);   /* re-let lump joins its
                                                   finance-report row */
+        if (lump > 0 && sim->cash_pending < 30) sim->cash_pending++;
         t->state = TENANT_OCCUPIED;
         t->tenure = 0;
         t->demand_category = 0xFF;         /* judged fresh next dawn */
