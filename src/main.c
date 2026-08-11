@@ -8006,6 +8006,7 @@ static void do_load_game(void)
      * overwrites it — exiting afterwards would smear a stale snapshot
      * over the freshly loaded state. */
     elv_edit_exit();
+    audio_stop_all();   /* the outgoing world's sounds stop with it */
     if (game_load(&game.sim, &game.tower, save_path()) == 0) {
         game.elv_open = 0;          /* dialog target may be gone */
         people_office_rebuild(&game.sim.people, &game.tower,
@@ -8093,6 +8094,9 @@ static void execute_menu_item(const MenuItem *item)
         game.build_type = ITEM_NONE;
         game.tool_popup = -1;
         game.dragging = 0;
+        /* The old tower's sounds stop with it (pending queue dies with the
+         * sim memset; this kills the already-ringing voices too). */
+        audio_stop_all();
         tower_init(&game.tower);
         game_init(&game.sim);
         add_event_message("New tower started.");
@@ -10099,7 +10103,11 @@ int main(int argc, char *argv[])
          * (Jonah's sound report, 2026-08-10). */
         {
             static int prev_drag = 0;
+            /* Lobby rides the same drag-builder as floor in the EXE (both
+             * dispatch to 26dd), so it shares the clatter arm (Jonah,
+             * 2026-08-10). */
             int drag_arm = game.build_type == ITEM_FLOOR ||
+                           game.build_type == ITEM_LOBBY ||
                            item_is_elevator(game.build_type) ||
                            game.build_type == ITEM_STAIRS ||
                            game.build_type == ITEM_ESCALATOR;

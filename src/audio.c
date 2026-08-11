@@ -329,6 +329,19 @@ void audio_start_loop(uint16_t ne_id, float gain)
     if (A.dev) SDL_UnlockAudioDevice(A.dev);
 }
 
+/* Silence every voice, loops included — for world resets (New Tower,
+ * load): the old tower's sounds have no business ringing over the new
+ * one (Jonah, 2026-08-10). */
+void audio_stop_all(void)
+{
+    if (!A.ready) return;
+    if (A.dev) SDL_LockAudioDevice(A.dev);
+    for (int v = 0; v < MAX_VOICES; v++) {
+        A.voices[v].active = 0; A.voices[v].clip = NULL; A.voices[v].loop = 0;
+    }
+    if (A.dev) SDL_UnlockAudioDevice(A.dev);
+}
+
 void audio_stop_loop(void)
 {
     if (!A.ready) return;

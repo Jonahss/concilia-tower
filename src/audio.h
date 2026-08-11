@@ -52,6 +52,7 @@ int  audio_is_enabled(void);
  * start_loop is idempotent for the same clip; only one loop plays at a time. */
 void audio_start_loop(uint16_t ne_id, float gain);
 void audio_stop_loop(void);
+void audio_stop_all(void);   /* silence every voice (world reset) */
 
 /* Offline/headless capture: begin accumulating the mixed output, then write it
  * to a mono 16-bit WAV. Used to verify playback and to send clips to Discord.
