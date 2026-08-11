@@ -138,3 +138,4 @@
 - [ ] Clacking noise ID pending — suspect elevator departure #6002; WAVs sent for ear-match.
 - [x] ROOT CAUSE of night-1 audio weirdness: web build ran SOFTWARE renderer → ~25fps tab → stretched tick-paced sounds + starved audio callback (the "elongated boom", 4s ka-chings, laggy dialog bitmap). WebGL renderer for emscripten + 4096-sample audio buffer. `0942ec2` (2026-08-10)
 - [ ] Clacking ID round 2: ambient pool WAVs sent (suspect parking). Awaiting Jonah.
+- [x] REFEREE CORRECTION via Jonah's ear: row 21 "build complete" = mislabel; FUN_11f8_35ac is DeleteTenant, rand #10004/5 boom = programmatic deletion. Original plays NO completion sound — #7000 is jackhammer+thud in one WAV. False boom removed; correction pushed to decomp repo. Also: foreground one-shots now steal voices at the 5-voice cap (ambient bed was eating placement sounds). (2026-08-10)
