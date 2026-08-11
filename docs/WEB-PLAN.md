@@ -63,10 +63,9 @@ native assumptions are system font paths and /tmp screenshot paths.
       autosave, flagged as web-port behavior.
 
 ## Phase D — input & UX adaptation
-- [ ] D1. Keyboard capture: browsers steal F-keys — **F5 is
-      "reload page" and our SAVE key**. preventDefault on the canvas +
-      keep the menu alternatives (already built for VNC). Possibly
-      remap saves to Ctrl+S as an additional binding.
+- [x] D1. (2026-08-10) Keyboard capture: Ctrl/Cmd+S aliases F5 in the
+      engine; the shell preventDefaults F5 + Ctrl/Cmd+S (capture phase,
+      only while the game is up). Menu save unchanged.
 - [ ] D2. Context-menu suppression on canvas (right-click).
 - [ ] D3. Scaling/fullscreen: CSS integer scale + a fullscreen button.
 - [ ] D4. Background-tab policy: browsers throttle rAF when hidden —
