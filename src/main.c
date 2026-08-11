@@ -3997,8 +3997,15 @@ static int draw_menu_text(const char *text, int x, int y, int selected);
 #define INFO_BAR_H  41        /* Faithful time-bar height (time.rml: 41px) */
 #define CLOCK_R     14        /* Small clock for horizontal bar */
 
-#define MAP_WIN_W   200       /* Map window (left side) */
-#define MAP_WIN_H   280       /* Map height (sky + ground) */
+/* Sized so the CONTENT area is exactly 200px wide: the EXE's map art
+ * (sky 0x8160, legends 0x139-13B, tab strips 0x136/137) is all drawn
+ * for a 200px viewport, and any rescale of that tiny text drops pixel
+ * rows/columns (Jonah: tab labels "obscured and cut off", 2026-08-10).
+ * 208 = 200 content + 2*4 inset; height reserves 26px so the 18px-tall
+ * tab art also blits 1:1. */
+#define MAP_WIN_W   208       /* Map window (left side) */
+#define MAP_WIN_H   282       /* Map height (sky + ground) */
+#define MAP_TAB_H   18        /* Tab strip art 0x136/137 native height */
 
 #define TOOL_WIN_W  72        /* Narrow toolbox to match the original (2-column item palette) */
 #define SPEED_BTN_W 64        /* Single wide play/pause toggle — fills the narrow window */
@@ -4327,8 +4334,8 @@ static void render_minimap(void)
     int map_x = wx + 4;
     int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
-    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
-    
+    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 26;
+
     /* Map background — use original bitmap 0x8160 (200×288) if available.
      * Top 264px = sky, bottom 24px = ground strip (from OpenSkyscraper).
      * The EXE's map sky is live (referee_minimap_2026-08-08): its pixels
@@ -4566,12 +4573,14 @@ static void render_minimap(void)
         Sprite *tabsp = sprites_find(&game.sprites, 0x8137);
         int by0 = map_y + map_h + 2;
         if (tabs && tabs->texture) {
-            SDL_Rect dst = { map_x, by0, map_w, 16 };
+            /* 1:1 blit — map_w == art width, MAP_TAB_H == art height;
+             * scaling this strip mangles the tab text. */
+            SDL_Rect dst = { map_x, by0, map_w, MAP_TAB_H };
             SDL_RenderCopy(game.renderer, tabs->texture, NULL, &dst);
             if (tabsp && tabsp->texture && game.map_mode >= 0) {
-                SDL_Rect src = { game.map_mode * 50, 0, 50, 18 };
+                SDL_Rect src = { game.map_mode * 50, 0, 50, MAP_TAB_H };
                 SDL_Rect pd  = { map_x + game.map_mode * map_w / 4, by0,
-                                 map_w / 4, 16 };
+                                 map_w / 4, MAP_TAB_H };
                 SDL_RenderCopy(game.renderer, tabsp->texture, &src, &pd);
             }
         } else {
@@ -4583,7 +4592,7 @@ static void render_minimap(void)
             /* 4th overlay is star-gated (unlocks at 2 stars) */
             int locked = (m == 3 && game.tower.star_rating < 2 &&
                           game.sim.mode != MODE_SANDBOX);
-            draw_win31_rect(bx, by, bw - 2, 16, game.map_mode == m ? 0 : 1);
+            draw_win31_rect(bx, by, bw - 2, MAP_TAB_H, game.map_mode == m ? 0 : 1);
             stats_label(bx + 6, by + 2, mode_label[m],
                         locked ? (SDL_Color){ 140, 140, 140, 255 }
                                : (SDL_Color){ 0, 0, 0, 255 });
@@ -7890,7 +7899,7 @@ static int minimap_click(int mx, int my)
     int map_x = wx + 4;
     int map_y = wy + 4;
     int map_w = MAP_WIN_W - 8;
-    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 24;
+    int map_h = MAP_WIN_H - WIN_TITLEBAR_H - 26;
 
     if (mx >= map_x && mx < map_x + map_w &&
         my >= map_y && my < map_y + map_h) {
@@ -7908,7 +7917,7 @@ static int minimap_click(int mx, int my)
     /* Mode button strip (Map/Eval/Rent/Hotel — EXE global 0x7840; the
      * 4th overlay is locked until the 2nd star, pass-3 MapWndProc). */
     if (mx >= map_x && mx < map_x + map_w &&
-        my >= map_y + map_h + 2 && my < map_y + map_h + 18) {
+        my >= map_y + map_h + 2 && my < map_y + map_h + 2 + MAP_TAB_H) {
         int m = (mx - map_x) / (map_w / 4);
         if (m >= 0 && m <= 3 &&
             (m < 3 || game.tower.star_rating >= 2 ||
