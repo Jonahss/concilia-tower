@@ -36,8 +36,11 @@
 #define SND_BUILD_PLACE 0x9B58  /* #7000  place/stamp confirm    row 17         */
 #define SND_BUILD_DRAG  0x9B59  /* #7001  build drag (loop)      row 18         */
 #define SND_BUILD_TOOL  0x9B5A  /* #7002  tool action / toolbar  rows 19,20     */
-#define SND_BUILD_DONE0 0xA714  /* #10004 build complete (rand)  row 21         */
-#define SND_BUILD_DONE1 0xA715  /* #10005 build complete (rand)  row 21         */
+/* Row 21 CORRECTED 2026-08-10: FUN_11f8_35ac is DeleteTenant, not build
+ * complete — (rand%2)+0x2714 booms on PROGRAMMATIC deletion (disasters).
+ * Construction completion is silent; #7000 carries its own final thud. */
+#define SND_DESTROY0    0xA714  /* #10004 tenant destroyed (rand; = explosion) */
+#define SND_DESTROY1    0xA715  /* #10005 tenant destroyed (rand)              */
 #define SND_DELETE      0x9B5B  /* #7003  demolish / delete      row 22         */
 #define SND_STARTUP     0xCE20  /* #20000 startup / intro jingle row 23         */
 

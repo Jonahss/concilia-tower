@@ -8997,7 +8997,7 @@ static int sound_muted(int wav_id)
         return !game.snd_elev;
     case SND_METRO: case SND_GARBAGE:
         return !game.snd_bg;
-    case SND_EXPLOSION: case SND_BUILD_DONE1:
+    case SND_EXPLOSION: case SND_DESTROY1:
     case SND_EVENT_OK: case SND_FIRE_LOOP: case SND_FIRE_START:
     case SND_BOMB_THREAT: case SND_BOMB_ARM:
     case SND_WEDDING: case SND_GUARD_STEP:

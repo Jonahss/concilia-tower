@@ -271,11 +271,30 @@ void audio_play(uint16_t ne_id, float gain)
         if (is_ambient(vid))   amb_active++;
     }
     /* Drop a sound whose class budget is full (dings pile into a wall;
-     * ambient murmurs into mud), or when the tower is already at its audible
-     * ceiling — better to skip one than layer into mush. */
+     * ambient murmurs into mud). */
     if (is_low_class(ne_id) && low_active >= LOW_CLASS_MAX) slot = -1;
     if (is_ambient(ne_id)   && amb_active >= AMBIENT_MAX)   slot = -1;
-    if (total_active >= TOTAL_MAX)                          slot = -1;
+    if (total_active >= TOTAL_MAX) {
+        /* At the audible ceiling: background classes are dropped, but a
+         * FOREGROUND one-shot steals a voice like the EXE's WaveMix
+         * priorities — ambient first, then a ding, then whichever voice
+         * is closest to done. Dropping them instead ate placement sounds
+         * in a lively tower (Jonah's missing jackhammer, 2026-08-10). */
+        if (is_low_class(ne_id) || is_ambient(ne_id)) slot = -1;
+        else {
+            slot = -1;
+            float best = -1.0f;
+            for (int v = 0; v < MAX_VOICES; v++) {
+                Voice *vo = &A.voices[v];
+                if (!vo->active || !vo->clip || vo->loop) continue;
+                float score;
+                if (is_ambient(vo->clip->ne_id))        score = 3.0f;
+                else if (is_low_class(vo->clip->ne_id)) score = 2.0f;
+                else score = (float)vo->pos / (float)vo->clip->frames;
+                if (score > best) { best = score; slot = v; }
+            }
+        }
+    }
     if (slot >= 0) {
         A.voices[slot].clip = c;
         A.voices[slot].pos = 0;

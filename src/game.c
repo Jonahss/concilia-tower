@@ -754,9 +754,13 @@ static void update_tenants(GameSim *sim, Tower *tower, long *out_income, long *o
                  * staggered daily cycle as people actually show up. */
                 t->capacity = CAP_EMPTY;
                 t->cap_peak = game_init_cap_peak(t->type, tower->star_rating);
-                /* Build-complete jingle, random of two (referee row 21:
-                 * (rand%2)+0x2714). Fires as a unit finishes construction. */
-                play_snd((rand() & 1) ? SND_BUILD_DONE1 : SND_BUILD_DONE0);
+                /* NO completion sound: referee row 21's "build complete"
+                 * was a mislabel — FUN_11f8_35ac is DeleteTenant, and its
+                 * (rand%2)+0x2714 boom belongs to PROGRAMMATIC deletion
+                 * (from_user==0, i.e. disasters), which is why #10004 is
+                 * the bomb-explosion WAV. The stamp sound #7000 already
+                 * ends in its own completion thud (Jonah's ear + waveform,
+                 * 2026-08-10). */
             }
             break;
             
