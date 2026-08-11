@@ -2169,8 +2169,10 @@ static void render_tower(void)
         }
     }
     
-    /* Floor number labels on the left edge */
-    {
+    /* Floor number labels on the left edge — port debug aid, not in the
+     * original's world view; lives under the debug-labels toggle (`)
+     * since Jonah's 2026-08-10 report. */
+    if (game.show_debug) {
         int top_f, bot_f, dummy2;
         screen_to_grid(0, 0, &top_f, &dummy2);
         screen_to_grid(0, game.screen_h, &bot_f, &dummy2);
