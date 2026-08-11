@@ -140,3 +140,10 @@
 - [ ] Clacking ID round 2: ambient pool WAVs sent (suspect parking). Awaiting Jonah.
 - [x] REFEREE CORRECTION via Jonah's ear: row 21 "build complete" = mislabel; FUN_11f8_35ac is DeleteTenant, rand #10004/5 boom = programmatic deletion. Original plays NO completion sound — #7000 is jackhammer+thud in one WAV. False boom removed; correction pushed to decomp repo. Also: foreground one-shots now steal voices at the 5-voice cap (ambient bed was eating placement sounds). (2026-08-10)
 - [x] Beta round 2 (all pushed): New Tower resets tool (was killing doubler egg via silent height-lock); ground floor lobby-only now includes floor DECK (2f5a err 0xC — Jonah caught real divergence); floor ghost = thin joist slice; stairs clatter gated on valid spot; tall lobby Ctrl+/Cmd+/2/3 bindings; Esc closes-not-quits; retail/venue/re-let income all ring the register. (2026-08-10)
+
+## Tall-lobby follow-ups (2026-08-10 beta, OPEN)
+- [ ] **Grand lobby MID/TOP row art scrambled** — 0x8A28/0x8A68 raws don't decode with the 8px-column-chunk layout (verified: static in every known interpretation; OpenSkyscraper's loadLobbies BMP trick is also wrong). Needs decomp dig: find the EXE's consumer of these resources (NOT LoadTallLobbySheet — that's CGPk stairs art). Ground sheet 0x89E8 decodes fine.
+- [ ] **Tall stairs walker direction** — people walk down the bottom leg / up the top leg. Suspect leg band order: CGPk spec says leg L=0 = TOP, band = L*11 + frame (stairs) / (span+2)*11 + L*12 + frame (escalator). Check our DrawTallUnit port.
+- [ ] **Tall stairs build ghost** — should preview full span when placement would promote (inside lobby band).
+- [x] Lobby first-click ghost previews held height (Cmd/Ctrl/2/3).
+- [x] New Tower/Load kill sound queue + voices; lobby drags clatter (26dd shared arm).
