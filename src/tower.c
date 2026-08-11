@@ -265,6 +265,12 @@ static long deck_check(Tower *tower, int floor, int x1, int x2,
         set_reject("Maximum height has been reached");
         return -1;
     }
+    /* Ground is lobby-only, deck included — 2f5a step B (err 0xC) has no
+     * bypass for type 0; only lobby + elevators skip it. */
+    if (floor == 0) {
+        set_reject("First floor is only for Lobby");
+        return -1;
+    }
     int fidx = floor_to_index(floor);
     if (x1 < 0) x1 = 0;
     if (x2 > TOWER_WIDTH) x2 = TOWER_WIDTH;
@@ -515,8 +521,11 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
     int is_transport = (type == ITEM_STAIRS || type == ITEM_ESCALATOR);
 
     /* Floor 0 is lobby-only — except transports: elevators and stairs connect
-     * at the ground lobby in the original. */
-    if (floor == 0 && type != ITEM_LOBBY && type != ITEM_FLOOR && !item_is_transport(type))
+     * at the ground lobby in the original. The floor DECK is NOT exempt:
+     * 2f5a's ground bypass table @0x30df is exactly {1,0x18,0x2A,0x2B} =
+     * elevators + lobby, so bare deck on ground draws err 0xC too (Jonah
+     * built floor instead of lobby, 2026-08-10). */
+    if (floor == 0 && type != ITEM_LOBBY && !item_is_transport(type))
         REJECT("First floor is only for Lobby");
 
     /* Elevator placement has NO lobby/adjacency/content requirement — verified

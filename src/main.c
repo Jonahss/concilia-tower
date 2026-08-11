@@ -3920,7 +3920,10 @@ static void render_build_ghost(void)
                 else
                     SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
                 
-                int ghost_h = floors * CELL_H;
+                /* Floor tool previews as the thin joist slice it lays,
+                 * not a full room (Jonah, 2026-08-10). */
+                int ghost_h = game.build_type == ITEM_FLOOR
+                                  ? CEIL_H : floors * CELL_H;
                 int ghost_y = gy - (floors - 1) * CELL_H;
                 SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
                 SDL_RenderFillRect(game.renderer, &ghost);
@@ -3944,7 +3947,8 @@ static void render_build_ghost(void)
                 else
                     SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
                 
-                int ghost_h = floors * CELL_H;
+                int ghost_h = game.build_type == ITEM_FLOOR
+                                  ? CEIL_H : floors * CELL_H;
                 int ghost_y = gy - (floors - 1) * CELL_H;
                 SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
                 SDL_RenderFillRect(game.renderer, &ghost);
@@ -3968,7 +3972,8 @@ static void render_build_ghost(void)
         } else {
             SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
         }
-        int ghost_h = floors * CELL_H;
+        int ghost_h = game.build_type == ITEM_FLOOR
+                          ? CEIL_H : floors * CELL_H;
         int ghost_y = gy - (floors - 1) * CELL_H;
         SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
         SDL_RenderFillRect(game.renderer, &ghost);
@@ -8081,6 +8086,13 @@ static void execute_menu_item(const MenuItem *item)
         elv_edit_exit();
         game.elv_open = 0;
         game.inspect_tid = 0;
+        /* Hand back the plain pointer: the old game's build tool used to
+         * survive into the fresh lot, where its first stray click silently
+         * locked the lobby-height choice (an EXE quirk placement doesn't
+         * gate) and killed the corner-click egg (Jonah, 2026-08-10). */
+        game.build_type = ITEM_NONE;
+        game.tool_popup = -1;
+        game.dragging = 0;
         tower_init(&game.tower);
         game_init(&game.sim);
         add_event_message("New tower started.");
@@ -8836,8 +8848,17 @@ static void handle_event(SDL_Event *ev)
                      * plain = 1 story, Ctrl = 2, Ctrl+Shift = 3 —
                      * placement success not required (EXE quirk kept). */
                     SDL_Keymod m = SDL_GetModState();
-                    tower_choose_lobby_height(&game.tower,
-                        (m & KMOD_CTRL) ? ((m & KMOD_SHIFT) ? 3 : 2) : 1);
+                    int lh = (m & KMOD_CTRL) ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
+                    /* Port alternate: hold 2 or 3 while clicking. Ctrl+click
+                     * is right-click on macOS (and our right button pans),
+                     * so browser players there could never reach the tall
+                     * lobbies (Jonah, 2026-08-10). */
+                    {
+                        const Uint8 *ks = SDL_GetKeyboardState(NULL);
+                        if (ks[SDL_SCANCODE_3]) lh = 3;
+                        else if (ks[SDL_SCANCODE_2]) lh = 2;
+                    }
+                    tower_choose_lobby_height(&game.tower, lh);
                 }
                 game.dragging = 1;
                 game.drag_start_cell = build_origin_cell(game.mouse_cell);
@@ -10070,7 +10091,21 @@ int main(int argc, char *argv[])
                            item_is_elevator(game.build_type) ||
                            game.build_type == ITEM_STAIRS ||
                            game.build_type == ITEM_ESCALATOR;
-            int drag_now = game.dragging && drag_arm;
+            /* Stairs/escalator only clatter over a spot that could take
+             * them — holding on an invalid cell hammered anyway, then
+             * beeped on release (Jonah, 2026-08-10). Probed per-frame so
+             * dragging INTO a valid spot starts ringing there. Floor and
+             * shafts stay unconditional: their drags place continuously,
+             * and the probe misreads them (deck reads its own cells as
+             * occupied; shafts are column-locked, not under the cursor). */
+            int stamp_arm = game.build_type == ITEM_STAIRS ||
+                            game.build_type == ITEM_ESCALATOR;
+            int drag_now = game.dragging && drag_arm &&
+                           (!stamp_arm ||
+                            tower_can_place(&game.tower, game.build_type,
+                                            build_origin_floor(game.build_type,
+                                                               game.mouse_floor),
+                                            build_origin_cell(game.mouse_cell)));
             if (drag_now && !prev_drag)      audio_start_loop(SND_BUILD_DRAG, 0.5f);
             else if (!drag_now && prev_drag) audio_stop_loop();
             prev_drag = drag_now;
