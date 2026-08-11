@@ -142,7 +142,8 @@
 - [x] Beta round 2 (all pushed): New Tower resets tool (was killing doubler egg via silent height-lock); ground floor lobby-only now includes floor DECK (2f5a err 0xC — Jonah caught real divergence); floor ghost = thin joist slice; stairs clatter gated on valid spot; tall lobby Ctrl+/Cmd+/2/3 bindings; Esc closes-not-quits; retail/venue/re-let income all ring the register. (2026-08-10)
 
 ## Tall-lobby follow-ups (2026-08-10 beta, OPEN)
-- [ ] **Grand lobby MID/TOP row art scrambled** — 0x8A28/0x8A68 raws don't decode with the 8px-column-chunk layout (verified: static in every known interpretation; OpenSkyscraper's loadLobbies BMP trick is also wrong). Needs decomp dig: find the EXE's consumer of these resources (NOT LoadTallLobbySheet — that's CGPk stairs art). Ground sheet 0x89E8 decodes fine.
+- [x] **Grand lobby MID/TOP art: VERIFIED CORRECT** (2026-08-10 headless capture) — the "static" is authentic dithered marble + chandelier rows; identical header cells across 0x89E8/0x8A28/0x8A68 prove one format, and the id formula type*0x40+0x3E8 pegs them as pseudo-type 0x19/0x1A sheets. No fix needed. Jonah's walk-back was right.
+- [x] Held-2/3 lobby alternates REMOVED — 2/3 are condo/restaurant hotkeys, held keys switched tools (caught in the same session). Cmd/Ctrl(+Shift)+click only.
 - [ ] **Tall stairs walker direction** — people walk down the bottom leg / up the top leg. Suspect leg band order: CGPk spec says leg L=0 = TOP, band = L*11 + frame (stairs) / (span+2)*11 + L*12 + frame (escalator). Check our DrawTallUnit port.
 - [ ] **Tall stairs build ghost** — should preview full span when placement would promote (inside lobby band).
 - [x] Lobby first-click ghost previews held height (Cmd/Ctrl/2/3).
