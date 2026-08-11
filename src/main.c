@@ -8366,8 +8366,20 @@ static void handle_event(SDL_Event *ev)
     case SDL_KEYDOWN:
         switch (ev->key.keysym.sym) {
         case SDLK_ESCAPE:
-            if (game.elv_edit_mode) { elv_edit_exit(); break; }
-            game.running = 0;
+            /* Esc closes the topmost thing — never the game. It used to
+             * hard-quit with no prompt, which in a browser nuked the whole
+             * sim on a reflex keypress (Jonah, 2026-08-10). Quit lives on
+             * Q / the menu, both behind the save prompt. */
+            if (game.elv_edit_mode)     { elv_edit_exit();          break; }
+            if (game.person_pid)        { game.person_pid = 0;      break; }
+            if (game.elv_open)          { game.elv_open = 0;        break; }
+            if (game.inspect_tid)       { game.inspect_tid = 0;     break; }
+            if (game.menu_open >= 0)    { game.menu_open = -1;      break; }
+            if (game.tool_popup >= 0)   { game.tool_popup = -1;     break; }
+            if (game.build_type != ITEM_NONE || game.demolish_mode) {
+                game.build_type = ITEM_NONE;
+                game.demolish_mode = 0;
+            }
             break;
         case SDLK_q:
             game.quit_confirm = 1;           /* same save prompt as the menu */
