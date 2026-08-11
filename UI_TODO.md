@@ -144,7 +144,8 @@
 ## Tall-lobby follow-ups (2026-08-10 beta, OPEN)
 - [x] **Grand lobby MID/TOP art: VERIFIED CORRECT** (2026-08-10 headless capture) — the "static" is authentic dithered marble + chandelier rows; identical header cells across 0x89E8/0x8A28/0x8A68 prove one format, and the id formula type*0x40+0x3E8 pegs them as pseudo-type 0x19/0x1A sheets. No fix needed. Jonah's walk-back was right.
 - [x] Held-2/3 lobby alternates REMOVED — 2/3 are condo/restaurant hotkeys, held keys switched tools (caught in the same session). Cmd/Ctrl(+Shift)+click only.
-- [ ] **Tall stairs walker direction** — people walk down the bottom leg / up the top leg. Suspect leg band order: CGPk spec says leg L=0 = TOP, band = L*11 + frame (stairs) / (span+2)*11 + L*12 + frame (escalator). Check our DrawTallUnit port.
-- [ ] **Tall stairs build ghost** — should preview full span when placement would promote (inside lobby band).
+- [x] **Tall stairs walker direction: indexing verified CORRECT** vs CGPk spec (leg 0=top ✓, strides 11/12 ✓, frames forward ✓) — the far side of a spiral animating screen-down is authentic art. Reopen only if Jonah still sees it after play.
+- [x] **Tall stairs build ghost** — previews full promoted span in the lobby band. Verified headless.
+- [x] **Stacking on spiral top** — tall unit's top landing = upper-right half in the half-tile collision (port approximation of 0983 vs kind 2-5 records; REFEREE PASS PENDING). Verified live: stairs f2 x187 on a spiral at x187.
 - [x] Lobby first-click ghost previews held height (Cmd/Ctrl/2/3).
 - [x] New Tower/Load kill sound queue + voices; lobby drags clatter (26dd shared arm).
