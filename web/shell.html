@@ -55,8 +55,13 @@
        never leaves your machine.</p>
     <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile"></label>
     <button class="start" id="startbtn" disabled>Start</button>
+    <button class="start" id="forgetbtn" style="display:none; background:#5a3040"
+            title="Remove the remembered copy from this browser">Forget my copy</button>
     <div id="status">Waiting for your EXE&hellip;</div>
-    <p class="privacy">Saves live in your browser's local storage.
+    <div id="hashnote" style="font-size:12px; color:#c9a45a; max-width:480px;
+         margin:6px auto 0; display:none"></div>
+    <p class="privacy">Your EXE and saves live in this browser's local
+       storage only &mdash; upload once, it's remembered here.
        Sound starts with your first click (browser rule, not ours).</p>
   </div>
   <div id="canvaswrap">
@@ -69,6 +74,101 @@
   var exeBytes = null;
   var statusEl = document.getElementById('status');
   var startBtn = document.getElementById('startbtn');
+  var forgetBtn = document.getElementById('forgetbtn');
+  var hashNote = document.getElementById('hashnote');
+
+  /* The build every mechanic was byte-verified against (the 1994 Maxis
+   * release). Other builds exist (tower-together met a +8-offset one) —
+   * they may load fine, but our conformance promises are for this one. */
+  var KNOWN_SHA256 =
+    '801f2ba4c1b4d1ae2c1c9a032c5d37cff861f04deaa9542c2521c0a6a4ccd618';
+
+  /* --- tiny IndexedDB keeper for the uploaded EXE (upload once) --- */
+  function exeDb() {
+    return new Promise(function (res, rej) {
+      var rq = indexedDB.open('ct-exe', 1);
+      rq.onupgradeneeded = function () { rq.result.createObjectStore('files'); };
+      rq.onsuccess = function () { res(rq.result); };
+      rq.onerror = function () { rej(rq.error); };
+    });
+  }
+  function exeStore(bytes) {
+    return exeDb().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction('files', 'readwrite');
+        tx.objectStore('files').put(bytes, 'SIMTOWER.EXE');
+        tx.oncomplete = res; tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+  function exeLoad() {
+    return exeDb().then(function (db) {
+      return new Promise(function (res) {
+        var rq = db.transaction('files').objectStore('files').get('SIMTOWER.EXE');
+        rq.onsuccess = function () { res(rq.result || null); };
+        rq.onerror = function () { res(null); };
+      });
+    });
+  }
+  function exeForget() {
+    return exeDb().then(function (db) {
+      return new Promise(function (res) {
+        var tx = db.transaction('files', 'readwrite');
+        tx.objectStore('files').delete('SIMTOWER.EXE');
+        tx.oncomplete = res; tx.onerror = res;
+      });
+    });
+  }
+
+  /* Hash check — advisory, never a hard block. crypto.subtle needs a
+   * secure context (https / localhost); on plain-http dev serving we
+   * just skip the check. */
+  function checkHash(bytes) {
+    if (!(window.crypto && crypto.subtle)) return Promise.resolve(null);
+    return crypto.subtle.digest('SHA-256', bytes).then(function (buf) {
+      var h = Array.from(new Uint8Array(buf))
+        .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      return h === KNOWN_SHA256;
+    }).catch(function () { return null; });
+  }
+  function showHashVerdict(ok) {
+    if (ok === false) {
+      hashNote.style.display = 'block';
+      hashNote.textContent = 'Heads up: this EXE doesn’t match the ' +
+        '1994 build every mechanic was verified against. It may still ' +
+        'work — but if things look off, that’s why. (Different ' +
+        'builds of SimTower exist; support for more is planned.)';
+    } else {
+      hashNote.style.display = 'none';
+    }
+  }
+
+  function acceptExe(bytes, label, persisted) {
+    exeBytes = bytes;
+    startBtn.disabled = false;
+    forgetBtn.style.display = persisted ? 'inline-block' : 'none';
+    checkHash(bytes).then(function (ok) {
+      showHashVerdict(ok);
+      var mark = ok === true ? ' ✓ verified' : '';
+      statusEl.textContent = label + ' (' + (bytes.length / 1024 | 0) +
+        ' KB)' + mark + '. Ready.';
+    });
+  }
+
+  forgetBtn.addEventListener('click', function () {
+    exeForget().then(function () {
+      exeBytes = null;
+      startBtn.disabled = true;
+      forgetBtn.style.display = 'none';
+      hashNote.style.display = 'none';
+      statusEl.textContent = 'Copy forgotten. Waiting for your EXE…';
+    });
+  });
+
+  /* Returning visitor: the remembered copy arms Start immediately. */
+  exeLoad().then(function (bytes) {
+    if (bytes && !exeBytes) acceptExe(bytes, 'Remembered SIMTOWER.EXE', true);
+  }).catch(function () {});
 
   /* Dev hook: ?exe=NAME fetches the EXE from the server and auto-starts
    * (headless testing). In production no such file is served — the
@@ -91,10 +191,13 @@
     if (!f) return;
     var r = new FileReader();
     r.onload = function () {
-      exeBytes = new Uint8Array(r.result);
-      statusEl.textContent = f.name + ' loaded (' +
-          (exeBytes.length / 1024 | 0) + ' KB). Ready.';
-      startBtn.disabled = false;
+      var bytes = new Uint8Array(r.result);
+      /* Remember it in this browser so next visit skips the upload. */
+      exeStore(bytes).then(function () {
+        acceptExe(bytes, f.name, true);
+      }).catch(function () {
+        acceptExe(bytes, f.name, false);   /* quota/denied: session-only */
+      });
     };
     r.readAsArrayBuffer(f);
   });
