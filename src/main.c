@@ -9122,6 +9122,17 @@ int main(int argc, char *argv[])
         WINDOW_W, WINDOW_H, wflags);
     
     /* Software renderer for VNC visibility */
+#ifdef __EMSCRIPTEN__
+    /* In a browser the software renderer means CPU-compositing every frame
+     * inside wasm — Jonah's beta tab ran at ~25fps, which stretched the
+     * tick-paced sounds and starved the audio callback (2026-08-10). WebGL
+     * does it on the GPU; TARGETTEXTURE is for texture_to_surface's
+     * readback path in sprite loading. */
+    game.renderer = SDL_CreateRenderer(game.window, -1,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
+    if (!game.renderer)
+#endif
+    /* Native stays software: the service runs under Xvfb/VNC with no GPU. */
     game.renderer = SDL_CreateRenderer(game.window, -1, SDL_RENDERER_SOFTWARE);
 
     /* Replace the bare X-server root cursor with a proper arrow; the bulldozer

@@ -55,7 +55,9 @@ int audio_is_enabled(void) { return A.enabled; }
 void audio_set_enabled(int on) { A.enabled = on ? 1 : 0; }
 
 /* ---- the mixer (audio-thread + offline both) ---- */
-#define MIX_MAX_FRAMES 2048
+/* Must cover the largest device buffer (web asks 4096; native 1024) —
+ * the acc[] is 16KB of stack, fine even under wasm's 2MB stack. */
+#define MIX_MAX_FRAMES 4096
 void audio_mix_s16(int16_t *out, int frames)
 {
     /* Accumulate all voices in 32-bit, then limit once — mixing into the int16
@@ -128,7 +130,16 @@ int audio_init(void)
     want.freq = AUDIO_DEV_FREQ;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
+#ifdef __EMSCRIPTEN__
+    /* The browser's audio callback shares the main JS thread with the
+     * ASYNCIFY'd game loop; 1024 samples (46ms @ 22050) starved whenever a
+     * frame ran long, smearing sounds into elongated booms (Jonah's beta
+     * report 2026-08-10). 4096 = ~186ms of slack — latency a sim doesn't
+     * notice. */
+    want.samples = 4096;
+#else
     want.samples = 1024;
+#endif
     want.callback = audio_callback;
 
     /* Ensure the audio subsystem is up (main may have SDL_INIT_AUDIO'd already). */
