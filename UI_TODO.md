@@ -136,3 +136,5 @@
 - [ ] "Boom at end of build" — believed FAITHFUL (build-complete = rand #10004/#10005, #10004 doubles as bomb explosion; referee row 21). Awaiting Jonah's ear-check vs attached WAVs; if distorted in-browser, dig into web audio path.
 - [ ] Condo ka-ching runs while cash steady — queued settlement ring design (spaced ~0.4s, cap 30) + once-daily "Income from X" ticker lingering. Explained; shorten queue if Jonah wants.
 - [ ] Clacking noise ID pending — suspect elevator departure #6002; WAVs sent for ear-match.
+- [x] ROOT CAUSE of night-1 audio weirdness: web build ran SOFTWARE renderer → ~25fps tab → stretched tick-paced sounds + starved audio callback (the "elongated boom", 4s ka-chings, laggy dialog bitmap). WebGL renderer for emscripten + 4096-sample audio buffer. `0942ec2` (2026-08-10)
+- [ ] Clacking ID round 2: ambient pool WAVs sent (suspect parking). Awaiting Jonah.
