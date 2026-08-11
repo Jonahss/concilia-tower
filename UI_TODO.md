@@ -126,3 +126,13 @@
 - Open: the loose ends above (shop closed frames first — smallest, fully
   referee'd), then the mods backlog as Jonah picks. Full-project status
   lives in the [README](README.md#status).
+
+## Web beta night 1 — Jonah's feedback (2026-08-10)
+- [x] Map tab labels obscured/cut off — art was scaled 200×18→192×16; window resized so all map art blits 1:1. `3224ecf`
+- [x] Debug floor labels on left edge — port scaffolding; moved under backtick debug toggle. `7652ca4`
+- [x] Invalid placement played jackhammer-start instead of error click — EXE beeps 0x1B5A on fail (seg_11f8 tail); wired. `51eaeb4`
+- [x] Jackhammer blip on every stamp click — EXE drag-loops only floor/shaft/stairs; gated. `51eaeb4`
+- [x] Background tab didn't mute — Module-scoping bug in shell; fixed + added canvas mute button. `51eaeb4`
+- [ ] "Boom at end of build" — believed FAITHFUL (build-complete = rand #10004/#10005, #10004 doubles as bomb explosion; referee row 21). Awaiting Jonah's ear-check vs attached WAVs; if distorted in-browser, dig into web audio path.
+- [ ] Condo ka-ching runs while cash steady — queued settlement ring design (spaced ~0.4s, cap 30) + once-daily "Income from X" ticker lingering. Explained; shorten queue if Jonah wants.
+- [ ] Clacking noise ID pending — suspect elevator departure #6002; WAVs sent for ear-match.
