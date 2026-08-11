@@ -34,19 +34,19 @@ native assumptions are system font paths and /tmp screenshot paths.
       hooks, Xvfb-era assumptions.
 
 ## Phase B — asset flow (bring your own EXE)
-- [ ] B1. Landing page: drag-drop / file-input for the user's own
+- [x] B1. (2026-08-10) Landing page: drag-drop / file-input for the user's own
       SIMTOWER.EXE. Clear copy: "your file is parsed in your browser
       and never uploaded — there is no server."
-- [ ] B2. Hash check (SHA-256) against OUR byte-verified build before
+- [x] B2. (2026-08-10, policy: warn-never-block; recruiting-poster copy still queued) Hash check (SHA-256) against OUR byte-verified build before
       accepting. Policy decision needed (open question Q3): hard-reject
       other builds vs warn-and-attempt. (tower-together's +8 segment
       mystery proves multiple builds exist; all our mechanics were
       verified against ours.)
-- [ ] B3. Write accepted EXE into MEMFS; boot the game with that path
+- [x] B3. (2026-08-10) Write accepted EXE into MEMFS; boot the game with that path
       (existing argv plumbing unchanged).
-- [ ] B4. Persist the EXE in IndexedDB so return visits skip the
+- [x] B4. (2026-08-10) Persist the EXE in IndexedDB so return visits skip the
       upload; add a "forget my copy" button.
-- [ ] B5. Custom HTML shell: 960×720 canvas, integer/CSS scaling,
+- [x] B5. (2026-08-10, v0: styling/scaling polish continues) Custom HTML shell: 960×720 canvas, integer/CSS scaling,
       page styling + instructions. (The deferred custom-intro/splash
       slot naturally lives here later — queued.)
 
