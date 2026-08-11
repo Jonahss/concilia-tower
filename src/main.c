@@ -3980,6 +3980,20 @@ static void render_build_ghost(void)
             floors = (m & (KMOD_CTRL | KMOD_GUI))
                          ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
         }
+        /* Tall-lobby stairs promotion preview: a stairs/escalator click
+         * inside a grand lobby's band becomes the full-height spiral
+         * (StairsT @1461-1488: 0 < floor <= H promotes, unit spans
+         * ground..H) — show that whole span, not the 2-story stamp
+         * (Jonah, 2026-08-10). */
+        if ((game.build_type == ITEM_STAIRS ||
+             game.build_type == ITEM_ESCALATOR) &&
+            game.tower.lobby_height >= 2 &&
+            game.mouse_floor > 0 &&
+            game.mouse_floor <= game.tower.lobby_height) {
+            of = 0;
+            floors = game.tower.lobby_height + 1;
+            grid_to_screen(of, oc, &gx, &gy);
+        }
         int ghost_h = game.build_type == ITEM_FLOOR
                           ? CEIL_H : floors * CELL_H;
         int ghost_y = gy - (floors - 1) * CELL_H;
