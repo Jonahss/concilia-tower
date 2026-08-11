@@ -3977,12 +3977,8 @@ static void render_build_ghost(void)
          * about to commit to (Jonah, 2026-08-10). */
         if (game.build_type == ITEM_LOBBY && game.tower.lobby_height == 0) {
             SDL_Keymod m = SDL_GetModState();
-            const Uint8 *ks = SDL_GetKeyboardState(NULL);
-            int lh = (m & (KMOD_CTRL | KMOD_GUI))
+            floors = (m & (KMOD_CTRL | KMOD_GUI))
                          ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
-            if (ks[SDL_SCANCODE_3]) lh = 3;
-            else if (ks[SDL_SCANCODE_2]) lh = 2;
-            floors = lh;
         }
         int ghost_h = game.build_type == ITEM_FLOOR
                           ? CEIL_H : floors * CELL_H;
@@ -8877,15 +8873,13 @@ static void handle_event(SDL_Event *ev)
                      * placement success not required (EXE quirk kept). */
                     /* Ctrl is the EXE binding; Cmd (GUI) is the Mac-friendly
                      * twin — Ctrl+click is right-click there, and our right
-                     * button pans (Jonah, 2026-08-10). Held 2/3 also work. */
+                     * button pans (Jonah, 2026-08-10). NO number-key
+                     * alternates: 2/3 are the condo/restaurant build
+                     * hotkeys, so holding them switches tools (found live,
+                     * same evening). */
                     SDL_Keymod m = SDL_GetModState();
                     int lh = (m & (KMOD_CTRL | KMOD_GUI))
                                  ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
-                    {
-                        const Uint8 *ks = SDL_GetKeyboardState(NULL);
-                        if (ks[SDL_SCANCODE_3]) lh = 3;
-                        else if (ks[SDL_SCANCODE_2]) lh = 2;
-                    }
                     tower_choose_lobby_height(&game.tower, lh);
                 }
                 game.dragging = 1;
