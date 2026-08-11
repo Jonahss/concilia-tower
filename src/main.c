@@ -8859,12 +8859,12 @@ static void handle_event(SDL_Event *ev)
                     /* First build click locks the ground-lobby height:
                      * plain = 1 story, Ctrl = 2, Ctrl+Shift = 3 —
                      * placement success not required (EXE quirk kept). */
+                    /* Ctrl is the EXE binding; Cmd (GUI) is the Mac-friendly
+                     * twin — Ctrl+click is right-click there, and our right
+                     * button pans (Jonah, 2026-08-10). Held 2/3 also work. */
                     SDL_Keymod m = SDL_GetModState();
-                    int lh = (m & KMOD_CTRL) ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
-                    /* Port alternate: hold 2 or 3 while clicking. Ctrl+click
-                     * is right-click on macOS (and our right button pans),
-                     * so browser players there could never reach the tall
-                     * lobbies (Jonah, 2026-08-10). */
+                    int lh = (m & (KMOD_CTRL | KMOD_GUI))
+                                 ? ((m & KMOD_SHIFT) ? 3 : 2) : 1;
                     {
                         const Uint8 *ks = SDL_GetKeyboardState(NULL);
                         if (ks[SDL_SCANCODE_3]) lh = 3;
