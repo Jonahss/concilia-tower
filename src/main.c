@@ -10073,7 +10073,7 @@ int main(int argc, char *argv[])
     printf("  Tab/Shift+Tab: cycle through all types\n");
     printf("  Space: pause/unpause, +/-: speed up/slow down\n");
     printf("  F3: analytics graphs, F4: tuning/modding panel\n");
-    printf("  ` (backtick): toggle debug labels, F12: screenshot, Q/Esc: quit\n\n");
+    printf("  ` (backtick): toggle debug labels, F12: screenshot, Q: quit (Esc closes windows)\n\n");
     
     /* Seed the finance quarter baseline so the first report (before any 3-day
      * settlement snapshots it) reads sensibly instead of a $0 opening balance. */
