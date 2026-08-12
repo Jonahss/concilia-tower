@@ -36,14 +36,41 @@
     display: block; image-rendering: pixelated;
     border: 1px solid #2c3648; background: #000;
   }
-  #mutebtn {
-    position: absolute; top: 6px; right: 6px; z-index: 5;
+  #mutebtn, #fsbtn {
+    position: absolute; top: 6px; z-index: 5;
     background: rgba(16,20,28,.75); color: #cfd6e4;
     border: 1px solid #2c3648; border-radius: 5px;
     padding: 4px 10px; font-size: 14px; cursor: pointer;
   }
-  #mutebtn:hover { background: rgba(43,74,134,.85); }
+  #mutebtn { right: 6px; }
+  #fsbtn { right: 52px; }
+  #mutebtn:hover, #fsbtn:hover { background: rgba(43,74,134,.85); }
   a { color: #7fa7dd; }
+  /* Keep the tower on screen on small windows; fill (integer-ish) in
+   * fullscreen. Emscripten's SDL maps mouse coords through the CSS size. */
+  #canvaswrap canvas { max-width: 100vw; height: auto; }
+  #canvaswrap:fullscreen {
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+  #canvaswrap:fullscreen canvas {
+    width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
+  }
+  #findhelp { font-size: 13px; color: #aab3c5; text-align: left;
+              max-width: 480px; margin: 10px auto 0; }
+  #findhelp summary { cursor: pointer; color: #9fb7d8; text-align: center; }
+  #findhelp ul { padding-left: 18px; line-height: 1.5; }
+  #crash {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: rgba(8,10,16,.92); color: #e8ded0;
+    align-items: center; justify-content: center; text-align: center;
+  }
+  #crash .card { background: #1a2130; border: 1px solid #5a3040;
+    border-radius: 8px; padding: 24px 32px; max-width: 520px; }
+  #crash code { display: block; margin: 10px 0; font-size: 12px;
+    color: #c9a45a; word-break: break-all; }
+  #ver { position: fixed; bottom: 6px; right: 10px; font-size: 11px;
+         color: #5a6378; }
 </style>
 </head>
 <body>
@@ -60,15 +87,46 @@
     <div id="status">Waiting for your EXE&hellip;</div>
     <div id="hashnote" style="font-size:12px; color:#c9a45a; max-width:480px;
          margin:6px auto 0; display:none"></div>
+    <details id="findhelp">
+      <summary>Where do I find SIMTOWER.EXE?</summary>
+      <ul>
+        <li>It's the game's main program file &mdash; named
+            <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>.</li>
+        <li><b>Own the original CD or a floppy install?</b> The file is on
+            the disc or in the installed <code>SIMTOWER</code> folder &mdash;
+            just copy it over.</li>
+        <li><b>No disc?</b> SimTower hasn't been sold in decades; copies
+            circulate on game-preservation sites (a web search for
+            &ldquo;SimTower Windows download&rdquo; gets you there).
+            Downloads usually arrive as a ZIP or CD image &mdash; open it
+            and pick the <code>SIMTOWER.EXE</code> inside. No need to run
+            any installer.</li>
+        <li>The <b>Macintosh</b> version won't work &mdash; it stores its
+            art differently. Windows version only.</li>
+        <li>Picked the wrong file? No harm &mdash; this page checks the
+            file's structure and tells you what it got instead.</li>
+      </ul>
+    </details>
     <p class="privacy">Your EXE and saves live in this browser's local
        storage only &mdash; upload once, it's remembered here.
        Sound starts with your first click (browser rule, not ours).</p>
   </div>
   <div id="canvaswrap">
+    <button id="fsbtn" title="Fullscreen">&#x26F6;</button>
     <button id="mutebtn" title="Mute sound">&#128266;</button>
     <canvas id="canvas" width="960" height="720"
             oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
   </div>
+  <div id="crash"><div class="card">
+    <h1 style="font-size:20px">The tower fell over</h1>
+    <p>The game hit an internal error. Your last save is safe in this
+       browser. Reloading the page picks it back up.</p>
+    <code id="crashmsg"></code>
+    <p style="font-size:12px; color:#8a93a6">If this keeps happening,
+       send Jonah a screenshot of this box (build __CT_VERSION__).</p>
+    <button class="start" onclick="location.reload()">Reload</button>
+  </div></div>
+  <div id="ver">build __CT_VERSION__</div>
 
 <script>
   var exeBytes = null;
@@ -77,11 +135,102 @@
   var forgetBtn = document.getElementById('forgetbtn');
   var hashNote = document.getElementById('hashnote');
 
-  /* The build every mechanic was byte-verified against (the 1994 Maxis
-   * release). Other builds exist (tower-together met a +8-offset one) —
-   * they may load fine, but our conformance promises are for this one. */
-  var KNOWN_SHA256 =
-    '801f2ba4c1b4d1ae2c1c9a032c5d37cff861f04deaa9542c2521c0a6a4ccd618';
+  /* Known builds, by SHA-256. 'verified' = the build every mechanic was
+   * byte-verified against; 'working' = structure-checked and boot-tested.
+   * Grows via PRs — see docs/SUPPORTED-BUILDS.md in the repo. */
+  var KNOWN_BUILDS = {
+    '801f2ba4c1b4d1ae2c1c9a032c5d37cff861f04deaa9542c2521c0a6a4ccd618':
+      { label: 'SimTower 1.1 (1994 Maxis release)', status: 'verified' }
+  };
+
+  /* --- structural check: is this file actually a SimTower EXE? ---
+   * Mirrors src/ne_resource.c: walk the Win16 NE resource table and
+   * require the six resource types the engine reads. Everything users
+   * grab by mistake (ZIPs, CD images, installers, the Mac version) gets
+   * a specific, helpful rejection instead of a mystery crash. */
+  var NEED_TYPES = [0x8002, 0xFF0A, 0xFF03, 0xFF02, 0xFF06, 0x8005];
+  function ascii(bytes, off, n) {
+    var s = '';
+    for (var i = 0; i < n && off + i < bytes.length; i++)
+      s += String.fromCharCode(bytes[off + i]);
+    return s;
+  }
+  function sniffExe(bytes) {
+    var rej = function (m) { return { ok: false, message: m }; };
+    if (bytes.length < 0x40)
+      return rej('That file is only a few bytes long — not a program at all.');
+    var m2 = ascii(bytes, 0, 2), m4 = ascii(bytes, 0, 4);
+    if (m2 === 'PK')
+      return rej('That’s a ZIP archive, not the EXE itself. Unzip it, ' +
+                 'then pick the SIMTOWER.EXE from inside.');
+    if (m4 === 'Rar!' || (bytes[0] === 0x37 && bytes[1] === 0x7A))
+      return rej('That’s a compressed archive. Extract it first, then ' +
+                 'pick the SIMTOWER.EXE from inside.');
+    if (bytes[0] === 0x1F && bytes[1] === 0x8B)
+      return rej('That’s a gzip archive. Extract it first, then pick ' +
+                 'the SIMTOWER.EXE from inside.');
+    if (m4 === 'MSCF')
+      return rej('That’s a Windows installer cabinet (.cab). The game ' +
+                 'file itself is usually right next to it — look for ' +
+                 'SIMTOWER.EXE, about 6 MB.');
+    if (ascii(bytes, 0x8001, 5) === 'CD001' || ascii(bytes, 0x9001, 5) === 'CD001')
+      return rej('That’s a CD image. Open it (7-Zip and most unarchivers ' +
+                 'can) and pick the SIMTOWER.EXE from inside.');
+    if (ascii(bytes, 0, 8) === 'StuffIt ' || m4 === 'SIT!' ||
+        ascii(bytes, 0, 39).indexOf('BinHex') >= 0)
+      return rej('That looks like the Macintosh release. Its art is stored ' +
+                 'differently and can’t work here — you need the ' +
+                 'Windows SIMTOWER.EXE.');
+    if (m2 !== 'MZ')
+      return rej('That doesn’t look like a Windows program file. ' +
+                 'You’re after SIMTOWER.EXE, about 6 MB.');
+    var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var offNe = dv.getUint32(0x3C, true);
+    if (offNe + 0x40 > bytes.length)
+      return rej('That’s a DOS-era program, not SimTower for Windows.');
+    var sig = ascii(bytes, offNe, 2);
+    if (sig === 'PE')
+      return rej('That’s a modern 32-bit program — probably an installer ' +
+                 'or the wrong EXE. SimTower itself is a 16-bit program ' +
+                 'named SIMTOWER.EXE, about 6 MB.');
+    if (sig !== 'NE')
+      return rej('That’s a DOS-era program, not SimTower for Windows.');
+    /* Walk the NE resource table, tallying resources per type. */
+    try {
+      var offRt = dv.getUint16(offNe + 0x24, true);
+      var lsa = dv.getUint16(offNe + 0x32, true);
+      if (!offRt || lsa > 16) throw 0;
+      var p = offNe + offRt + 2, types = {}, total = 0;
+      for (;;) {
+        var type = dv.getUint16(p, true);
+        if (!type) break;
+        var count = dv.getUint16(p + 2, true);
+        types[type] = (types[type] || 0) + count;
+        total += count;
+        p += 8;
+        for (var i = 0; i < count; i++, p += 12) {
+          /* Every resource's data must actually be inside the file —
+           * catches truncated copies whose table survived the cut. */
+          var dOff = dv.getUint16(p, true) << lsa;
+          var dLen = dv.getUint16(p + 2, true) << lsa;
+          if (dOff + dLen > bytes.length)
+            return rej('That copy of SIMTOWER.EXE is truncated — its ' +
+                       'contents stop partway through. Re-extract or ' +
+                       're-download it (the full file is about 6 MB).');
+        }
+        if (p > bytes.length) throw 0;
+      }
+      var missing = NEED_TYPES.filter(function (t) { return !types[t]; });
+      if (missing.length)
+        return rej('It’s a Windows 3.1 program, but not SimTower — it ' +
+                   'lacks the game’s art and sound resources. (Did you ' +
+                   'pick SETUP.EXE? Look for SIMTOWER.EXE, about 6 MB.)');
+      return { ok: true, resources: total };
+    } catch (e) {
+      return rej('That file’s resource table is damaged — the copy may ' +
+                 'be truncated. Try re-extracting it.');
+    }
+  }
 
   /* --- tiny IndexedDB keeper for the uploaded EXE (upload once) --- */
   function exeDb() {
@@ -120,39 +269,55 @@
     });
   }
 
-  /* Hash check — advisory, never a hard block. crypto.subtle needs a
-   * secure context (https / localhost); on plain-http dev serving we
-   * just skip the check. */
+  /* Hash lookup against the known-builds registry — advisory labeling
+   * only; the structure check above is what gates acceptance.
+   * crypto.subtle needs a secure context (https / localhost); on plain-
+   * http dev serving we just skip the lookup. */
   function checkHash(bytes) {
     if (!(window.crypto && crypto.subtle)) return Promise.resolve(null);
     return crypto.subtle.digest('SHA-256', bytes).then(function (buf) {
-      var h = Array.from(new Uint8Array(buf))
+      return Array.from(new Uint8Array(buf))
         .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-      return h === KNOWN_SHA256;
     }).catch(function () { return null; });
-  }
-  function showHashVerdict(ok) {
-    if (ok === false) {
-      hashNote.style.display = 'block';
-      hashNote.textContent = 'Heads up: this EXE doesn’t match the ' +
-        '1994 build every mechanic was verified against. It may still ' +
-        'work — but if things look off, that’s why. (Different ' +
-        'builds of SimTower exist; support for more is planned.)';
-    } else {
-      hashNote.style.display = 'none';
-    }
   }
 
   function acceptExe(bytes, label, persisted) {
     exeBytes = bytes;
     startBtn.disabled = false;
     forgetBtn.style.display = persisted ? 'inline-block' : 'none';
-    checkHash(bytes).then(function (ok) {
-      showHashVerdict(ok);
-      var mark = ok === true ? ' ✓ verified' : '';
+    checkHash(bytes).then(function (hash) {
+      var known = hash && KNOWN_BUILDS[hash];
+      var mark = '';
+      if (known && known.status === 'verified') {
+        hashNote.style.display = 'none';
+        mark = ' ✓ verified — ' + known.label;
+      } else if (known) {
+        hashNote.style.display = 'block';
+        hashNote.textContent = 'Recognized: ' + known.label + '. Mechanics ' +
+          'were byte-verified against the 1994 Maxis release; this build ' +
+          'plays fine — tiny differences are possible.';
+        mark = ' ✓ recognized';
+      } else if (hash) {
+        hashNote.style.display = 'block';
+        hashNote.textContent = 'This copy passes the SimTower structure ' +
+          'check but isn’t in our known-builds list yet — it should play ' +
+          'fine. If anything looks off, tell us and mention build id ' +
+          hash.slice(0, 12) + '.';
+      } else {
+        hashNote.style.display = 'none';
+      }
       statusEl.textContent = label + ' (' + (bytes.length / 1024 | 0) +
         ' KB)' + mark + '. Ready.';
     });
+  }
+
+  /* A rejected file never overwrites a remembered good copy. */
+  function rejectExe(message) {
+    hashNote.style.display = 'block';
+    hashNote.textContent = message;
+    statusEl.textContent = exeBytes
+      ? statusEl.textContent
+      : 'That wasn’t it — see the note below. Waiting for your EXE…';
   }
 
   forgetBtn.addEventListener('click', function () {
@@ -192,6 +357,8 @@
     var r = new FileReader();
     r.onload = function () {
       var bytes = new Uint8Array(r.result);
+      var verdict = sniffExe(bytes);
+      if (!verdict.ok) { rejectExe(verdict.message); return; }
       /* Remember it in this browser so next visit skips the upload. */
       exeStore(bytes).then(function () {
         acceptExe(bytes, f.name, true);
@@ -268,6 +435,51 @@
     Module.canvas.focus();     /* give the keys back to the tower */
   });
   document.addEventListener('visibilitychange', applyAudioGate);
+
+  document.getElementById('fsbtn').addEventListener('click', function () {
+    var wrap = document.getElementById('canvaswrap');
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (wrap.requestFullscreen) wrap.requestFullscreen();
+    Module.canvas.focus();
+  });
+
+  /* Drag-and-drop the EXE anywhere on the landing card. */
+  var setupEl = document.getElementById('setup');
+  setupEl.addEventListener('dragover', function (ev) {
+    ev.preventDefault();
+    setupEl.style.borderColor = '#7fa7dd';
+  });
+  setupEl.addEventListener('dragleave', function () {
+    setupEl.style.borderColor = '#2c3648';
+  });
+  setupEl.addEventListener('drop', function (ev) {
+    ev.preventDefault();
+    setupEl.style.borderColor = '#2c3648';
+    var f = ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      var bytes = new Uint8Array(r.result);
+      var verdict = sniffExe(bytes);
+      if (!verdict.ok) { rejectExe(verdict.message); return; }
+      exeStore(bytes).then(function () { acceptExe(bytes, f.name, true); })
+                     .catch(function () { acceptExe(bytes, f.name, false); });
+    };
+    r.readAsArrayBuffer(f);
+  });
+
+  /* Wasm abort → a readable apology instead of a frozen canvas (E5).
+   * Saves are on IDBFS and synced at save-time, so a reload recovers. */
+  function showCrash(what) {
+    document.getElementById('crashmsg').textContent = String(what);
+    document.getElementById('crash').style.display = 'flex';
+  }
+  Module.onAbort = function (what) { showCrash(what || 'abort'); };
+  window.addEventListener('error', function (ev) {
+    var up = document.getElementById('canvaswrap').style.display === 'block';
+    if (up && document.getElementById('crash').style.display !== 'flex')
+      showCrash(ev.message);
+  });
 
   /* Once the game is up, F5 and Ctrl/Cmd+S belong to the tower (save
    * keys), not the browser (reload / save-page). Capture-phase so the

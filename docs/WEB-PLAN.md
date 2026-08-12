@@ -51,7 +51,7 @@ native assumptions are system font paths and /tmp screenshot paths.
       slot naturally lives here later — queued.)
 
 ## Phase C — saves & persistence
-- [ ] C1. Mount saves on IDBFS; FS.syncfs after every game_save (F5 /
+- [x] C1. (2026-08-10) Mount saves on IDBFS; FS.syncfs after every game_save (F5 /
       quit-prompt path) and on load.
 - [ ] C2. Import/export `.sav` as browser file download/upload.
 - [ ] C3. `.TDT` export (twr_export, F6) → browser download. A browser
@@ -66,21 +66,21 @@ native assumptions are system font paths and /tmp screenshot paths.
 - [x] D1. (2026-08-10) Keyboard capture: Ctrl/Cmd+S aliases F5 in the
       engine; the shell preventDefaults F5 + Ctrl/Cmd+S (capture phase,
       only while the game is up). Menu save unchanged.
-- [ ] D2. Context-menu suppression on canvas (right-click).
-- [ ] D3. Scaling/fullscreen: CSS integer scale + a fullscreen button.
+- [x] D2. (2026-08-10) Context-menu suppression on canvas (right-click).
+- [x] D3. (2026-08-12) Scaling/fullscreen: CSS integer scale + a fullscreen button.
 - [ ] D4. Background-tab policy: browsers throttle rAF when hidden —
       decide pause vs catch-up (open question Q5).
-- [ ] D5. In-game version stamp (git short hash) for bug reports.
+- [x] D5. (2026-08-12) In-game version stamp (git short hash) for bug reports.
 
 ## Phase E — hosting, CI, launch hygiene
-- [ ] E1. GitHub Actions: emsdk build → deploy to GitHub Pages on push
+- [x] E1. (2026-08-11) GitHub Actions: emsdk build → deploy to GitHub Pages on push
       (or tag). Artifact = single .html + .js + .wasm (+ font).
-- [ ] E2. Public-repo hygiene: README for the web version, screenshots,
+- [x] E2. (2026-08-12) Public-repo hygiene: README for the web version, screenshots,
       "no game assets included / bring your own EXE" disclaimer.
 - [ ] E3. Code license decision before the repo goes public (Q1).
 - [ ] E4. Cross-browser pass: Chrome, Firefox, Safari (audio unlock and
       IndexedDB quirks differ; Safari is the usual troublemaker).
-- [ ] E5. Error handling: wasm abort → friendly "please report" page,
+- [x] E5. (2026-08-12) Error handling: wasm abort → friendly "please report" page,
       not a frozen canvas.
 - [ ] E6. Performance sanity pass (per-frame TTF text rendering is the
       one thing to watch; native has headroom, wasm should too).
@@ -129,7 +129,7 @@ native assumptions are system font paths and /tmp screenshot paths.
       at a path). Keep minimal — its own mini-project, Jonah's content.
 - [ ] E8. DNS/hosting wiring for kvetch.io → Pages (CNAME) or wherever
       the static bundle lands.
-- [ ] B6. Supported-builds registry: hashes + per-build notes, PR-able;
+- [x] B6. (2026-08-12, structural-check + registry; grows via PRs) Supported-builds registry: hashes + per-build notes, PR-able;
       the wrong-EXE screen links the decompile-and-contribute recipe.
 
 ## Beta testers (quiet-launch list, Jonah 2026-08-09)

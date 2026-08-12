@@ -1,5 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -O2 $(shell pkg-config --cflags sdl2 SDL2_ttf)
+CT_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+CFLAGS = -Wall -Wextra -std=c11 -O2 -DCT_BUILD_VERSION='"$(CT_VERSION)"' $(shell pkg-config --cflags sdl2 SDL2_ttf)
 LDFLAGS = $(shell pkg-config --libs sdl2 SDL2_ttf) -lm
 
 SRC = src/main.c src/ne_resource.c src/sprites.c src/tower.c src/game.c src/people.c src/twr.c src/audio.c src/sound_hook.c src/strings.c
@@ -32,16 +33,18 @@ run: $(BIN)
 WEBDIR = web/dist
 web:
 	mkdir -p $(WEBDIR)
+	sed 's/__CT_VERSION__/$(CT_VERSION)/g' web/shell.html > $(WEBDIR)/.shell.gen.html
 	emcc $(SRC) -o $(WEBDIR)/index.html \
-	  -std=gnu11 -O2 \
+	  -std=gnu11 -O2 -DCT_BUILD_VERSION='"$(CT_VERSION)"' \
 	  -sUSE_SDL=2 -sUSE_SDL_TTF=2 \
 	  -sALLOW_MEMORY_GROWTH -sASYNCIFY -sASYNCIFY_STACK_SIZE=32768 \
 	  -sSTACK_SIZE=2097152 \
 	  -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
 	  -sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS,ENV,addRunDependency,removeRunDependency \
 	  -lidbfs.js \
-	  --shell-file web/shell.html \
+	  --shell-file $(WEBDIR)/.shell.gen.html \
 	  --embed-file web/fonts@/fonts
+	rm -f $(WEBDIR)/.shell.gen.html
 
 webserve: web
 	@echo "Serving on http://$$(hostname -I | cut -d' ' -f1):8611 (and Tailscale IP)"

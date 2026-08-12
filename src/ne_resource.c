@@ -44,24 +44,51 @@ static NEResourceList *table_get_type(NEResourceTable *table, uint16_t type)
 int ne_load(NEResourceTable *table, const char *path)
 {
     memset(table, 0, sizeof(*table));
-    
+
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "ne_load: cannot open %s\n", path);
         return -1;
     }
-    
-    /* Read MZ header → offset to NE header */
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+
+    /* MZ magic, then offset to the second-stage header */
+    uint16_t mz;
+    fseek(f, 0, SEEK_SET);
+    if (fread(&mz, 2, 1, f) != 1 || mz != 0x5A4D) {
+        fprintf(stderr, "ne_load: %s is not a Windows executable (no MZ header)\n", path);
+        fclose(f);
+        return -1;
+    }
     uint32_t off_ne;
     fseek(f, 0x3C, SEEK_SET);
     if (fread(&off_ne, 4, 1, f) != 1) goto fail;
-    
+    if ((long)off_ne + 0x40 > file_size) goto fail;
+
+    /* NE magic — a PE here means a 32-bit program (installer, wrong file) */
+    uint16_t ne_magic;
+    fseek(f, off_ne, SEEK_SET);
+    if (fread(&ne_magic, 2, 1, f) != 1) goto fail;
+    if (ne_magic != 0x454E) {
+        fprintf(stderr, "ne_load: %s is not a 16-bit NE executable (magic 0x%04x%s)\n",
+                path, ne_magic, ne_magic == 0x4550 ? " = PE/32-bit" : "");
+        fclose(f);
+        return -1;
+    }
+
     /* Read resource table offset and logical sector alignment shift */
     uint16_t off_rt, lsa;
     fseek(f, off_ne + 0x24, SEEK_SET);
     if (fread(&off_rt, 2, 1, f) != 1) goto fail;
     fseek(f, off_ne + 0x32, SEEK_SET);
     if (fread(&lsa, 2, 1, f) != 1) goto fail;
+    if (off_rt == 0 || lsa > 16) {
+        fprintf(stderr, "ne_load: %s has no resource table\n", path);
+        fclose(f);
+        return -1;
+    }
     
     /* Parse resource table */
     fseek(f, off_ne + off_rt + 2, SEEK_SET);
@@ -85,16 +112,21 @@ int ne_load(NEResourceTable *table, const char *path)
             
             int offset = (int)offset_aligned << lsa;
             int length = (int)length_aligned << lsa;
-            
+
             /* Skip 2 bytes (flags) */
             fseek(f, 2, SEEK_CUR);
-            
+
             uint16_t id;
             if (fread(&id, 2, 1, f) != 1) goto fail;
-            
+
             /* Skip 4 reserved bytes */
             fseek(f, 4, SEEK_CUR);
-            
+
+            if (offset < 0 || length < 0 || (long)offset + length > file_size) {
+                fprintf(stderr, "ne_load: resource type=0x%x id=0x%x runs past EOF "
+                        "(corrupt or truncated file)\n", type, id);
+                goto fail;
+            }
             NEResource *r = list_add(list);
             r->type = type;
             r->id = id;

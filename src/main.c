@@ -9172,13 +9172,38 @@ int main(int argc, char *argv[])
         return 1;
     }
     
-    printf("ConcilliaTower — SimTower for Linux\n");
+#ifndef CT_BUILD_VERSION
+#define CT_BUILD_VERSION "dev"
+#endif
+    printf("ConcilliaTower — SimTower for Linux (build %s)\n", CT_BUILD_VERSION);
     printf("Loading resources from: %s\n", exe_path);
-    
+
     /* Load NE resources */
     if (ne_load(&game.exe, exe_path) != 0) {
         fprintf(stderr, "Failed to load %s\n", exe_path);
         return 1;
+    }
+
+    /* The game reads six resource types out of the EXE; a file that parses
+     * as NE but lacks them is some other Win16 program (SETUP.EXE, etc). */
+    {
+        static const struct { uint16_t type; const char *what; } need[] = {
+            { NE_RT_BITMAP,    "bitmaps" },
+            { NE_RT_SOUND,     "sounds" },
+            { NE_RT_PALETTE,   "palette" },
+            { NE_RT_RAWBITMAP, "sprite sheets" },
+            { 0xFF06,          "string tables" },
+            { 0x8005,          "dialog text" },
+        };
+        for (size_t i = 0; i < sizeof(need)/sizeof(need[0]); i++) {
+            if (!ne_find_type(&game.exe, need[i].type)) {
+                fprintf(stderr, "%s parses as a Windows 3.1 program but is "
+                        "missing SimTower's %s (resource type 0x%04x) — "
+                        "not a SimTower EXE we recognize.\n",
+                        exe_path, need[i].what, need[i].type);
+                return 1;
+            }
+        }
     }
     exe_strings_init(&game.exe);   /* 0x7f06 string tables + dialog texts */
     

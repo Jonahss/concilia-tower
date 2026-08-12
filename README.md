@@ -17,6 +17,17 @@ The goal is a **faithful reproduction of the original mechanics** — population
 growth, tenant satisfaction, elevator dispatch, star ratings, the disasters —
 running natively on Linux, using the original game's own bitmaps and sounds.
 
+## Play it in your browser
+
+**→ [jonahss.github.io/concilia-tower](https://jonahss.github.io/concilia-tower/)**
+
+The same engine, compiled to WebAssembly. Bring your own `SIMTOWER.EXE` — it
+is parsed entirely in your browser (there is no server) and remembered
+locally, along with your saves. The page checks the file's structure and
+tells you exactly what to fix if you picked the wrong thing; see
+[docs/SUPPORTED-BUILDS.md](docs/SUPPORTED-BUILDS.md) for the builds we
+recognize and how to report a new one.
+
 ## Screenshots
 
 Imported original towers, rendered live by the port using assets read from
