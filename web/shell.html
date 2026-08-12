@@ -76,11 +76,12 @@
 <body>
   <div id="setup">
     <h1>ConcilliaTower<small>the faithful SimTower port &mdash; in your browser</small></h1>
-    <p>Bring your own copy of <b>SIMTOWER.EXE</b> (from the original 1994
-       Maxis release). It is parsed <b>entirely in your browser</b> to load
-       the game's art and sound &mdash; there is no server, and the file
-       never leaves your machine.</p>
-    <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile"></label>
+    <p>Bring your own copy of <b>SIMTOWER.EXE</b> &mdash; or the compressed
+       <b>SIMTOWER.EX_</b> straight off the CD; this page expands it. It is
+       parsed <b>entirely in your browser</b> to load the game's art and
+       sound &mdash; there is no server, and the file never leaves your
+       machine.</p>
+    <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile" multiple></label>
     <button class="start" id="startbtn" disabled>Start</button>
     <button class="start" id="forgetbtn" style="display:none; background:#5a3040"
             title="Remove the remembered copy from this browser">Forget my copy</button>
@@ -91,18 +92,24 @@
       <summary>Where do I find SIMTOWER.EXE?</summary>
       <ul>
         <li>It's the game's main program file &mdash; named
-            <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>.</li>
-        <li><b>Own the original CD or a floppy install?</b> The file is on
-            the disc or in the installed <code>SIMTOWER</code> folder &mdash;
-            just copy it over.</li>
+            <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>, found in an
+            installed <code>SIMTOWER</code> folder.</li>
+        <li><b>Only have the CD (or a CD image)?</b> The disc carries a
+            <em>compressed</em> copy named <code>SIMTOWER.EX_</code> (note
+            the underscore) &mdash; drop that here as-is; this page expands
+            it for you. Open a CD image with 7-Zip or any unarchiver to
+            get at it. No installer needed.</li>
+        <li><b>Floppy disks?</b> Disks 2 and 3 hold
+            <code>SIMTOWER.E1_</code> and <code>SIMTOWER.E2_</code> &mdash;
+            select the two together and drop both at once.</li>
         <li><b>No disc?</b> SimTower hasn't been sold in decades; copies
             circulate on game-preservation sites (a web search for
             &ldquo;SimTower Windows download&rdquo; gets you there).
-            Downloads usually arrive as a ZIP or CD image &mdash; open it
-            and pick the <code>SIMTOWER.EXE</code> inside. No need to run
-            any installer.</li>
-        <li>The <b>Macintosh</b> version won't work &mdash; it stores its
-            art differently. Windows version only.</li>
+            Downloads are usually a ZIP or CD image &mdash; look inside for
+            <code>SIMTOWER.EXE</code> or <code>SIMTOWER.EX_</code>.</li>
+        <li>All known US releases work (1.0 and 1.1b). The
+            <b>Macintosh</b> version won't &mdash; it stores its art
+            differently. Windows version only.</li>
         <li>Picked the wrong file? No harm &mdash; this page checks the
             file's structure and tells you what it got instead.</li>
       </ul>
@@ -140,7 +147,11 @@
    * Grows via PRs — see docs/SUPPORTED-BUILDS.md in the repo. */
   var KNOWN_BUILDS = {
     '801f2ba4c1b4d1ae2c1c9a032c5d37cff861f04deaa9542c2521c0a6a4ccd618':
-      { label: 'SimTower 1.1 (1994 Maxis release)', status: 'verified' }
+      { label: 'SimTower 1.1b (US, official patch)', status: 'verified' },
+    '2825a3c53f77945c63b6d72e26faa7dde5ddd56c31ca668e67a12576d7feca96':
+      { label: 'SimTower 1.0 (US, 1995 CD/floppy pressing)', status: 'working' },
+    'ecb91df191336e94efb95f4828970b6bc3cfaad802ee671902ab695f38490a42':
+      { label: 'SimTower 1.0 (US, original 1994 CD pressing)', status: 'working' }
   };
 
   /* --- structural check: is this file actually a SimTower EXE? ---
@@ -160,9 +171,16 @@
     if (bytes.length < 0x40)
       return rej('That file is only a few bytes long — not a program at all.');
     var m2 = ascii(bytes, 0, 2), m4 = ascii(bytes, 0, 4);
+    if (m4 === 'KWAJ')
+      return { ok: false, kwaj: true };
+    if (m4 === 'SZDD')
+      return rej('That’s an MS-compressed file (SZDD flavor). On Windows, ' +
+                 '`expand file.ex_ SIMTOWER.EXE` decompresses it; then ' +
+                 'bring the result here.');
     if (m2 === 'PK')
-      return rej('That’s a ZIP archive, not the EXE itself. Unzip it, ' +
-                 'then pick the SIMTOWER.EXE from inside.');
+      return rej('That’s a ZIP archive, not the EXE itself. Unzip it, then ' +
+                 'pick the SIMTOWER.EXE — or the compressed SIMTOWER.EX_, ' +
+                 'which works here too — from inside.');
     if (m4 === 'Rar!' || (bytes[0] === 0x37 && bytes[1] === 0x7A))
       return rej('That’s a compressed archive. Extract it first, then ' +
                  'pick the SIMTOWER.EXE from inside.');
@@ -175,7 +193,8 @@
                  'SIMTOWER.EXE, about 6 MB.');
     if (ascii(bytes, 0x8001, 5) === 'CD001' || ascii(bytes, 0x9001, 5) === 'CD001')
       return rej('That’s a CD image. Open it (7-Zip and most unarchivers ' +
-                 'can) and pick the SIMTOWER.EXE from inside.');
+                 'can) and pick the SIMTOWER.EX_ from inside — yes, with ' +
+                 'the underscore; this page expands it for you.');
     if (ascii(bytes, 0, 8) === 'StuffIt ' || m4 === 'SIT!' ||
         ascii(bytes, 0, 39).indexOf('BinHex') >= 0)
       return rej('That looks like the Macintosh release. Its art is stored ' +
@@ -200,13 +219,27 @@
       var offRt = dv.getUint16(offNe + 0x24, true);
       var lsa = dv.getUint16(offNe + 0x32, true);
       if (!offRt || lsa > 16) throw 0;
+      /* Some pressings name their custom types (ALRT..YEN) instead of
+       * using ordinals 0xFF01..0xFF0B — same types, same order. Resolve
+       * names back to the canonical ordinals, like the engine does. */
+      var NAMED = { ALRT:0xFF01, CGPK:0xFF02, CLUT:0xFF03, DTMP:0xFF04,
+                    PART:0xFF05, STRL:0xFF06, TABL:0xFF07, TABM:0xFF08,
+                    TEXT:0xFF09, WAVE:0xFF0A, YEN:0xFF0B };
       var p = offNe + offRt + 2, types = {}, total = 0;
       for (;;) {
         var type = dv.getUint16(p, true);
         if (!type) break;
         var count = dv.getUint16(p + 2, true);
-        types[type] = (types[type] || 0) + count;
-        total += count;
+        if (!(type & 0x8000)) {
+          var nameOff = offNe + offRt + type;
+          var nameLen = bytes[nameOff];
+          var name = ascii(bytes, nameOff + 1, nameLen);
+          type = NAMED[name] || 0;   /* unknown named type: don't tally */
+        }
+        if (type) {
+          types[type] = (types[type] || 0) + count;
+          total += count;
+        }
         p += 8;
         for (var i = 0; i < count; i++, p += 12) {
           /* Every resource's data must actually be inside the file —
@@ -220,6 +253,10 @@
         }
         if (p > bytes.length) throw 0;
       }
+      if (types[0xFF0C] && types[0xFF0D])
+        return rej('That’s the Japanese original — The Tower for Windows ' +
+                   '(TOWER.EXE). Its resources are laid out differently ' +
+                   'and it isn’t supported yet; SimTower’s SIMTOWER.EXE is.');
       var missing = NEED_TYPES.filter(function (t) { return !types[t]; });
       if (missing.length)
         return rej('It’s a Windows 3.1 program, but not SimTower — it ' +
@@ -320,6 +357,97 @@
       : 'That wasn’t it — see the note below. Waiting for your EXE…';
   }
 
+  /* --- KWAJ expansion (SIMTOWER.EX_ off the CD / floppy media) ---
+   * The original media never ships a plain EXE — it carries SIMTOWER.EX_
+   * in MS-Compress KWAJ form that modern tools can't expand. The engine
+   * wasm bundles libmspack's decompressor; we call it file-to-file on
+   * MEMFS. Floppy sets split it in two independent streams (.E1_/.E2_):
+   * expand each, then concatenate the OUTPUTS. */
+  function readFileBytes(f) {
+    return new Promise(function (res, rej2) {
+      var r = new FileReader();
+      r.onload = function () { res(new Uint8Array(r.result)); };
+      r.onerror = function () { rej2(new Error('read failed')); };
+      r.readAsArrayBuffer(f);
+    });
+  }
+  function whenEngineReady() {
+    return new Promise(function (res) {
+      if (Module.engineReady) return res();
+      var t = setInterval(function () {
+        if (Module.engineReady) { clearInterval(t); res(); }
+      }, 100);
+    });
+  }
+  function expandKwaj(bytes) {
+    return whenEngineReady().then(function () {
+      FS.writeFile('/expand.in', bytes);
+      var err = Module.ccall('ct_kwaj_expand', 'number',
+                             ['string', 'string'], ['/expand.in', '/expand.out']);
+      if (err) throw new Error('decompressor error ' + err);
+      var out = FS.readFile('/expand.out');
+      FS.unlink('/expand.in'); FS.unlink('/expand.out');
+      return out;
+    });
+  }
+
+  /* Accept first, persist in the background — playability must never
+   * wait on IndexedDB (slow disk, private mode, quota). The forget
+   * button appears only once the copy is actually remembered. */
+  function finish(bytes, label) {
+    var v = sniffExe(bytes);
+    if (!v.ok) { rejectExe(v.message || 'Unexpected file — tell us.'); return; }
+    acceptExe(bytes, label, false);
+    exeStore(bytes).then(function () {
+      forgetBtn.style.display = 'inline-block';
+    }).catch(function () {});
+  }
+  function ingest(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    Promise.all(files.map(readFileBytes)).then(function (all) {
+      var e1 = null, e2 = null;
+      files.forEach(function (f, i) {
+        if (/\.e1_$/i.test(f.name)) e1 = all[i];
+        if (/\.e2_$/i.test(f.name)) e2 = all[i];
+      });
+      if (files.length === 2 && e1 && e2) {
+        statusEl.textContent = 'Floppy pair — expanding…';
+        return Promise.all([expandKwaj(e1), expandKwaj(e2)])
+          .then(function (parts) {
+            var joined = new Uint8Array(parts[0].length + parts[1].length);
+            joined.set(parts[0], 0);
+            joined.set(parts[1], parts[0].length);
+            finish(joined, 'SIMTOWER.E1_+E2_ (expanded)');
+          });
+      }
+      if (files.length !== 1) {
+        rejectExe('Drop one file (SIMTOWER.EXE or SIMTOWER.EX_) — or ' +
+                  'exactly two for the floppy pair SIMTOWER.E1_ + ' +
+                  'SIMTOWER.E2_.');
+        return;
+      }
+      if (e1 || e2) {
+        rejectExe('That’s one half of the floppy pair — select ' +
+                  'SIMTOWER.E1_ and SIMTOWER.E2_ together (from install ' +
+                  'disks 2 and 3) and drop both at once.');
+        return;
+      }
+      var name = files[0].name, bytes = all[0];
+      var v = sniffExe(bytes);
+      if (v.kwaj) {
+        statusEl.textContent = 'Compressed installer copy — expanding…';
+        return expandKwaj(bytes).then(function (out) {
+          finish(out, name + ' (expanded)');
+        });
+      }
+      finish(bytes, name);
+    }).catch(function (e) {
+      rejectExe('Expansion failed (' + e.message + ') — the file may be ' +
+                'damaged. Try re-extracting it from the CD image or ZIP.');
+    });
+  }
+
   forgetBtn.addEventListener('click', function () {
     exeForget().then(function () {
       exeBytes = null;
@@ -344,29 +472,18 @@
       if (!r.ok) throw new Error('no dev exe');
       return r.arrayBuffer();
     }).then(function (buf) {
-      exeBytes = new Uint8Array(buf);
-      statusEl.textContent = 'dev: ' + devExe + ' fetched, auto-starting';
-      startBtn.disabled = false;
-      startBtn.click();
+      /* Run the real ingest pipeline (sniff + KWAJ expansion), then
+       * auto-start once it arms the button. */
+      ingest([new File([buf], devExe)]);
+      var wait = setInterval(function () {
+        if (!startBtn.disabled) { clearInterval(wait); startBtn.click(); }
+      }, 150);
+      setTimeout(function () { clearInterval(wait); }, 30000);
     }).catch(function () {});
   }
 
   document.getElementById('exefile').addEventListener('change', function (e) {
-    var f = e.target.files[0];
-    if (!f) return;
-    var r = new FileReader();
-    r.onload = function () {
-      var bytes = new Uint8Array(r.result);
-      var verdict = sniffExe(bytes);
-      if (!verdict.ok) { rejectExe(verdict.message); return; }
-      /* Remember it in this browser so next visit skips the upload. */
-      exeStore(bytes).then(function () {
-        acceptExe(bytes, f.name, true);
-      }).catch(function () {
-        acceptExe(bytes, f.name, false);   /* quota/denied: session-only */
-      });
-    };
-    r.readAsArrayBuffer(f);
+    ingest(e.target.files);
   });
 
   var Module = {
@@ -455,17 +572,7 @@
   setupEl.addEventListener('drop', function (ev) {
     ev.preventDefault();
     setupEl.style.borderColor = '#2c3648';
-    var f = ev.dataTransfer.files && ev.dataTransfer.files[0];
-    if (!f) return;
-    var r = new FileReader();
-    r.onload = function () {
-      var bytes = new Uint8Array(r.result);
-      var verdict = sniffExe(bytes);
-      if (!verdict.ok) { rejectExe(verdict.message); return; }
-      exeStore(bytes).then(function () { acceptExe(bytes, f.name, true); })
-                     .catch(function () { acceptExe(bytes, f.name, false); });
-    };
-    r.readAsArrayBuffer(f);
+    ingest(ev.dataTransfer.files);
   });
 
   /* Wasm abort → a readable apology instead of a frozen canvas (E5).

@@ -131,6 +131,11 @@ native assumptions are system font paths and /tmp screenshot paths.
       the static bundle lands.
 - [x] B6. (2026-08-12, structural-check + registry; grows via PRs) Supported-builds registry: hashes + per-build notes, PR-able;
       the wrong-EXE screen links the decompile-and-contribute recipe.
+- [x] B7. (2026-08-12) Multi-build support: structural NE validation (six
+      required resource types) instead of hash-gating; named-type
+      pressings resolved; The Tower 1.2J detected+declined; KWAJ
+      SIMTOWER.EX_ (CD) and E1_/E2_ floppy pair expanded in-browser
+      via vendored libmspack. v1.0 Nov-94 + Apr-95 boot-tested.
 
 ## Beta testers (quiet-launch list, Jonah 2026-08-09)
 nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen

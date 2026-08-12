@@ -9145,6 +9145,15 @@ int main(int argc, char *argv[])
         NULL
     };
     
+    /* --expand IN OUT: expand a KWAJ-compressed SIMTOWER.EX_ and exit
+     * (the same decompressor the web shell calls in-browser). */
+    if (argc == 4 && strcmp(argv[1], "--expand") == 0) {
+        extern int ct_kwaj_expand(const char *in_path, const char *out_path);
+        int err = ct_kwaj_expand(argv[2], argv[3]);
+        if (!err) printf("Expanded %s -> %s\n", argv[2], argv[3]);
+        return err ? 1 : 0;
+    }
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--screenshot") == 0) {
             auto_screenshot = 1;
@@ -9181,6 +9190,17 @@ int main(int argc, char *argv[])
     /* Load NE resources */
     if (ne_load(&game.exe, exe_path) != 0) {
         fprintf(stderr, "Failed to load %s\n", exe_path);
+        return 1;
+    }
+
+    /* The Japanese original, The Tower for Windows (TOWER.EXE), carries 13
+     * custom resource types — two extras prepended shift every ordinal by
+     * +2, so our IDs would silently read the wrong tables. Detect, don't
+     * mis-load. */
+    if (ne_find_type(&game.exe, 0xFF0C) && ne_find_type(&game.exe, 0xFF0D)) {
+        fprintf(stderr, "%s looks like the Japanese original, The Tower for "
+                "Windows — its resource layout differs and it isn't "
+                "supported (yet). SimTower's SIMTOWER.EXE is.\n", exe_path);
         return 1;
     }
 

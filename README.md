@@ -202,3 +202,8 @@ Maxis assets and no original executable. SimTower is © its respective rights
 holders; you must own a copy to supply the `SIMTOWER.EXE` this port reads at
 runtime. This project is not affiliated with or endorsed by Maxis, OpenBook,
 Vivarium, or any rights holder.
+
+`src/vendor/mspack/` contains a minimal subset of
+[libmspack](https://www.cabextract.org.uk/libmspack/) (© Stuart Caie,
+LGPL 2.1), used to expand the MS-Compress `SIMTOWER.EX_` found on original
+CD/floppy media. See `src/vendor/mspack/README.md`.

@@ -92,14 +92,42 @@ int ne_load(NEResourceTable *table, const char *path)
     
     /* Parse resource table */
     fseek(f, off_ne + off_rt + 2, SEEK_SET);
-    
+
     for (;;) {
         uint16_t type, count;
         if (fread(&type, 2, 1, f) != 1) goto fail;
         if (fread(&count, 2, 1, f) != 1) goto fail;
-        
+
         if (type == 0) break; /* End of resource table */
-        
+
+        /* Some SimTower pressings identify the custom resource types by
+         * NAME (a string offset — high bit clear) instead of ordinal IDs
+         * 0xFF01..0xFF0B (OpenSkyscraper issue #5). Same types, same
+         * order; resolve the name back to the canonical ordinal. */
+        if (!(type & 0x8000)) {
+            static const struct { const char *name; uint16_t id; } named[] = {
+                {"ALRT",0xFF01},{"CGPK",0xFF02},{"CLUT",0xFF03},
+                {"DTMP",0xFF04},{"PART",0xFF05},{"STRL",0xFF06},
+                {"TABL",0xFF07},{"TABM",0xFF08},{"TEXT",0xFF09},
+                {"WAVE",0xFF0A},{"YEN",0xFF0B},
+            };
+            long backup = ftell(f);
+            uint8_t nlen; char name[16] = {0};
+            fseek(f, off_ne + off_rt + type, SEEK_SET);
+            if (fread(&nlen, 1, 1, f) == 1 && nlen < sizeof(name))
+                if (fread(name, 1, nlen, f) != nlen) name[0] = 0;
+            fseek(f, backup, SEEK_SET);
+            uint16_t mapped = 0;
+            for (size_t n = 0; n < sizeof(named)/sizeof(named[0]); n++)
+                if (strcmp(name, named[n].name) == 0) { mapped = named[n].id; break; }
+            if (!mapped) {
+                /* Unknown named type: skip its entries entirely. */
+                fseek(f, 4 + (long)count * 12, SEEK_CUR);
+                continue;
+            }
+            type = mapped;
+        }
+
         NEResourceList *list = table_get_type(table, type);
         
         /* Skip 4 reserved bytes */
