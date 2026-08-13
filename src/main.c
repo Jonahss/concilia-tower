@@ -4213,6 +4213,21 @@ static void render_build_ghost(void)
             floors = game.tower.lobby_height + 1;
             grid_to_screen(of, oc, &gx, &gy);
         }
+        /* Metro: placement claims the entire platform row as the tunnel
+         * band — show that full line in the shadow so the commitment is
+         * visible before the click (Jonah, 2026-08-13; deliberate
+         * non-faithful QoL tweak). Fainter than the station ghost, drawn
+         * first so the station reads on top. */
+        if (game.build_type == ITEM_METRO) {
+            int tx, ty;
+            grid_to_screen(of, 0, &tx, &ty);
+            SDL_Rect line = { tx, ty, TOWER_WIDTH * CELL_W, CELL_H };
+            if (can) SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 45);
+            else     SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 45);
+            SDL_RenderFillRect(game.renderer, &line);
+            if (can) SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
+            else     SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 100);
+        }
         /* Floor tool hovers as a one-cell vertical slice (the deck edge
          * you're about to drag out), not a 63-cell bar (Jonah, 2026-08-12). */
         int gw = width, ghost_h = floors * CELL_H;
