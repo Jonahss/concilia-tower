@@ -5550,6 +5550,22 @@ static void render_events(void)
                 int cell = front == 0 ? fl : fr;
                 if (cell < 0) continue;
                 if (front == 1 && fr == fl) continue;   /* fresh ignition: one strip */
+                /* Only draw flames where something exists to burn: shaft
+                 * auto-deck islands leave void gaps inside a floor's
+                 * bounding extent, and fronts crossing them rendered as
+                 * fire sailing through open sky (Jonah's screenshot,
+                 * 2026-08-12). The sim front still advances (root cause —
+                 * the EXE's deck-widening under shafts — flagged for a
+                 * referee pass). */
+                {
+                    int solid = 0;
+                    for (int cc = cell; cc < cell + FIRE_FRONT_CELLS &&
+                                        cc < TOWER_WIDTH; cc++)
+                        if (game.tower.grid[fi][cc].type != ITEM_NONE) {
+                            solid = 1; break;
+                        }
+                    if (!solid) continue;
+                }
                 int fx = lobby_sx + cell * CELL_W;
                 if (flame && flame->texture) {
                     SDL_Rect dst = { fx, fy + CELL_H - flame->h,
@@ -10478,16 +10494,23 @@ int main(int argc, char *argv[])
                  * and the #10009 loop is CHOPPER-only — the port had
                  * been playing the chopper loop for every fire and
                  * looping the alarm for hunts. */
-                static int prev_loop = 0;   /* 0 none / 1 chopper */
+                static int prev_loop = 0;   /* 0 none / 1 crackle */
+                /* Crackle loops the WHOLE fire ([0xB418]!=0, referee row
+                 * 5) — it was gated on the paid chopper, so an unpaid
+                 * fire burned silently (Jonah, 2026-08-12). */
                 int want = (game.sim.event.active &&
-                            game.sim.event.type == EVENT_FIRE &&
-                            game.sim.event.chopper_x > 0) ? 1 : 0;
+                            game.sim.event.type == EVENT_FIRE) ? 1 : 0;
                 if (want != prev_loop) {
                     audio_stop_loop();
                     if (want == 1) audio_start_loop(SND_FIRE_LOOP, 0.5f);
                     prev_loop = want;
                 }
-                if (game.sim.event.active && game.sim.frame % 16 == 0)
+                /* #10014 is the BOMB-HUNT search tick (census: guard
+                 * search tick%16) — it was firing during every event,
+                 * putting a clock-tick under fires (Jonah, 2026-08-12). */
+                if (game.sim.event.active &&
+                    game.sim.event.type == EVENT_BOMB &&
+                    !game.sim.event.pending && game.sim.frame % 16 == 0)
                     play_snd(SND_GUARD_STEP);
             }
 
