@@ -1480,7 +1480,38 @@ static void render_tower(void)
             x = run;
         }
     }
-    
+
+    /* Metro tunnel: the platform row's full-lot track band (settled
+     * 2026-08-13, third time's the charm). When the platform piece
+     * (type 0x21) finishes construction, ConstructQ's maker table routes
+     * it to MakeLobby (11f0 @016a-01c3: "0x21 -> 11e8:0000"), which lays
+     * the same type-0x2D 375-cell full-row band that gives ground
+     * lobbies their lot-wide floor; on this row its art is the dark
+     * 4-cell track tile 0x8F28 (OpenSkyscraper: "metro/tracks"). So the
+     * whole level reads as subway tunnel — which is WHY placement
+     * demands the row virgin and nothing may ever build below. Station
+     * and train draw over their own 30 cells in the tenant pass. */
+    {
+        Sprite *tracks = sprites_find(&game.sprites, 0x8F28);
+        const Tenant *metro = NULL;
+        for (int i = 0; i < game.tower.tenant_count; i++) {
+            const Tenant *t = &game.tower.tenants[i];
+            if (t->type == ITEM_METRO && t->state != TENANT_CONSTRUCTION) {
+                metro = t;
+                break;
+            }
+        }
+        if (tracks && metro && metro->floor >= bot_floor &&
+            metro->floor <= top_floor) {
+            int sx, sy;
+            grid_to_screen(metro->floor, 0, &sx, &sy);
+            for (int x = 0; x < TOWER_WIDTH; x += 4) {
+                SDL_Rect dst = { sx + x * CELL_W, sy, 4 * CELL_W, CELL_H };
+                SDL_RenderCopy(game.renderer, tracks->texture, NULL, &dst);
+            }
+        }
+    }
+
     /* ====== PASS 2: Tenant sprites ======
      * Iterate the TENANT ARRAY, not the grid: a shaft stamped over a
      * tenant's leftmost cell would hide it from a grid scan (real saves
