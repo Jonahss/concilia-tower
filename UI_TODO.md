@@ -109,6 +109,8 @@
 - [ ] **MOD: persist tenancy Length across save/load** — the tenant-info "Length" field resets to zero on load, because the original .TDT record (18 bytes) has no field for it and the EXE keeps it in-memory only. That's faithful (see docs/ORIGINAL-BUGS.md #1) — so persisting `let_quarters` is a port nicety, mod-gated. Needs a side-channel since .TDT can't hold it (port-native save extension or sidecar). (2026-07-18)
 - [ ] **MOD: multi-tower gaps + bridges** — deliberate gaps in floors (separate towers). Tenants can't cross gaps. Gaps improve views/light → adjacent + edge units more desirable. No accidental holes (a bridging unit fills floor underneath; partial overhangs still disallowed). Later: bridges → upgradeable moving walkways favorable in routing.
 - [ ] **MOD: above-ground parking** — allow parking above ground (if not already), cheaper than underground.
+- [ ] **MOD: metro tunnel across the reserved row** — NOT faithful (settled 2026-08-13, `1b58318`): corpus-wide 0xB3E8 reader census has no renderer; the original leaves the virgin metro level as bare earth and the train pops in/out of the 30-cell station. Jonah's remembered "tunnel through the whole bottom row" is probably Yoot Tower. As a mod: tile a darkened/trackified variant of the platform row art (0x8C28) across the reserved level so trains visibly arrive. Pairs with the mod-menu item above.
+- [ ] **MOD: buried treasure dig event** — the EXE ships dialog 0x0BE0 ("During construction, workers discovered ancient buried treasure! It is worth $^000" / button "Wow!") but its only trigger is debug menu relic 9001; no natural trigger exists (2026-08-13 trace). As a mod: small random chance on basement excavation → payout + the shipped dialog. Awaiting Jonah's interest (asked on Discord 2026-08-13).
 - [ ] **MOD: window washing** — install window-washing cranes on the roof; pay washers a quarterly fee; cranes animate up/down washing the tower's faces. Pairs with the views/windows/light-wells/bridges mod family (dirty windows → lower desirability?).
 
 ## Sprite-state decode — COMPLETE (Jonah decoded sheets, I wired by state)
@@ -116,7 +118,7 @@
 - [x] OFFICE: day/night × window-variant-by-tier (cap_peak). `14fdb7c` `03633b4`
 - [x] CONDO: occupied day/eve/night + For-Sale day/night (5 frames). `9506891`
 - [x] MEDICAL / CINEMA / PARTY HALL / PARKING by state. `3273601`
-- [x] RECYCLING 5-frame trash cycle + truck; METRO night frame. `6f386e2` `14f0f39`
+- [x] RECYCLING 5-frame trash cycle + truck; ~~METRO night frame~~ `6f386e2` `14f0f39` — metro night frame RETRACTED 2026-08-13 (`1b58318`): the EXE has no metro day/night art; frame = aux verbatim (0 idle / 2 train; 1 = evening-build seed). The "night" frame was the idle-B half of the 480px sheet, misread as night art.
 - [x] STAIRS (both variants) + ESCALATOR animate. `0d9f07c` `14f0f39`
 - [x] RESTAURANT/FAST FOOD (empty/busy/packed/closed) + SHOP (3 fill frames): confirmed already-correct occupancy ramps.
 - Audit DONE. Only open sprite item: optional no-window office frames usage (tier mapping shipped; revisit if Jonah wants perimeter-based).
