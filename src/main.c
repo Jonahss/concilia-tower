@@ -356,6 +356,8 @@ typedef struct {
     int             show_debug;   /* Toggle diagnostic labels */
     int             show_stats;   /* Analytics window (F3) */
     int             show_tuning;  /* Tuning/modding window (F4) */
+    int             show_masspricing; /* Mass-pricing panel (port tool) */
+    int             mp_all;       /* scope: 0 = vacant only, 1 = all units */
     int             fin_open;     /* Financial report dialog (CountT, bitmap 0x81f4) */
     int             fin_x, fin_y; /* financial report window position (draggable) */
     int             stats_x, stats_y; /* window positions (draggable; */
@@ -611,6 +613,8 @@ typedef struct {
 #define ACT_FIND_TENANT   27
 #define ACT_FIRE_RESCUE   28   /* Options menu 40008 (10e8:01e2 mid-fire
                                   chopper purchase) */
+#define ACT_MASS_PRICING  29   /* Port tool (Jonah 2026-08-12): bulk rent-
+                                  class changes; no EXE counterpart */
 
 /* Build > Residential submenu */
 static const MenuItem menu_build_res[] = {
@@ -714,8 +718,10 @@ static const MenuItem menu_options[] = {
     { "Sound: Elevators",  ITEM_NONE, ACT_SND_ELEV },
     { "Sound: Background", ITEM_NONE, ACT_SND_BG },
     { "Sound: Events",     ITEM_NONE, ACT_SND_EVENTS },
+    { NULL, ITEM_NONE, ACT_NONE },
+    { "Mass Pricing...",   ITEM_NONE, ACT_MASS_PRICING },
 };
-#define MENU_OPTIONS_COUNT 8
+#define MENU_OPTIONS_COUNT 10
 
 /* Windows menu — show/hide the floating windows (menu ids 40014-40016).
  * Find Person... / Find Tenant... (40019/40020) land here once traced. */
@@ -2477,6 +2483,147 @@ static int tuning_click(int mx, int my)
         return 1;
     }
     return 1;   /* clicks inside the window never fall through */
+}
+
+/* ---------- Mass pricing (port tool, Jonah 2026-08-12) ----------
+ * Bulk rent-class changes — no EXE counterpart (the original reprices one
+ * unit at a time through the inspector). Same setter as the inspector's
+ * dropdown, so re-judge/re-let behavior is identical, just N at once. */
+#define MP_W      372
+#define MP_ROW_H  24
+#define MP_ROWS   6
+static const struct { ItemType t; const char *name; } mp_types[MP_ROWS] = {
+    { ITEM_OFFICE,       "Office"   }, { ITEM_SHOP,        "Shop"      },
+    { ITEM_HOTEL_SINGLE, "Single"   }, { ITEM_HOTEL_TWIN,  "Twin"      },
+    { ITEM_HOTEL_SUITE,  "Suite"    }, { ITEM_CONDO,       "Condo"     },
+};
+static const char *mp_cls_name[4] = { "High", "Avg", "Low", "V.Low" };
+
+static void mp_window_origin(int *x, int *y)
+{
+    *x = (game.screen_w - MP_W) / 2;
+    *y = HUD_HEIGHT + MENU_BAR_H + 60;
+}
+
+static void mp_apply(ItemType type, int cls)
+{
+    int n = 0, relet = 0;
+    for (int i = 0; i < game.tower.tenant_count; i++) {
+        Tenant *t = &game.tower.tenants[i];
+        if (t->type != type) continue;
+        if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
+            continue;
+        if (!game.mp_all && t->state != TENANT_ABANDONED) continue;
+        if (t->rent_class == cls) continue;
+        relet += game_set_rent_class(&game.sim, &game.tower, t, cls);
+        n++;
+    }
+    char msg[64];
+    snprintf(msg, sizeof msg, "Mass pricing: %d %s unit%s -> %s%s",
+             n, tower_item_name(type), n == 1 ? "" : "s", mp_cls_name[cls],
+             relet ? " (some back on the market)" : "");
+    add_event_message(msg);
+    play_snd(SND_BUILD_TOOL);
+}
+
+static int mp_click(int mx, int my)
+{
+    if (!game.show_masspricing) return 0;
+    int wx, wy;
+    mp_window_origin(&wx, &wy);
+    int body_h = 46 + MP_ROWS * MP_ROW_H + 30;
+    if (mx < wx || mx >= wx + MP_W ||
+        my < wy || my >= wy + WIN_TITLEBAR_H + body_h) return 0;
+
+    int top = wy + WIN_TITLEBAR_H;
+    /* Scope toggles */
+    if (my >= top + 4 && my < top + 22) {
+        if (mx >= wx + 96 && mx < wx + 200)  { game.mp_all = 0; return 1; }
+        if (mx >= wx + 208 && mx < wx + 300) { game.mp_all = 1; return 1; }
+    }
+    /* Class buttons: 4 columns of 56px starting at wx+120 */
+    int rows_y = top + 44;
+    int row = (my - rows_y) / MP_ROW_H;
+    if (my >= rows_y && row >= 0 && row < MP_ROWS) {
+        for (int k = 0; k < 4; k++) {
+            int bx = wx + 120 + k * 60;
+            if (mx >= bx && mx < bx + 56) { mp_apply(mp_types[row].t, k); return 1; }
+        }
+    }
+    /* Close button */
+    int cy = rows_y + MP_ROWS * MP_ROW_H + 4;
+    if (my >= cy && my < cy + 20 && mx >= wx + MP_W - 78 && mx < wx + MP_W - 8) {
+        game.show_masspricing = 0;
+        return 1;
+    }
+    return 1;   /* clicks inside the window never fall through */
+}
+
+static void render_masspricing_window(void)
+{
+    if (!game.show_masspricing) return;
+    int wx, wy;
+    mp_window_origin(&wx, &wy);
+    int body_h = 46 + MP_ROWS * MP_ROW_H + 30;
+
+    draw_win31_titlebar(wx, wy, MP_W, "Mass Pricing (port tool)");
+    SDL_Rect body = { wx, wy + WIN_TITLEBAR_H, MP_W, body_h };
+    SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
+    SDL_RenderFillRect(game.renderer, &body);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &body);
+
+    int top = wy + WIN_TITLEBAR_H;
+    stats_label(wx + 8, top + 7, "Apply to:", (SDL_Color){ 0, 0, 0, 255 });
+    const struct { const char *lbl; int on; int x, w; } scopes[2] = {
+        { "Vacant only", !game.mp_all, 96, 104 },
+        { "All units",    game.mp_all, 208, 92 },
+    };
+    for (int s = 0; s < 2; s++) {
+        SDL_Rect r = { wx + scopes[s].x, top + 4, scopes[s].w, 18 };
+        SDL_SetRenderDrawColor(game.renderer,
+                               scopes[s].on ? 255 : 168,
+                               scopes[s].on ? 255 : 168,
+                               scopes[s].on ? 255 : 168, 255);
+        SDL_RenderFillRect(game.renderer, &r);
+        SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(game.renderer, &r);
+        stats_label(r.x + 8, r.y + 3, scopes[s].lbl,
+                    (SDL_Color){ 0, 0, 0, 255 });
+    }
+
+    int rows_y = top + 44;
+    for (int i = 0; i < MP_ROWS; i++) {
+        int ry = rows_y + i * MP_ROW_H;
+        stats_label(wx + 8, ry + 5, mp_types[i].name,
+                    (SDL_Color){ 0, 0, 0, 255 });
+        for (int k = 0; k < 4; k++) {
+            SDL_Rect b = { wx + 120 + k * 60, ry + 2, 56, MP_ROW_H - 5 };
+            SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+            SDL_RenderFillRect(game.renderer, &b);
+            SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+            SDL_RenderDrawRect(game.renderer, &b);
+            char v[16];
+            int rent = tenant_rent(mp_types[i].t, k);
+            if (rent >= 1000) snprintf(v, sizeof v, "%dk", rent / 1000);
+            else              snprintf(v, sizeof v, "%d", rent);
+            stats_label(b.x + 6, b.y + 3, v, (SDL_Color){ 20, 20, 120, 255 });
+        }
+    }
+    /* Column headers above the buttons, tiny */
+    for (int k = 0; k < 4; k++)
+        stats_label(wx + 122 + k * 60, rows_y - 12, mp_cls_name[k],
+                    (SDL_Color){ 70, 70, 70, 255 });
+
+    int cy = rows_y + MP_ROWS * MP_ROW_H + 4;
+    SDL_Rect cls = { wx + MP_W - 78, cy, 70, 20 };
+    SDL_SetRenderDrawColor(game.renderer, 168, 168, 168, 255);
+    SDL_RenderFillRect(game.renderer, &cls);
+    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
+    SDL_RenderDrawRect(game.renderer, &cls);
+    stats_label(cls.x + 16, cls.y + 3, "Close", (SDL_Color){ 0, 0, 0, 255 });
+    stats_label(wx + 8, cy + 3, "Values = rent per cycle",
+                (SDL_Color){ 70, 70, 70, 255 });
 }
 
 static void render_tuning_window(void)
@@ -7567,6 +7714,7 @@ static void render(void)
     render_ui();
     render_stats_window();
     render_tuning_window();
+    render_masspricing_window();
     render_elv_dialog();
     render_fin_dialog();
     render_inspect_popup();
@@ -8185,6 +8333,7 @@ static void execute_menu_item(const MenuItem *item)
                               ? "Cannot call the fire crew right now"
                               : "There is no fire");
         break;
+    case ACT_MASS_PRICING: game.show_masspricing ^= 1; break;
     case ACT_ANIM_PEOPLE:  game.anim_people ^= 1;  break;
     case ACT_ANIM_EFFECTS: game.anim_effects ^= 1; break;
     case ACT_SND_ELEV:     game.snd_elev ^= 1;   break;
@@ -8724,6 +8873,7 @@ static void handle_event(SDL_Event *ev)
         }
         if (ev->button.button == SDL_BUTTON_LEFT) {
             /* Tuning window swallows its clicks */
+            if (mp_click(ev->button.x, ev->button.y)) break;
             if (tuning_click(ev->button.x, ev->button.y)) break;
 
             /* Check menu bar click first */
