@@ -10431,13 +10431,17 @@ int main(int argc, char *argv[])
                     char rb[160], num[16];
                     snprintf(num, sizeof num, "%d",
                              game.sim.vip_notice - 1000);
+                    /* Dialog 0xBB8 stores the button label at [0] and the
+                     * message at [1] — the port had them swapped, so the
+                     * modal read "OK" with a paragraph-long button
+                     * (Jonah's screenshot, 2026-08-12). */
                     str_subst(rb, sizeof rb,
-                              exe_dlg_text(0xBB8, 0,
+                              exe_dlg_text(0xBB8, 1,
                                            "A VIP has made reservations "
                                            "for the Hotel Suite on floor "
                                            "^0."),
                               "^0", num);
-                    show_notice_modal(rb, exe_dlg_text(0xBB8, 1, "OK"));
+                    show_notice_modal(rb, exe_dlg_text(0xBB8, 0, "OK"));
                     add_event_message(rb);
                 } else if (game.sim.vip_notice == 1) {
                     /* Black limo + red carpet 0x2712 (DTMP of 0xBB9). */
