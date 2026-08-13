@@ -1700,7 +1700,21 @@ static int find_target_floor(ElevatorShaft *s, ElevatorCar *c, int ci)
         }
         /* default target = the serve leg's far end (raw 1330/1497) */
         int end = shaft_extreme(s, !express_up);
-        return end != c->floor ? end : -1;
+        if (end != c->floor) return end;
+        /* Parked at the serve leg's far end with work still assigned —
+         * an express-down car homed at the TOP holding a call from a
+         * floor below (Jonah's checkout rush, 2026-08-12: 4 top-homed
+         * cars each grabbed a call, scanned their serve leg into thin
+         * air, and deadlocked holding the assignment while five floors
+         * of guests maxed their stress). Start a fresh nonstop leg so
+         * the next sweep serves it. Flagged for referee: what the EXE's
+         * raw 1330/1497 tail really does for a car parked at the wrong
+         * terminus. */
+        if (c->assigned_calls || c->distinct_dests) {
+            int start = shaft_extreme(s, express_up);
+            if (start != c->floor) return start;
+        }
+        return -1;
     }
     for (int pass = 0; pass < 2; pass++) {
         int up = pass == 0 ? c->dir : !c->dir;

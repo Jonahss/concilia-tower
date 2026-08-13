@@ -19,6 +19,14 @@ static int fails = 0;
 
 static uint16_t place(ItemType ty, int floor, int x)
 {
+    /* The floor tool's bare click now plops one cell (union-grown from
+     * the building edge, 2026-08-12); fixtures want the old 63-wide
+     * slab, so lay it explicitly. */
+    if (ty == ITEM_FLOOR) {
+        if (tower_extend_deck(&tw, floor, x, x + 63)) return UINT16_MAX;
+        printf("  (deck failed: f%d x%d)\n", floor, x);
+        return 0;
+    }
     uint16_t id = tower_place(&tw, ty, floor, x);
     if (!id) printf("  (placement failed: %s f%d x%d)\n",
                     tower_item_name(ty), floor, x);
