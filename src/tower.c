@@ -931,30 +931,35 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
              * checks the whole candidate rect); normal units keep the
              * half-tile model — lower-left 4 cells on the lower floor,
              * upper-right 4 on the upper (10c0:0983). */
-            struct box { int f0, f1, x0, x1; } mine[2], theirs[2];
+            struct box { int f0, f1, x0, x1; } mine[3], theirs[3];
             int mn, tn;
-            /* Tall spirals: full-width body up to one floor below the top,
-             * then the TOP LANDING as an upper-right half — so a normal
-             * unit can continue the climb from the spiral's exit, same as
-             * stacking on any stairs (Jonah, 2026-08-10). Port
+            /* Tall spirals: BOTTOM ENTRY as a lower-left half (so stairs
+             * can continue the descent below, mirroring the top), full-
+             * width body on the intermediate floors, TOP LANDING as an
+             * upper-right half — so a normal unit can continue the climb
+             * from the spiral's exit, same as stacking on any stairs
+             * (Jonah, 2026-08-10; below-case 2026-08-12). Port
              * approximation of how 0983's half-tile model reads a kind 2-5
              * record; flag for a referee pass. */
             if (rise > 1) {
-                mine[0] = (struct box){ floor, floor + rise - 1, x, x + width };
-                mine[1] = (struct box){ floor + rise, floor + rise,
+                mine[0] = (struct box){ floor, floor, x, x + half };
+                mine[1] = (struct box){ floor + 1, floor + rise - 1,
+                                        x, x + width };
+                mine[2] = (struct box){ floor + rise, floor + rise,
                                         x + half, x + width };
-                mn = 2;
+                mn = 3;
             } else {
                 mine[0] = (struct box){ floor, floor, x, x + half };
                 mine[1] = (struct box){ floor + 1, floor + 1, x + half, x + width };
                 mn = 2;
             }
             if (orise > 1) {
-                theirs[0] = (struct box){ o->floor, o->floor + orise - 1,
+                theirs[0] = (struct box){ o->floor, o->floor, o->x, o->x + half };
+                theirs[1] = (struct box){ o->floor + 1, o->floor + orise - 1,
                                           o->x, o->x + width };
-                theirs[1] = (struct box){ o->floor + orise, o->floor + orise,
+                theirs[2] = (struct box){ o->floor + orise, o->floor + orise,
                                           o->x + half, o->x + width };
-                tn = 2;
+                tn = 3;
             } else {
                 theirs[0] = (struct box){ o->floor, o->floor, o->x, o->x + half };
                 theirs[1] = (struct box){ o->floor + 1, o->floor + 1,

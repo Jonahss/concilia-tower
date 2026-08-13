@@ -3869,6 +3869,11 @@ static void render_build_ghost(void)
 
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
+    /* A locked grand lobby drags out at its full height — the 1-story
+     * ITEM_HEIGHT stamp reads as short shadows (Jonah, 2026-08-12). The
+     * pre-lock hover preview below still handles the held-modifier case. */
+    if (game.build_type == ITEM_LOBBY && game.tower.lobby_height >= 1)
+        floors = game.tower.lobby_height;
 
     if (game.dragging && item_is_elevator(game.build_type)) {
         /* Elevators drag VERTICALLY: one shaft segment per floor from the
@@ -4611,6 +4616,17 @@ static void render_minimap(void)
                 SDL_Rect pd  = { map_x + game.map_mode * map_w / 4, by0,
                                  map_w / 4, MAP_TAB_H };
                 SDL_RenderCopy(game.renderer, tabsp->texture, &src, &pd);
+            }
+            /* Port nicety (Jonah 2026-08-12): the star-gated Hotel tab is
+             * dead until 2 stars — the EXE blits it looking live anyway.
+             * Dim the quarter so the lock reads at a glance. */
+            if (game.tower.star_rating < 2 && game.sim.mode != MODE_SANDBOX) {
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(game.renderer, 64, 64, 64, 140);
+                SDL_Rect dim = { map_x + 3 * map_w / 4, by0,
+                                 map_w / 4, MAP_TAB_H };
+                SDL_RenderFillRect(game.renderer, &dim);
+                SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
             }
         } else {
         static const char *mode_label[4] = { "Map", "Eval", "Rent", "Hotel" };
@@ -10157,7 +10173,10 @@ int main(int argc, char *argv[])
 
     /* Main loop */
     game.running = 1;
-    game.build_type = ITEM_OFFICE;
+    /* Faithful default selection: the EXE's new-game/load init (FileT
+     * 10d0:08c6) sets current_tool [0x783C] = 3 = first build item = the
+     * floor deck. (Was ITEM_OFFICE — a dev-era leftover.) */
+    game.build_type = ITEM_FLOOR;
 
     int frame = 0;
     while (game.running) {
