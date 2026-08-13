@@ -3896,6 +3896,21 @@ static void render_build_ghost(void)
             if (f == f1) break;
         }
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
+    } else if (game.dragging && game.build_type == ITEM_FLOOR) {
+        /* The floor tool extends the deck as a continuous span — its ghost
+         * is one thin joist strip from the anchor to the cursor, not a row
+         * of 63-cell stamps (Jonah, 2026-08-12). */
+        int a = game.drag_start_cell, b = game.mouse_cell;
+        if (b < a) { int t = a; a = b; b = t; }
+        int gx, gy;
+        grid_to_screen(game.drag_start_floor, a, &gx, &gy);
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
+        SDL_Rect strip = { gx, gy, (b - a + 1) * CELL_W, CEIL_H };
+        SDL_RenderFillRect(game.renderer, &strip);
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 160);
+        SDL_RenderDrawRect(game.renderer, &strip);
+        SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     } else if (game.dragging) {
         /* Drag placement: show ghost row of units from start to current cell */
         int start = game.drag_start_cell;
@@ -3999,10 +4014,13 @@ static void render_build_ghost(void)
             floors = game.tower.lobby_height + 1;
             grid_to_screen(of, oc, &gx, &gy);
         }
-        int ghost_h = game.build_type == ITEM_FLOOR
-                          ? CEIL_H : floors * CELL_H;
+        /* Floor tool hovers as a one-cell vertical slice (the deck edge
+         * you're about to drag out), not a 63-cell bar (Jonah, 2026-08-12). */
+        int gw = width, ghost_h = floors * CELL_H;
+        if (game.build_type == ITEM_FLOOR) { gw = 1; ghost_h = CELL_H; }
         int ghost_y = gy - (floors - 1) * CELL_H;
-        SDL_Rect ghost = { gx, ghost_y, width * CELL_W, ghost_h };
+        if (game.build_type == ITEM_FLOOR) ghost_y = gy;
+        SDL_Rect ghost = { gx, ghost_y, gw * CELL_W, ghost_h };
         SDL_RenderFillRect(game.renderer, &ghost);
         SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 200);
         SDL_RenderDrawRect(game.renderer, &ghost);
