@@ -1771,12 +1771,15 @@ static void render_tower(void)
                         frame_idx = 0;
                     }
                 } else if (tenant->type == ITEM_METRO && nframes >= 3) {
-                    /* Metro: frame 0 = TRAIN at the platform (sheet 0x8C29,
-                     * eyeballed 2026-07-11), 1 = empty day, 2 = night. The
-                     * sim's 1%/tick toggle (DoRandomSubwayInOut) drives it
-                     * via venue_state — trains come and go, 10AM-5PM. */
-                    frame_idx = (game.sim.time_of_day == TOD_NIGHT) ? 2
-                              : tenant->venue_state ? 0 : 1;
+                    /* Metro: frame = the record's aux train-state verbatim
+                     * (BlitDirtyCells seg_1038 @050e: "metro pieces ->
+                     * frame = aux"). 0 = empty platform, 2 = train in
+                     * (DoRandomSubwayInOut writes only those two), 1 = the
+                     * idle-B frame reachable only as the evening-build
+                     * initial state. The EXE has NO day/night art switch
+                     * for the metro — the old TOD_NIGHT frame here showed
+                     * a leftover idle frame as invented night art. */
+                    frame_idx = tenant->venue_state <= 2 ? tenant->venue_state : 0;
                 } else if (closed) {
                     frame_idx = nframes - 1;          /* shuttered storefront */
                 } else if (retail_closes) {
@@ -7844,6 +7847,20 @@ static int elev_add_car_at(int x, int floor)
     return 0;
 }
 
+/* MakeMetroStation seeds the aux train-state with the day-phase flag
+ * (11f8:0d04 dispatch: phase>=4 ? 1 : 0) — a metro built in the evening
+ * starts on idle frame 1 until the first morning train rolls it to 0/2.
+ * Singleton, so find-by-type is exact. Call after any successful build. */
+static void metro_seed_evening_aux(void)
+{
+    if (game.build_type != ITEM_METRO ||
+        (game.sim.hour >= 7 && game.sim.hour < 17))
+        return;
+    for (int i = 0; i < game.tower.tenant_count; i++)
+        if (game.tower.tenants[i].type == ITEM_METRO)
+            game.tower.tenants[i].venue_state = 1;
+}
+
 static void drag_place_units(void)
 {
     if (game.build_type <= ITEM_NONE || game.build_type >= ITEM_TYPE_COUNT) return;
@@ -7911,6 +7928,7 @@ static void drag_place_units(void)
         play_snd(SND_BUILD_PLACE);   /* place/stamp confirm (referee row 17) */
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
+        metro_seed_evening_aux();
     } else {
         /* Rejected stamp: the EXE's post-placement tail beeps 0x1B5A on
          * fail (seg_11f8 @0de4-0ecf; drag arms skip it and just reset
@@ -9204,6 +9222,7 @@ static void handle_event(SDL_Event *ev)
                              * in silence (Jonah, 2026-08-10). */
                             play_snd(game.build_type == ITEM_FLOOR
                                          ? SND_BUILD_DRAG : SND_BUILD_PLACE);
+                            metro_seed_evening_aux();
                         } else {
                             /* fail -> beep 0x1B5A; drag arms stay silent
                              * (they just reset their counter in the EXE) */
@@ -9708,14 +9727,18 @@ int main(int argc, char *argv[])
         if (sprites_compose_v(&game.sprites, game.renderer,
                               SPR_CINEMA_UPPER_F1, SPR_CINEMA_LOWER,
                               SPR_CINEMA_COMP_F1) == 0) ok++; else fail++;
-        /* Metro: Try 0x8BA9 + 0x8BA8 horizontally for first row, then stack */
+        /* Metro rows in the EXE's BuildTypeSheets order (resources
+         * type*64+1000+n, n ascending): the 480px sheet first (frames 0-1,
+         * the idle pair) then the 240px sheet (frame 2, train/crowd at the
+         * station). The renderer indexes this with the record's aux state
+         * verbatim, so the order matters. */
         {
             uint16_t metro_row0 = 0x00F0, metro_row1 = 0x00F1, metro_row2 = 0x00F2;
             uint16_t metro_01 = 0x00F3;
             int metro_ok = 1;
-            if (sprites_compose_h(&game.sprites, game.renderer, 0x8BA9, 0x8BA8, metro_row0) != 0) metro_ok = 0;
-            if (metro_ok && sprites_compose_h(&game.sprites, game.renderer, 0x8BE9, 0x8BE8, metro_row1) != 0) metro_ok = 0;
-            if (metro_ok && sprites_compose_h(&game.sprites, game.renderer, 0x8C29, 0x8C28, metro_row2) != 0) metro_ok = 0;
+            if (sprites_compose_h(&game.sprites, game.renderer, 0x8BA8, 0x8BA9, metro_row0) != 0) metro_ok = 0;
+            if (metro_ok && sprites_compose_h(&game.sprites, game.renderer, 0x8BE8, 0x8BE9, metro_row1) != 0) metro_ok = 0;
+            if (metro_ok && sprites_compose_h(&game.sprites, game.renderer, 0x8C28, 0x8C29, metro_row2) != 0) metro_ok = 0;
             if (metro_ok && sprites_compose_v(&game.sprites, game.renderer, metro_row0, metro_row1, metro_01) == 0) {
                 if (sprites_compose_v(&game.sprites, game.renderer, metro_01, metro_row2, SPR_METRO_COMP) == 0)
                     ok++; else fail++;

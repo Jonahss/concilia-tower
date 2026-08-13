@@ -2351,7 +2351,7 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
     if (t->type == ITEM_METRO && n < max) {
         if (sim->hour < 10)       PUSH("First train is not coming");
         else if (sim->hour >= 21) PUSH("Last train is gone");
-        else if (t->venue_state)  PUSH("Crowded with passengers");
+        else if (t->venue_state == 2) PUSH("Crowded with passengers");
     }
 
     /* 13. Noisy neighbor (#35+#36) — names the offending neighbor's type. */
@@ -3114,7 +3114,11 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
          * 2026-07-11): pure cosmetics — a 1%/tick present/absent toggle
          * while 10AM-5PM, parked overnight empty. The port piggybacks
          * on this 16-frame pass (1 - 0.99^16 ~ a 1-in-7 flip) and
-         * borrows venue_state (unused for metro) as "train in".
+         * carries the EXE's aux field in venue_state: 0 = empty platform,
+         * 2 = train at the platform (the renderer indexes the frame with
+         * it verbatim; 1 exists only as the evening-build initial state
+         * and falls to 0 on the first roll, silently, like the EXE's
+         * else-branch).
          * Runs BEFORE the occupancy gate: metro is infrastructure with no
          * tenant occupancy — the daily judge vacates it, but the EXE's
          * subway toggle never checks occupancy, so gating it on OCCUPIED
@@ -3129,8 +3133,12 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
              * stays parked there). */
             if (!sim->event.active && sim->hour >= 10 && sim->hour < 17 &&
                 rand() % 7 == 0) {
-                t->venue_state = !t->venue_state;
-                if (t->venue_state) play_snd(SND_METRO);  /* arrival only */
+                if (t->venue_state == 0) {
+                    t->venue_state = 2;          /* train ARRIVES */
+                    play_snd(SND_METRO);         /* arrival only */
+                } else {
+                    t->venue_state = 0;          /* departs, silent */
+                }
             }
             continue;
         }
