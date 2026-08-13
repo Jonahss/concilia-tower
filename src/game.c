@@ -3079,8 +3079,16 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
          * authentic 15Hz, so the EXE's own mask gives the EXE's own
          * cadence — one re-pose per tenant-second (and the metro
          * train's rand()%7 flip below approximates its 1%/tick roll
-         * over exactly this 16-tick pass again). */
-        if (((sim->frame + i) & 15) != 0) continue;
+         * over exactly this 16-tick pass again).
+         * The EXE keys the phase on the PERSON handle ((day_clock +
+         * person_ref) % 16, AnimPeple @0636-0654) — scattered, "so the
+         * whole tower doesn't twitch in sync". Keying on the raw tenant
+         * index made adjacent rooms fire in sequence: a left-to-right
+         * wave down every hotel floor (Jonah, 2026-08-12). Hash the
+         * tenant id into the phase so neighbors scatter like the EXE's
+         * person handles do. */
+        if (((sim->frame + (tower->tenants[i].id * 2654435761u)) & 15) != 0)
+            continue;
         Tenant *t = &tower->tenants[i];
         TenantOccupants *o = &sim->occupants[i];
         o->count = 0;
