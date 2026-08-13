@@ -7613,8 +7613,12 @@ static void render_find_dialog(void)
 /* Center the camera on a grid cell with the SmoothScroll glide. */
 static void find_center_camera(int fidx, int cell)
 {
+    /* grid_to_screen's convention: cam == the world point at screen
+     * CENTER. The old -screen_w/2 put the target at the right EDGE, so
+     * the bomb-blast jump framed sky half a screen left of the crater
+     * (Jonah, 2026-08-12). */
     game.cam_ty = (float)(-index_to_floor(fidx) * CELL_H);
-    game.cam_tx = (float)(cell * CELL_W - game.screen_w / 2);
+    game.cam_tx = (float)(cell * CELL_W);
     game.cam_anim = 1;
 }
 
