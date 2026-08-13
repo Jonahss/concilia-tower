@@ -2514,6 +2514,11 @@ static void mp_apply(ItemType type, int cls)
         if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION)
             continue;
         if (!game.mp_all && t->state != TENANT_ABANDONED) continue;
+        /* Sold condos are locked, same as the inspector's grayed price
+         * row — the owners already paid; only for-sale units reprice
+         * (Jonah, 2026-08-12). */
+        if (t->type == ITEM_CONDO && t->state >= TENANT_OCCUPIED &&
+            t->state != TENANT_ABANDONED) continue;
         if (t->rent_class == cls) continue;
         relet += game_set_rent_class(&game.sim, &game.tower, t, cls);
         n++;
