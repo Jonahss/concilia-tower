@@ -1098,7 +1098,11 @@ uint16_t tower_place(Tower *tower, ItemType type, int floor, int x)
     /* The floor tool builds deck cells, no tenant record — success
      * returns a sentinel id that maps to no tenant. */
     if (type == ITEM_FLOOR)
-        return tower_extend_deck(tower, floor, x, x + ITEM_WIDTH[type])
+        /* A bare click plops ONE cell; deck_check unions it with the
+         * floor's existing extent, so the deck grows from the building's
+         * edge out to the clicked spot (Jonah, 2026-08-12 — replaces the
+         * old 63-cell rightward stamp). */
+        return tower_extend_deck(tower, floor, x, x + 1)
                    ? UINT16_MAX : 0;
 
     if (!tower_can_place(tower, type, floor, x)) {
