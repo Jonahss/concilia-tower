@@ -3870,9 +3870,12 @@ static void render_build_ghost(void)
     int width = ITEM_WIDTH[game.build_type];
     int floors = ITEM_HEIGHT[game.build_type];
     /* A locked grand lobby drags out at its full height — the 1-story
-     * ITEM_HEIGHT stamp reads as short shadows (Jonah, 2026-08-12). The
-     * pre-lock hover preview below still handles the held-modifier case. */
-    if (game.build_type == ITEM_LOBBY && game.tower.lobby_height >= 1)
+     * ITEM_HEIGHT stamp reads as short shadows (Jonah, 2026-08-12). GROUND
+     * band only: sky lobbies are always one story (caught same evening).
+     * The pre-lock hover preview below still handles the held-modifier
+     * case. */
+    if (game.build_type == ITEM_LOBBY && game.tower.lobby_height >= 1 &&
+        (game.dragging ? game.drag_start_floor : game.mouse_floor) == 0)
         floors = game.tower.lobby_height;
 
     if (game.dragging && item_is_elevator(game.build_type)) {
