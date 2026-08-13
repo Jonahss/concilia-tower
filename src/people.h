@@ -63,8 +63,10 @@ typedef struct {
     int maint_car_express;   /* per express car ($20k) */
     int maint_car_service;   /* per service car ($10k) */
     int maint_escalator;     /* per escalator ($5k); stairs are free */
-    int star_bonus[3];       /* award on promotion to star 2/3/4
-                                ($200k/$300k/$500k — tuning res +0xa8) */
+    int treasure_award[3];   /* buried-treasure payout at star 1/2/3
+                                ($200k/$300k/$500k — DE22/24/26, tuning
+                                res +0xa8; ex-"star_bonus", the promotion
+                                reading was a gloss error, 2026-08-13) */
     int lobby_fee_star3;     /* lobby upkeep $/cell/sweep at 3 stars ($300) */
     int lobby_fee_star4;     /* at 4+ stars ($1000); free below 3 stars */
 } Tuning;

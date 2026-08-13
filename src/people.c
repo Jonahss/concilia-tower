@@ -68,7 +68,7 @@ void tuning_reset(void)
         .maint_car_express = 20000,
         .maint_car_service = 10000,
         .maint_escalator = 5000,
-        .star_bonus = { 200000, 300000, 500000 },
+        .treasure_award = { 200000, 300000, 500000 },
         .lobby_fee_star3 = 300,
         .lobby_fee_star4 = 1000,
     };

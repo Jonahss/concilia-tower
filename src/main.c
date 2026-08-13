@@ -7888,6 +7888,7 @@ static void drag_place_units(void)
             play_snd(SND_BUILD_PLACE);   /* shaft extend (referee row 17) */
             printf("Drag-extended %s at x=%d by %d floor(s)\n",
                    tower_item_name(game.build_type), x, placed);
+            game_notify_built(&game.sim, &game.tower);
         } else {
             /* Nothing new placed — the click/drag landed entirely on an existing
              * shaft, so add a car to it instead. */
@@ -7904,6 +7905,7 @@ static void drag_place_units(void)
         int hi = start < end ? end : start;
         if (tower_extend_deck(&game.tower, floor, lo, hi + 1)) {
             play_snd(SND_BUILD_PLACE);
+            game_notify_built(&game.sim, &game.tower);
         } else if (tower_reject_reason()[0]) {
             add_event_message(tower_reject_reason());
         }
@@ -7929,6 +7931,7 @@ static void drag_place_units(void)
         printf("Drag-placed %d %s(s) on floor %d\n",
                placed, tower_item_name(game.build_type), floor);
         metro_seed_evening_aux();
+        game_notify_built(&game.sim, &game.tower);
     } else {
         /* Rejected stamp: the EXE's post-placement tail beeps 0x1B5A on
          * fail (seg_11f8 @0de4-0ecf; drag arms skip it and just reset
@@ -8505,6 +8508,7 @@ static void cap_drag_track(void)
     if (placed > 0) {
         game.cap_drag_placed += placed;
         play_snd(SND_BUILD_PLACE);
+        game_notify_built(&game.sim, &game.tower);
     }
     if (removed > 0)
         play_snd(SND_DELETE);
@@ -9223,6 +9227,7 @@ static void handle_event(SDL_Event *ev)
                             play_snd(game.build_type == ITEM_FLOOR
                                          ? SND_BUILD_DRAG : SND_BUILD_PLACE);
                             metro_seed_evening_aux();
+                            game_notify_built(&game.sim, &game.tower);
                         } else {
                             /* fail -> beep 0x1B5A; drag arms stay silent
                              * (they just reset their counter in the EXE) */
@@ -10213,6 +10218,12 @@ int main(int argc, char *argv[])
         char err[256];
         if (twr_import(twr_path, &game.tower, &game.sim, err, sizeof(err)) == 0) {
             add_event_message("Imported original SimTower save!");
+            /* FileT does serialize 0xB922, but the importer doesn't
+             * decode that block yet; seed like the ceremony (and
+             * pre-v18 loads) — over-dug = already found. */
+            game.sim.pending_treasure = 0;
+            game.sim.treasure_found = game_treasure_condition(
+                &game.tower, game.tower.star_rating);
         } else {
             fprintf(stderr, "TWR import failed: %s\n", err);
             tower_init(&game.tower);
@@ -10794,6 +10805,25 @@ int main(int argc, char *argv[])
              * The old parchment "certificate" card was a port invention
              * (and its star bitmaps dragged the info-bar background
              * along). Faithful = the real dialog text + OK. */
+            /* Buried treasure (dialog 0xBE0, template order: idx 0 = the
+             * "Wow!" button, idx 1 = the discovery text with the $^000
+             * slot). The template is a bare 234x74 box — text + button,
+             * NO DTMP art panel (ShowDialog's 0x2711 3rd arg at 1148:0251
+             * is the open-WAV, and bitmap 0x2711 belongs to the fire
+             * chopper dialog — verified by dumping it 2026-08-13). */
+            if (game.sim.pending_treasure) {
+                char num[32], line[512];
+                format_money(game.sim.pending_treasure, num, sizeof num);
+                str_subst(line, sizeof line,
+                          exe_dlg_text(0xBE0, 1,
+                                       "During construction, workers "
+                                       "discovered ancient buried treasure!"
+                                       "\nIt is worth $^000"),
+                          "$^000", num);
+                show_notice_modal(line, exe_dlg_text(0xBE0, 0, "Wow!"));
+                game.sim.pending_treasure = 0;
+            }
+
             if (game.sim.pending_star_up) {
                 int st = game.sim.pending_star_up;
                 st = st < 2 ? 2 : st > 6 ? 6 : st;

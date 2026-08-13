@@ -211,6 +211,48 @@ int game_measure_width(Tower *tower)
     return max_width;
 }
 
+/* --- Buried treasure (LevelUp seg_1148, settled 2026-08-13) ---
+ * The dig condition, byte-exact from 1148:01a8: at star 1/2/3 the basement
+ * floor B(star+2) — B3/B4/B5 — must be built (any cell) with an extent
+ * wider than star*25 cells (extent = rightmost built cell exclusive minus
+ * leftmost, the EXE's floor-record +4/+2 fields). Star 4+ always fails,
+ * which also parks the latch harmlessly armed at high stars. */
+int game_treasure_condition(const Tower *tower, int star)
+{
+    if (star > 3 || star < 1) return 0;
+    int fidx = floor_to_index(-(star + 2));
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
+    int left = TOWER_WIDTH, right = 0;
+    for (int x = 0; x < TOWER_WIDTH; x++) {
+        if (tower->grid[fidx][x].type == ITEM_NONE) continue;
+        if (x < left) left = x;
+        if (x + 1 > right) right = x + 1;
+    }
+    if (right == 0) return 0;              /* floor untouched (count == 0) */
+    return (right - left) > star * 25;
+}
+
+/* NotifyFacilityBuilt's treasure tail (1148:0163 @0188-019c): on every
+ * successful build, an armed latch plus the dig condition pays the
+ * star-tier award via AwardMoney (clamped at $99,999,999 like 1178:076f),
+ * queues dialog 0xBE0 and latches. The suite/security flag half of the
+ * EXE function is covered by the port's scan_promotion_flags. */
+void game_notify_built(GameSim *sim, Tower *tower)
+{
+    if (sim->treasure_found) return;
+    int star = tower->star_rating;
+    if (!game_treasure_condition(tower, star)) return;
+    sim->treasure_found = 1;
+    int award = TUNING.treasure_award[star - 1];
+    long cash = tower->money + award;
+    tower->money = cash > 99999999L ? 99999999L : cash;
+    sim->income_this_quarter += award;
+    sim->fin_other_income_q += award;      /* windfall, not rent */
+    sim->pending_treasure = award;
+    printf("\xf0\x9f\x92\xb0 Buried treasure! $%d (star %d dig)\n",
+           award, star);
+}
+
 /* --- Promotion flags scan --- */
 
 static void scan_promotion_flags(GameSim *sim, Tower *tower)
@@ -1406,16 +1448,14 @@ static void evaluate_star_rating(GameSim *sim, Tower *tower)
                    new_rating, new_rating > 1 ? "s" : "",
                    sim->standing_population);
         }
-        /* Promotion bonus (LevelUp seg42:020f -> MoneyT AwardMoney):
-         * the EXE pays $200k/$300k/$500k on reaching star 2/3/4.
-         * No bonus decoded for star 5 or TOWER. */
-        if (new_rating >= 2 && new_rating <= 4) {
-            int bonus = TUNING.star_bonus[new_rating - 2];
-            tower->money += bonus;
-            sim->income_this_quarter += bonus;
-            sim->fin_other_income_q += bonus;   /* a bonus, not rent -> Other Income */
-            printf("\xf0\x9f\x92\xb0 Promotion bonus: $%d\n", bonus);
-        }
+        /* NO promotion bonus: the old "$200k/$300k/$500k on star-up"
+         * reading of seg42:020f was the treasure payout misfiled
+         * (globals.md gloss error, settled 2026-08-13). The ceremony
+         * pays nothing — what it does do (@0047-004a) is re-seed the
+         * treasure latch with the NEW tier's dig condition, so a
+         * basement over-dug before the promotion forfeits that tier's
+         * treasure and anything less re-arms it. */
+        sim->treasure_found = game_treasure_condition(tower, new_rating);
     }
 }
 
@@ -3984,7 +4024,11 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 17u  /* v17: 0-based day counter with the EXE's 11988
+#define SAVE_VERSION 18u  /* v18: buried treasure (GameSim.treasure_found +
+                             pending_treasure appended; v17/v16 saves load
+                             with the short read and the latch seeded from
+                             the ceremony rule, like the EXE re-seeds it).
+                             v17: 0-based day counter with the EXE's 11988
                              wrap (struct layout UNCHANGED — v16 saves
                              load; their 1-based day is decremented so
                              every modulo event lands on the EXE's dates).
@@ -4075,8 +4119,9 @@ _Static_assert(offsetof(GameSim, hotel_pass_day) == 1592,
 
 static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
 {
+    size_t gs17 = sizeof(GameSim) - 2 * sizeof(int);  /* pre-treasure tail */
     size_t old_tw = sizeof(Tower) + (size_t)MAX_TENANTS * V15_TENANT_EXTRA;
-    size_t old_gs = sizeof(GameSim) + V15_GS_EXTRA;
+    size_t old_gs = gs17 + V15_GS_EXTRA;
     unsigned char *buf = malloc(old_tw > old_gs ? old_tw : old_gs);
     if (!buf) return 0;
 
@@ -4109,7 +4154,7 @@ static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
         memcpy(dst, buf, a);
         memcpy(dst + a, buf + a + V15_GS_ZONES_BYTES,
                b_old - a - V15_GS_ZONES_BYTES);
-        memcpy(dst + b_new, buf + b_old + 4u, sizeof(GameSim) - b_new);
+        memcpy(dst + b_new, buf + b_old + 4u, gs17 - b_new);
     }
     free(buf);
     return ok;
@@ -4122,15 +4167,24 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
     uint32_t hdr[5];
     int ok = fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == SAVE_MAGIC;
     int legacy = 0;
+    /* v18 appended two ints to GameSim's tail; v17/v16 saves are the
+     * same layout minus that tail (short-read below, then seed). */
+    size_t v17_gs = sizeof(GameSim) - 2 * sizeof(int);
+    int pre18 = 0;
     if (ok) {
-        if (hdr[1] == SAVE_VERSION || hdr[1] == 16u) {
-            /* v16 = identical layout, 1-based day (migrated below) */
+        if (hdr[1] == SAVE_VERSION) {
             ok = hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
+                 hdr[4] == sizeof(Tuning);
+        } else if (hdr[1] == 17u || hdr[1] == 16u) {
+            /* v17/v16 = v18 layout minus the treasure tail; v16 also has
+             * the 1-based day (migrated below) */
+            pre18 = 1;
+            ok = hdr[2] == sizeof(Tower) && hdr[3] == v17_gs &&
                  hdr[4] == sizeof(Tuning);
         } else if (hdr[1] == 15u || hdr[1] == 14u) {
             legacy = 1;
             ok = hdr[2] == sizeof(Tower) + MAX_TENANTS * V15_TENANT_EXTRA &&
-                 hdr[3] == sizeof(GameSim) + V15_GS_EXTRA &&
+                 hdr[3] == v17_gs + V15_GS_EXTRA &&
                  hdr[4] == sizeof(Tuning);
         } else {
             ok = 0;
@@ -4141,8 +4195,16 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
             ok = load_v15_blobs(f, sim, tower);
         else
             ok = fread(tower, sizeof(*tower), 1, f) == 1 &&
-                 fread(sim, sizeof(*sim), 1, f) == 1;
+                 fread(sim, pre18 ? v17_gs : sizeof(*sim), 1, f) == 1;
         ok = ok && fread(&TUNING, sizeof(TUNING), 1, f) == 1;
+        /* Pre-v18 saves carry no treasure latch: seed it the way the EXE's
+         * ceremony does (@0047) — condition(current star). An already
+         * over-dug basement counts as spent; anything less arms it. */
+        if (ok && (pre18 || legacy)) {
+            sim->pending_treasure = 0;
+            sim->treasure_found =
+                game_treasure_condition(tower, tower->star_rating);
+        }
     }
     fclose(f);
     /* Turbo lost its UI entry (speed capped at FAST, 2026-07-29) —

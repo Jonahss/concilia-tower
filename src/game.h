@@ -781,6 +781,17 @@ typedef struct {
      * staggered by tenant index; carried in the save only because the
      * sim is dumped wholesale (stale values re-roll within a second). */
     TenantOccupants occupants[MAX_TENANTS];
+
+    /* Buried treasure one-shot (0xB922, LevelUp seg_1148 — settled
+     * 2026-08-13: NOT a promotion bonus and NOT debug-only). Armed (0) at
+     * new game; every build notification (1148:0163 @0188) fires the
+     * treasure when armed and the dig condition holds (01a8: at star
+     * 1/2/3, floor B3/B4/B5 built wider than star*25 cells); firing pays
+     * $200k/$300k/$500k (DE22/24/26), shows dialog 0xBE0 and latches 1.
+     * Each promotion ceremony re-seeds it with the condition itself
+     * (@0047-004a) — an already-over-dug basement forfeits that tier. */
+    int           treasure_found;      /* 0xB922 latch */
+    int           pending_treasure;    /* payout awaiting its dialog ($) */
 } GameSim;
 
 /* Initialize simulation */
@@ -813,6 +824,12 @@ void game_update_reachability(GameSim *sim, Tower *tower);
 
 /* Measure tower width on underground floors (for promotion check) */
 int game_measure_width(Tower *tower);
+
+/* Buried treasure (LevelUp 1148:0163/01a8/020f — see GameSim.treasure_found).
+ * Call game_notify_built after EVERY successful build action, like the
+ * EXE's build-tail far call at 11f8:0e6a. */
+int  game_treasure_condition(const Tower *tower, int star);
+void game_notify_built(GameSim *sim, Tower *tower);
 
 /* Get sky color tint for current time of day */
 void game_sky_tint(GameSim *sim, uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *a);

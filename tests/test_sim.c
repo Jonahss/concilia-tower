@@ -2016,6 +2016,67 @@ static void test_retail_economy(void)
 /* Star requirements per LevelUp 1148:007e (byte-verified 2026-07-09):
  * 3->4 = suite + recycling adequate + medical + VIP verdict;
  * 4->5 = metro + recycling adequate + medical, NO VIP re-check. */
+/* Buried treasure (LevelUp 1148:0163/01a8/020f, settled 2026-08-13):
+ * every build notification fires a one-shot payout once the star-tier
+ * basement floor (B3/B4/B5 at star 1/2/3) is dug STRICTLY wider than
+ * star*25 cells; the promotion ceremony re-seeds the latch with the new
+ * tier's condition, so an already-over-dug basement forfeits that tier. */
+static void test_buried_treasure(void)
+{
+    printf("buried treasure (LevelUp dig event):\n");
+    fresh();
+    tw.money = 1000000L;
+    tw.star_rating = 1;
+
+    /* Dig B1..B3 stacked so the B3 deck extension is legal geometry.
+     * 25 cells first: the condition is extent > 25, not >=. */
+    CHECK(tower_extend_deck(&tw, -1, 150, 230), "B1 deck dug");
+    CHECK(tower_extend_deck(&tw, -2, 150, 230), "B2 deck dug");
+    CHECK(tower_extend_deck(&tw, -3, 150, 175), "B3 deck dug 25 wide");
+    long before = tw.money;
+    game_notify_built(&sim, &tw);
+    CHECK(!sim.treasure_found && tw.money == before,
+          "25-cell B3 extent does not fire (strict >)");
+
+    CHECK(tower_extend_deck(&tw, -3, 175, 176), "B3 widened to 26");
+    before = tw.money;
+    game_notify_built(&sim, &tw);
+    CHECK(sim.treasure_found, "26-cell B3 fires the star-1 treasure");
+    CHECK(tw.money == before + 200000, "star-1 payout is $200k");
+    CHECK(sim.pending_treasure == 200000, "dialog queued with the amount");
+    sim.pending_treasure = 0;
+
+    before = tw.money;
+    game_notify_built(&sim, &tw);
+    CHECK(tw.money == before, "latch is one-shot");
+
+    /* Promotion to star 2 with B4 untouched re-arms the latch. */
+    sim.treasure_found = game_treasure_condition(&tw, 2);
+    CHECK(!sim.treasure_found, "ceremony re-arms when B4 is undug");
+    tw.star_rating = 2;
+    /* Deck legality: B4 can't overhang B3, so widen B3 first (the latch
+     * is already spent, no re-fire). */
+    CHECK(tower_extend_deck(&tw, -3, 176, 230), "B3 widened for support");
+    CHECK(tower_extend_deck(&tw, -4, 150, 230), "B4 deck dug 80 wide");
+    before = tw.money;
+    game_notify_built(&sim, &tw);
+    CHECK(sim.treasure_found && tw.money == before + 300000,
+          "star-2 dig past 50 cells pays $300k");
+    sim.pending_treasure = 0;
+
+    /* Ceremony forfeit: B5 dug past 75 BEFORE the star-3 promotion. */
+    CHECK(tower_extend_deck(&tw, -5, 150, 230), "B5 pre-dug 80 wide");
+    sim.treasure_found = game_treasure_condition(&tw, 3);
+    CHECK(sim.treasure_found, "over-dug B5 forfeits the star-3 treasure");
+    tw.star_rating = 3;
+    before = tw.money;
+    game_notify_built(&sim, &tw);
+    CHECK(tw.money == before, "forfeited tier never pays");
+
+    /* Star 4+ never qualifies (the 01a8 head check). */
+    CHECK(!game_treasure_condition(&tw, 4), "no treasure at star 4+");
+}
+
 static void test_star_requirements(void)
 {
     printf("star requirements (LevelUp 1148:007e):\n");
@@ -3524,9 +3585,13 @@ static void write_v14_save(const char *path, const GameSim *s, const Tower *t)
     FILE *f = fopen(path, "wb");
     if (!f) return;
     static const unsigned char zeros[140];
+    /* v14 predates the v18 treasure tail too — its GameSim is the
+     * current one minus treasure_found/pending_treasure, plus the v15
+     * dead padding. */
+    size_t gs14 = sizeof(GameSim) - 2 * sizeof(int);
     uint32_t hdr[5] = { 0x52575443u, 14u,
                         (uint32_t)(sizeof(Tower) + MAX_TENANTS * 8u),
-                        (uint32_t)(sizeof(GameSim) + 144u),
+                        (uint32_t)(gs14 + 144u),
                         (uint32_t)sizeof(Tuning) };
     fwrite(hdr, sizeof hdr, 1, f);
     const unsigned char *tb = (const unsigned char *)t;
@@ -3546,7 +3611,7 @@ static void write_v14_save(const char *path, const GameSim *s, const Tower *t)
     fwrite(zeros, 140, 1, f);
     fwrite(sb + a, b - a, 1, f);
     fwrite(zeros, 4, 1, f);
-    fwrite(sb + b, sizeof(GameSim) - b, 1, f);
+    fwrite(sb + b, gs14 - b, 1, f);
     fwrite(&TUNING, sizeof TUNING, 1, f);
     fclose(f);
 }
@@ -3646,6 +3711,7 @@ int main(void)
     test_cap_peaks();
     test_stressed_moveout();
     test_star_requirements();
+    test_buried_treasure();
     test_promotion_cadence();
     test_medical_adequacy();
     test_guard_hunt();
