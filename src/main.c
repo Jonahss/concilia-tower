@@ -935,8 +935,11 @@ static void ambient_tick(void)
 static void clamp_camera(void)
 {
     float half = game.screen_h / 2.0f;
-    /* Bottom: B10's lower edge should sit no higher than the screen bottom. */
-    float bottom = (float)((-TOWER_MIN_FLOOR + 1) * CELL_H) - half;
+    /* Bottom: one row PAST B10's lower edge — pit machinery draws a row
+     * below a shaft's last segment, and a legacy B10-reaching shaft
+     * (possible before the B9 extend gate, 2026-08-12) needs its pit
+     * scrollable into view to be dragged back up. */
+    float bottom = (float)((-TOWER_MIN_FLOOR + 2) * CELL_H) - half;
     /* Top: allow seeing up to the build ceiling plus a little sky. */
     float top = (float)(-(TOWER_MAX_FLOOR + 4) * CELL_H) + half;
     if (top > bottom) top = bottom;

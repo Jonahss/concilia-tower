@@ -569,12 +569,14 @@ int tower_can_place(Tower *tower, ItemType type, int floor, int x)
         if (!touches)
             REJECT("Cannot start a shaft inside the lobby's upper stories");
     }
-    /* No shaft may START on B10 (PlaceElevator 11f8:0fea @1014: internal
-     * floor >= 1; underground referee 2026-08-03 §6). Extensions can
-     * still drag down to it. */
-    if (item_is_elevator(type) && floor <= TOWER_MIN_FLOOR &&
-        !elevator_extends_column(tower, type, floor, x))
-        REJECT("Cannot start a shaft on the bottom floor");
+    /* No shaft SEGMENT on B10 at all — starts (PlaceElevator 11f8:0fea
+     * @1014: internal floor >= 1) or extensions (ExtendDown gate
+     * "floor > B9", msg 0xe). B10 is where the pit machinery draws; a
+     * segment there pushed the pit below the world's bottom edge, out
+     * of scroll reach (Jonah, 2026-08-12 — the old reading let
+     * extensions drag down onto it). */
+    if (item_is_elevator(type) && floor <= TOWER_MIN_FLOOR)
+        REJECT("Elevators cannot go below B9");
     /* A NEW shaft must land on a BUILT floor with its whole span inside
      * that floor's deck extent (ValidatePlacementArea 11f8:2e64, called by
      * PlaceElevator step 3: ground is always OK; above ground the floor
