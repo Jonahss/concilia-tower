@@ -1378,15 +1378,18 @@ int tower_remove(Tower *tower, uint16_t tenant_id)
             if (!is_transport && cell->tenant_id != t->id) continue;
             if (is_transport) {
                 cell->flags &= ~CELL_TRANSPORT_OVERLAY;  /* drop overlay, keep cell */
-            } else if (t->type != ITEM_FLOOR && f >= 0) {
+            } else if (t->type != ITEM_FLOOR) {
                 /* Bulldozing a facility removes the TENANT but leaves the build
-                 * floor behind (Jonah's ask: "delete tenants, not the floor"). */
+                 * floor behind (Jonah's ask: "delete tenants, not the floor").
+                 * Basements too — the excavated slab stays, dirt doesn't
+                 * refill (Jonah, 2026-08-12; the old f >= 0 guard put dirt
+                 * back underground). */
                 cell->type = ITEM_FLOOR;
                 cell->tenant_id = 0;
                 cell->cell_index = 0;
                 cell->flags = (cell->flags & CELL_TRANSPORT_OVERLAY) | CELL_OCCUPIED;  /* preserve any overlay */
             } else {
-                /* Explicitly removing a FLOOR tile (or an underground cell) ->
+                /* Explicitly removing a FLOOR tile ->
                  * back to bare dirt, but don't clobber a transport overlay. */
                 uint8_t keep_overlay = cell->flags & CELL_TRANSPORT_OVERLAY;
                 memset(cell, 0, sizeof(*cell));

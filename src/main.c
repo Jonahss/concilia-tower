@@ -3835,8 +3835,6 @@ static void queue_line_limits(const ElevatorShaft *s, int f, int sx,
 static void render_people(void)
 {
     PeopleSim *ps = &game.sim.people;
-    for (int i = 0; i < ps->shaft_count; i++)
-        render_shaft(&ps->shafts[i]);
 
     /* Maids at work — THE REAL ANIMATION (serviced-room referee
      * addendum 2026-08-07, vindicating Jonah's memory): while a room's
@@ -3863,6 +3861,12 @@ static void render_people(void)
             SDL_RenderCopy(game.renderer, maid->texture, &src, &dst);
         }
     }
+
+    /* Shafts AFTER the in-room maids: she's in-tenant animation, and a
+     * room tucked behind a shaft was painting her over the shaft art
+     * (Jonah, 2026-08-12). */
+    for (int i = 0; i < ps->shaft_count; i++)
+        render_shaft(&ps->shafts[i]);
 }
 
 /* Render the elevator "Simulate" edit surface: the tower dimmed to a flat
