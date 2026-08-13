@@ -10718,7 +10718,13 @@ int main(int argc, char *argv[])
             /* Bomb/terror explosion (referee row 2): fired as the blast lands,
              * i.e. when the destroyed-value counter jumps. */
             {
-                static int prev_damage = 0;
+                /* Seed from the loaded save on the first pass — the
+                 * damage counter persists (it feeds the resolution
+                 * notice), so a fresh process comparing against 0 heard
+                 * the blast once at every boot (Jonah, 2026-08-12). */
+                static int prev_damage = -1;
+                if (prev_damage < 0)
+                    prev_damage = game.sim.event.damage_cost;
                 if (game.sim.event.damage_cost > prev_damage)
                     play_snd(SND_EXPLOSION);
                 prev_damage = game.sim.event.damage_cost;
