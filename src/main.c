@@ -7630,14 +7630,17 @@ static int elev_add_car_at(int x, int floor)
         if (fidx < s->lo || fidx > s->hi) continue;   /* outside span = cap/extend */
         if (s->num_cars >= CARS_PER_SHAFT) {
             /* CanAddCar's msg 24 (0x3EB idx 23) — surfaced to the player,
-             * not just stdout (strings survey gap #6). */
+             * not just stdout (strings survey gap #6). Refusals beep, they
+             * don't jackhammer (Jonah, 2026-08-12). */
             add_event_message(exe_str(0x3EB, 23, "No more cars in this shaft"));
+            play_snd(SND_BUILD_TOOL);
             return 1;
         }
         int cost = elv_car_cost(s->type);
         if (game.tower.money < cost) {
             add_event_message(exe_str(0x3EB, 6,
                                       "Not enough money for construction"));
+            play_snd(SND_BUILD_TOOL);
             return 1;
         }
         game.tower.money -= cost;
@@ -7650,6 +7653,7 @@ static int elev_add_car_at(int x, int floor)
             people_set_home(ps, i, ci, fidx);
             s->car[ci].floor = s->car[ci].target = (uint8_t)fidx;
         }
+        play_snd(SND_BUILD_PLACE);
         printf("Added car to shaft x=%d: now %d cars (home F%d, cost $%d)\n",
                x, s->num_cars, floor, cost);
         return 1;
@@ -10231,7 +10235,23 @@ int main(int argc, char *argv[])
              * occupied; shafts are column-locked, not under the cursor). */
             int stamp_arm = game.build_type == ITEM_STAIRS ||
                             game.build_type == ITEM_ESCALATOR;
-            int drag_now = game.dragging && drag_arm &&
+            /* A click inside an existing same-type shaft is the add-a-car
+             * path, not a drag-out — no construction clatter for it; the
+             * add/refusal plays its own sound (Jonah, 2026-08-12). */
+            int in_shaft = 0;
+            if (game.dragging && item_is_elevator(game.build_type)) {
+                int col = elevator_drag_column();
+                int cf = floor_to_index(game.drag_start_floor);
+                PeopleSim *pps = &game.sim.people;
+                for (int si = 0; si < pps->shaft_count; si++) {
+                    ElevatorShaft *sh = &pps->shafts[si];
+                    if (sh->active && sh->type == (ItemType)game.build_type &&
+                        sh->x == col && cf >= sh->lo && cf <= sh->hi) {
+                        in_shaft = 1; break;
+                    }
+                }
+            }
+            int drag_now = game.dragging && drag_arm && !in_shaft &&
                            (!stamp_arm ||
                             tower_can_place(&game.tower, game.build_type,
                                             build_origin_floor(game.build_type,
