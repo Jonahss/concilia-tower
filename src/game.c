@@ -2268,7 +2268,11 @@ int game_tenant_comments(GameSim *sim, Tower *tower, const Tenant *t,
 
     /* 5. Business sales (#8-#11, #33) — shop/restaurant/fast food. */
     if ((is_shop || is_food) && n < max) {
-        if (is_shop && t->state == TENANT_VACANT) PUSH("No renters");
+        /* #33 gates on the record's 0xFF no-renter state (InfoComment
+         * @03ea-03f1) — TRULY vacant, not the leased-but-closed-overnight
+         * state our TENANT_VACANT models (a healthy shop at 2AM was
+         * reading "No renters"; Jonah, 2026-08-12). */
+        if (is_shop && t->state == TENANT_ABANDONED) PUSH("No renters");
         else {
             int c = t->customers_today;
             if (c >= 50)      PUSH("Business is very good!");
