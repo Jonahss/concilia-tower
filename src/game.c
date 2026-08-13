@@ -3091,7 +3091,11 @@ void game_animate_occupants(GameSim *sim, Tower *tower)
          * wave down every hotel floor (Jonah, 2026-08-12). Hash the
          * tenant id into the phase so neighbors scatter like the EXE's
          * person handles do. */
-        if (((sim->frame + (tower->tenants[i].id * 2654435761u)) & 15) != 0)
+        /* Take the hash's HIGH nibble: the Knuth constant is odd with low
+         * nibble 1, so (id*K)&15 == id&15 — the first version of this fix
+         * scattered nothing and the wave survived (Jonah, same evening). */
+        if (((sim->frame +
+              ((tower->tenants[i].id * 2654435761u) >> 28)) & 15) != 0)
             continue;
         Tenant *t = &tower->tenants[i];
         TenantOccupants *o = &sim->occupants[i];
