@@ -2898,13 +2898,15 @@ static void render_elv_dialog_faithful(void)
             : exe_str(0x0190, 1, "Standard Elevator");
     draw_win31_titlebar(wx, wy, ELV_DLG_W, title);
 
-    /* Weekend days get their own dialog art 0x191 (ElvDlogT 1098:02de
-     * picks by the day flag; bitmap survey 2026-08-08 gap #3) — the
-     * schedule panel's period strip differs between the two sheets. */
-    Sprite *bg = sprites_find(&game.sprites,
-                              game_is_weekend(&game.tower) ? 0x8191
-                                                           : SPR_ELV_DIALOG);
-    if (!bg) bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
+    /* 0x8190 is THE dialog sheet. Its neighbor 0x8191 is NOT weekend
+     * art — extracting it shows a sparse pressed-states sheet (WD/WE
+     * tabs + Simulate/OK on blank, the 0x81F4/0x81F5 pattern), so the
+     * bitmap-survey "weekend variant" gloss was wrong and weekend days
+     * rendered a blank background (Jonah, 2026-08-12 — his week of
+     * "dialog bitmap isn't loading" reports were all weekend days).
+     * ElvDlogT 1098:02de's day-flag pick presumably chooses the pressed
+     * TAB sub-rect from 0x8191; queued as polish. */
+    Sprite *bg = sprites_find(&game.sprites, SPR_ELV_DIALOG);
     if (bg) {
         SDL_Rect dst = { bx, by, ELV_DLG_W, ELV_DLG_H };
         SDL_RenderCopy(game.renderer, bg->texture, NULL, &dst);
