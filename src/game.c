@@ -3553,9 +3553,16 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
              * k*80, at the origin cell — never below the origin. A floor
              * whose extent misses the cell at that moment stays unburnt
              * (the EXE's equality check never retries). */
+            /* The floor must actually COVER the origin column — the gate
+             * checked only the left bound, so a narrow high floor (a
+             * shaft's deck stub) whose extent ended left of the origin
+             * ignited a front in the void beyond its right edge, which
+             * then marched through open sky toward the shaft (Jonah's
+             * flying-fire screenshot, 2026-08-12; his catch that there
+             * was no island — the island theory was wrong). */
             if (fi > origin_fi &&
                 ev->fire_frame == (fi - origin_fi) * FIRE_FLOOR_FRAMES &&
-                ev->target_slot >= left[fi])
+                ev->target_slot >= left[fi] && ev->target_slot < right[fi])
                 ev->fire_left[fi] = (int16_t)ev->target_slot;
         } else {
             fire_destroy_cell(sim, tower, fi, ev->fire_left[fi]);
@@ -3568,6 +3575,7 @@ static void fire_step_frame(GameSim *sim, Tower *tower,
         if (ev->fire_right[fi] < 0) {
             if (fi > origin_fi &&
                 ev->fire_frame == (fi - origin_fi) * FIRE_FLOOR_FRAMES &&
+                ev->target_slot >= left[fi] &&
                 ev->target_slot + FIRE_FRONT_CELLS <= right[fi])
                 ev->fire_right[fi] = (int16_t)ev->target_slot;
         } else {
