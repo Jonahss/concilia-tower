@@ -4053,15 +4053,16 @@ static void render_build_ghost(void)
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
     } else if (game.dragging && game.build_type == ITEM_FLOOR) {
         /* The floor tool extends the deck as a continuous span — its ghost
-         * is one thin joist strip from the anchor to the cursor, not a row
-         * of 63-cell stamps (Jonah, 2026-08-12). */
+         * is one full-height strip from the anchor to the cursor, not a
+         * row of 63-cell stamps (Jonah, 2026-08-12; full height not the
+         * thin joist, same evening). */
         int a = game.drag_start_cell, b = game.mouse_cell;
         if (b < a) { int t = a; a = b; b = t; }
         int gx, gy;
         grid_to_screen(game.drag_start_floor, a, &gx, &gy);
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
-        SDL_Rect strip = { gx, gy, (b - a + 1) * CELL_W, CEIL_H };
+        SDL_Rect strip = { gx, gy, (b - a + 1) * CELL_W, CELL_H };
         SDL_RenderFillRect(game.renderer, &strip);
         SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 160);
         SDL_RenderDrawRect(game.renderer, &strip);
