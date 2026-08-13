@@ -227,13 +227,21 @@ Not bugs, not mechanics — things the EXE ships but hides.
 
 - **The hidden debug menu.** The menu resource (0x8001) ends with three
   items past Help: **9000 "Terrorist"** (force the bomb event),
-  **9001 "Treasure"** (the star/level apply path), **9002 "Fire"**
-  (start a fire). WM_CREATE (1158:0062) deletes all three from the menu
-  at startup via USER.#413 — but the WM_COMMAND handlers stay live in
-  the shipped binary. Anything that can post those command ids to the
-  main window gets Maxis's own debug triggers. A fourth survivor, 9003,
-  is a debug full-redraw and isn't even deleted. Confidence HIGH
-  (menu resource dumped + dispatcher table traced).
+  **9001 "Treasure"** (force the buried-treasure payout — see below),
+  **9002 "Fire"** (start a fire). WM_CREATE (1158:0062) deletes all three
+  from the menu at startup via USER.#413 — but the WM_COMMAND handlers
+  stay live in the shipped binary. Anything that can post those command
+  ids to the main window gets Maxis's own debug triggers. A fourth
+  survivor, 9003, is a debug full-redraw and isn't even deleted.
+  Confidence HIGH (menu resource dumped + dispatcher table traced).
+  NOTE 2026-08-13: an earlier version of this entry glossed 9001 as "the
+  star/level apply path" and UI_TODO.md once concluded buried treasure
+  was debug-only — both wrong. The treasure is a REAL gameplay event
+  (dig B3/B4/B5 wider than star×25 cells at star 1/2/3; next build pays
+  $200k/$300k/$500k, one-shot per tier); 9001 merely force-fires it.
+  Byte-cited decode: decomp repo
+  output/referee_buried_treasure_2026-08-13.md. Implemented in the port
+  (94d9ad9).
 
 - **Fast Mode is a tick-throttle bypass.** Options → Fast Mode (menu id
   40007) toggles word [0xDE34], whose only reader is the TimeT tick
