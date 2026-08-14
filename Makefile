@@ -38,6 +38,7 @@ WEBDIR = web/dist
 web:
 	mkdir -p $(WEBDIR)
 	sed 's/__CT_VERSION__/$(CT_VERSION)/g' web/shell.html > $(WEBDIR)/.shell.gen.html
+	cp web/hero.png $(WEBDIR)/hero.png
 	emcc $(SRC) -o $(WEBDIR)/index.html \
 	  -std=gnu11 -O2 -DCT_BUILD_VERSION='"$(CT_VERSION)"' \
 	  -Isrc/vendor/mspack \

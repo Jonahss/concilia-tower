@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ConcilliaTower</title>
+<title>ConcilliaTower — the faithful SimTower port</title>
+<meta name="description" content="A faithful port of SimTower (1994) that runs in your browser. Bring your own SIMTOWER.EXE — parsed client-side, nothing uploaded.">
+<meta property="og:title" content="ConcilliaTower">
+<meta property="og:description" content="The faithful SimTower port — in your browser. Bring your own SIMTOWER.EXE.">
+<meta property="og:image" content="https://jonahss.github.io/concilia-tower/hero.png">
 <style>
   :root { color-scheme: dark; }
   body {
@@ -12,22 +16,29 @@
     background: #10141c; color: #cfd6e4;
     font-family: Georgia, 'Times New Roman', serif;
   }
-  h1 { font-size: 28px; letter-spacing: 3px; margin: 0; color: #e8ded0; }
-  h1 small { display: block; font-size: 12px; letter-spacing: 1px;
-             color: #8a93a6; margin-top: 6px; }
+  h1 { position: absolute; width: 1px; height: 1px; overflow: hidden;
+       clip: rect(0 0 0 0); white-space: nowrap; }
   #setup {
     background: #1a2130; border: 1px solid #2c3648; border-radius: 8px;
-    padding: 24px 32px; max-width: 560px; text-align: center;
+    overflow: hidden; padding: 0 0 22px;
+    width: min(642px, calc(100vw - 20px)); text-align: center;
   }
-  #setup p { font-size: 14px; line-height: 1.55; color: #aab3c5; }
+  #hero { display: block; width: 100%; height: auto;
+          image-rendering: pixelated; border-bottom: 3px solid #167060; }
+  .tagline { font-family: Georgia, 'Times New Roman', serif;
+             font-size: 15px; letter-spacing: 1px; color: #cfd6e4;
+             margin: 16px 24px 0; }
+  .tagline em { color: #e8ded0; }
+  #setup p { font-size: 14px; line-height: 1.55; color: #aab3c5;
+             margin-left: 36px; margin-right: 36px; }
   #setup .privacy { font-size: 12px; color: #77809a; }
   input[type=file] { display: none; }
   label.pick, button.start {
     display: inline-block; cursor: pointer; margin: 8px 6px 0;
-    background: #2b4a86; color: #eef2fa; border: 0; border-radius: 5px;
+    background: #167060; color: #eef2fa; border: 0; border-radius: 5px;
     padding: 10px 22px; font-size: 15px; font-family: inherit;
   }
-  label.pick:hover, button.start:hover { background: #36599e; }
+  label.pick:hover, button.start:hover { background: #1d8a76; }
   button.start[disabled] { background: #2a3040; color: #6a7288;
                            cursor: default; }
   #status { font-size: 13px; color: #9fb7d8; min-height: 18px; }
@@ -57,7 +68,7 @@
     width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
   }
   #findhelp { font-size: 13px; color: #aab3c5; text-align: left;
-              max-width: 480px; margin: 10px auto 0; }
+              max-width: 500px; margin: 10px auto 0; padding: 0 24px; }
   #findhelp summary { cursor: pointer; color: #9fb7d8; text-align: center; }
   #findhelp ul { padding-left: 18px; line-height: 1.5; }
   #crash {
@@ -75,12 +86,15 @@
 </head>
 <body>
   <div id="setup">
-    <h1>ConcilliaTower<small>the faithful SimTower port &mdash; in your browser</small></h1>
+    <img id="hero" src="hero.png" width="640" height="480"
+         alt="A contemporary glass tower entrance bearing the sign CONCILLIA TOWER, drawn in the style of the 1994 SimTower splash screen">
+    <h1>ConcilliaTower</h1>
+    <p class="tagline">the faithful <em>SimTower</em> port &mdash; in your browser</p>
     <p>Bring your own copy of <b>SIMTOWER.EXE</b> &mdash; or the compressed
        <b>SIMTOWER.EX_</b> straight off the CD; this page expands it. It is
-       parsed <b>entirely in your browser</b> to load the game's art and
-       sound &mdash; there is no server, and the file never leaves your
-       machine.</p>
+       parsed <b>entirely in your browser</b> to load the game's original
+       art and sound &mdash; there is no server, and the file never leaves
+       your machine.</p>
     <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile" multiple></label>
     <button class="start" id="startbtn" disabled>Start</button>
     <button class="start" id="forgetbtn" style="display:none; background:#5a3040"
@@ -564,7 +578,7 @@
   var setupEl = document.getElementById('setup');
   setupEl.addEventListener('dragover', function (ev) {
     ev.preventDefault();
-    setupEl.style.borderColor = '#7fa7dd';
+    setupEl.style.borderColor = '#2e8a78';
   });
   setupEl.addEventListener('dragleave', function () {
     setupEl.style.borderColor = '#2c3648';
