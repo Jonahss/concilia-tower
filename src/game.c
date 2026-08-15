@@ -4160,6 +4160,52 @@ static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
     return ok;
 }
 
+#ifdef __EMSCRIPTEN__
+/* Slot-manager probe (web shell): summarize a .sav header + vitals
+ * without touching game state. Offsets come from the CURRENT Tower
+ * layout, so vitals are only reported when the file's recorded
+ * sizeof(Tower) matches this build ("exact"); older-format saves still
+ * get magic/version so the shell can label them. Returns a static JSON
+ * string, or NULL when the file is missing or not a ConciliaTower save. */
+#include <emscripten.h>
+EMSCRIPTEN_KEEPALIVE
+const char *ct_sav_meta(const char *path)
+{
+    static char out[160];
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    uint32_t hdr[5];
+    if (fread(hdr, sizeof hdr, 1, f) != 1 || hdr[0] != SAVE_MAGIC) {
+        fclose(f);
+        return NULL;
+    }
+    int exact = hdr[2] == (uint32_t)sizeof(Tower);
+    long money = 0;
+    int day = 0, stars = 0, pop = 0;
+    if (exact) {
+        struct { size_t off; void *dst; size_t sz; } want[] = {
+            { offsetof(Tower, money),       &money, sizeof money },
+            { offsetof(Tower, day),         &day,   sizeof day   },
+            { offsetof(Tower, star_rating), &stars, sizeof stars },
+            { offsetof(Tower, population),  &pop,   sizeof pop   },
+        };
+        for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+            if (fseek(f, (long)(sizeof hdr + want[i].off), SEEK_SET) != 0 ||
+                fread(want[i].dst, want[i].sz, 1, f) != 1) {
+                exact = 0;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    snprintf(out, sizeof out,
+             "{\"version\":%u,\"exact\":%d,\"day\":%d,\"stars\":%d,"
+             "\"money\":%ld,\"pop\":%d}",
+             hdr[1], exact, day, stars, money, pop);
+    return out;
+}
+#endif
+
 int game_load(GameSim *sim, Tower *tower, const char *path)
 {
     FILE *f = fopen(path, "rb");

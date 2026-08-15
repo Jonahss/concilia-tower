@@ -67,6 +67,35 @@
   #canvaswrap:fullscreen canvas {
     width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
   }
+  #towers { margin: 18px 36px 4px; text-align: left; display: none; }
+  #towers h2 { font-size: 14px; letter-spacing: 1px; color: #cfd6e4;
+               margin: 0 0 8px; font-weight: normal;
+               border-bottom: 1px solid #2c3648; padding-bottom: 6px; }
+  .slot { display: flex; align-items: center; gap: 10px;
+          padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+  .slot:hover { background: #202839; }
+  .slot.sel { background: #1d2b33; outline: 1px solid #167060; }
+  .slot .who { flex: 1 1 auto; min-width: 0; }
+  .slot .nm { font-size: 14px; color: #dfe5f0; overflow: hidden;
+              text-overflow: ellipsis; white-space: nowrap; }
+  .slot .meta { font-size: 11.5px; color: #8a93a6; }
+  .slot .ops { flex: 0 0 auto; white-space: nowrap; }
+  .slot .ops button {
+    background: none; border: 1px solid #2c3648; border-radius: 4px;
+    color: #9fb7d8; font-size: 12px; padding: 3px 7px; margin-left: 4px;
+    cursor: pointer; font-family: inherit;
+  }
+  .slot .ops button:hover { border-color: #167060; color: #dfe5f0; }
+  .slot .ops button.play { border-color: #167060; color: #7fd8c0; }
+  #towerbtns { margin-top: 8px; }
+  #towerbtns button, #towerbtns label {
+    background: none; border: 1px solid #2c3648; border-radius: 4px;
+    color: #9fb7d8; font-size: 12.5px; padding: 5px 12px; margin-right: 8px;
+    cursor: pointer; font-family: inherit; display: inline-block;
+  }
+  #towerbtns button:hover, #towerbtns label:hover {
+    border-color: #167060; color: #dfe5f0; }
+  #towers .empty { font-size: 12.5px; color: #77809a; padding: 4px 10px; }
   #findhelp { font-size: 13px; color: #aab3c5; text-align: left;
               max-width: 500px; margin: 10px auto 0; padding: 0 24px; }
   #findhelp summary { cursor: pointer; color: #9fb7d8; text-align: center; }
@@ -102,6 +131,15 @@
     <div id="status">Waiting for your EXE&hellip;</div>
     <div id="hashnote" style="font-size:12px; color:#c9a45a; max-width:480px;
          margin:6px auto 0; display:none"></div>
+    <div id="towers">
+      <h2>Your towers</h2>
+      <div id="slotlist"></div>
+      <div id="towerbtns">
+        <button id="newslotbtn" type="button">New tower</button>
+        <label>Import .sav / .TDT<input type="file" id="importfile"
+               accept=".sav,.tdt,.twr" style="display:none"></label>
+      </div>
+    </div>
     <details id="findhelp">
       <summary>Where do I find SIMTOWER.EXE?</summary>
       <ul>
@@ -472,6 +510,248 @@
     });
   });
 
+  /* ---- Save-slot manager (web-plan C2-C4 + C6) ----------------------
+   * A tower = one /persist/<name>.sav on IDBFS (plus the engine's
+   * .1/.2/.3 crash-safety generations). The engine writes whatever
+   * --save= path it is launched with; everything here is plain FS
+   * bookkeeping around that. .sav backups are this-browser-format
+   * (wasm layout); .TDT is the portable format for 1994 SimTower. */
+  var towersEl = document.getElementById('towers');
+  var slotListEl = document.getElementById('slotlist');
+  var DEFAULT_SLOT = 'concilliatower';   /* pre-manager saves live here */
+  var currentSlot = null;
+  try { currentSlot = localStorage.getItem('ct-slot'); } catch (e) {}
+  currentSlot = currentSlot || DEFAULT_SLOT;
+  var pendingTdt = null;    /* {slot, bytes} — staged original-format import */
+  var draftSlots = [];      /* named but not yet saved ("New tower") */
+
+  function slotPath(name) { return '/persist/' + name + '.sav'; }
+  function validSlotName(s) {
+    return /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,23}$/.test(s) && !/\.sav$/i.test(s);
+  }
+  function slotExists(name) {
+    try { FS.stat(slotPath(name)); return true; } catch (e) { return false; }
+  }
+  function listSlotNames() {
+    var names = [];
+    try {
+      FS.readdir('/persist').forEach(function (f) {
+        var m = /^(.+)\.sav$/.exec(f);
+        if (m) names.push(m[1]);
+      });
+    } catch (e) {}
+    if (pendingTdt && names.indexOf(pendingTdt.slot) < 0)
+      names.push(pendingTdt.slot);
+    draftSlots.forEach(function (n) {
+      if (names.indexOf(n) < 0) names.push(n);
+    });
+    return names.sort();
+  }
+  function slotMeta(name) {
+    try {
+      var s = Module.ccall('ct_sav_meta', 'string', ['string'],
+                           [slotPath(name)]);
+      return s ? JSON.parse(s) : null;
+    } catch (e) { return null; }
+  }
+  function fmtMoney(n) {
+    return '$' + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  function starsTxt(n) {
+    var t = ''; for (var i = 0; i < n; i++) t += '★';
+    return t || '☆';
+  }
+  function fmtAge(when) {
+    var t = when && when.getTime ? when.getTime() : +when;
+    var s = (Date.now() - t) / 1000;
+    if (!(s >= 0)) return '';
+    if (s < 90) return 'just now';
+    if (s < 5400) return Math.round(s / 60) + ' min ago';
+    if (s < 129600) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function syncPersist(then) {
+    FS.syncfs(false, function (err) {
+      if (err) console.warn('syncfs failed', err);
+      if (then) then();
+    });
+  }
+  function downloadBytes(fname, bytes) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(
+      new Blob([bytes], { type: 'application/octet-stream' }));
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  }
+  /* The engine calls this after F6 writes ct_export.tdt to MEMFS. */
+  window.ctDownloadFile = function (path) {
+    try {
+      var base = (currentSlot || 'TOWER')
+        .replace(/[^A-Za-z0-9 _.-]/g, '') || 'TOWER';
+      downloadBytes(base + '.TDT', FS.readFile(path));
+    } catch (e) { console.warn('TDT download failed', e); }
+  };
+
+  function renderSlots() {
+    if (!Module.engineReady) return;
+    towersEl.style.display = 'block';
+    slotListEl.innerHTML = '';
+    var names = listSlotNames();
+    if (names.length && names.indexOf(currentSlot) < 0) currentSlot = names[0];
+    if (!names.length) {
+      var d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = 'No towers yet — Start builds a fresh lot.';
+      slotListEl.appendChild(d);
+      return;
+    }
+    names.forEach(function (n) { slotListEl.appendChild(slotRow(n)); });
+  }
+
+  function slotRow(name) {
+    var row = document.createElement('div');
+    row.className = 'slot' + (name === currentSlot ? ' sel' : '');
+    var who = document.createElement('div'); who.className = 'who';
+    var nm = document.createElement('div'); nm.className = 'nm';
+    nm.textContent = name;
+    var meta = document.createElement('div'); meta.className = 'meta';
+    var staged = pendingTdt && pendingTdt.slot === name;
+    var onDisk = slotExists(name);
+    if (staged) {
+      meta.textContent = 'imported ' + pendingTdt.src +
+                         ' — press Start to open it';
+    } else if (!onDisk) {
+      meta.textContent = 'empty lot — press Start to begin building';
+    } else {
+      var m = slotMeta(name), bits = [];
+      if (m && m.exact)
+        bits.push('Day ' + m.day, starsTxt(m.stars),
+                  fmtMoney(m.money), 'pop ' + m.pop);
+      else if (m) bits.push('save v' + m.version);
+      else bits.push('unreadable save');
+      try {
+        var age = fmtAge(FS.stat(slotPath(name)).mtime);
+        if (age) bits.push('saved ' + age);
+      } catch (e) {}
+      meta.textContent = bits.join(' · ');
+    }
+    who.appendChild(nm); who.appendChild(meta);
+    var ops = document.createElement('div'); ops.className = 'ops';
+    function op(label, title, fn, cls) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.title = title;
+      if (cls) b.className = cls;
+      b.addEventListener('click', function (ev) { ev.stopPropagation(); fn(); });
+      ops.appendChild(b);
+    }
+    op('Play', 'Open this tower', function () {
+      selectSlot(name);
+      startBtn.click();
+    }, 'play');
+    if (onDisk) {
+      op('⬇', 'Download a .sav backup (this-browser format; ' +
+         'use F6 in-game for the original .TDT format)',
+         function () { exportSlot(name); });
+      op('✎', 'Rename', function () { renameSlot(name); });
+      op('⧉', 'Duplicate', function () { duplicateSlot(name); });
+      op('✕', 'Delete', function () { deleteSlot(name); });
+    }
+    row.appendChild(who);
+    row.appendChild(ops);
+    row.addEventListener('click', function () { selectSlot(name); });
+    return row;
+  }
+
+  function selectSlot(name) {
+    currentSlot = name;
+    try { localStorage.setItem('ct-slot', name); } catch (e) {}
+    renderSlots();
+  }
+  function exportSlot(name) {
+    try { downloadBytes(name + '.sav', FS.readFile(slotPath(name))); }
+    catch (e) { alert('Could not read that save: ' + e.message); }
+  }
+  function takenName(to) {
+    if (!validSlotName(to)) {
+      alert('Tower names: letters, digits, space, - _ . (max 24 chars).');
+      return true;
+    }
+    if (listSlotNames().indexOf(to) >= 0) {
+      alert('A tower named "' + to + '" already exists.');
+      return true;
+    }
+    return false;
+  }
+  function renameSlot(name) {
+    var to = prompt('New name for "' + name + '":', name);
+    if (!to || to === name || takenName(to)) return;
+    ['', '.1', '.2', '.3'].forEach(function (g) {
+      try { FS.rename(slotPath(name) + g, slotPath(to) + g); } catch (e) {}
+    });
+    if (currentSlot === name) currentSlot = to;
+    try { localStorage.setItem('ct-slot', currentSlot); } catch (e) {}
+    syncPersist(renderSlots);
+  }
+  function duplicateSlot(name) {
+    var to = prompt('Name for the copy:', name + ' copy');
+    if (!to || takenName(to)) return;
+    try { FS.writeFile(slotPath(to), FS.readFile(slotPath(name))); }
+    catch (e) { alert('Copy failed: ' + e.message); return; }
+    syncPersist(renderSlots);
+  }
+  function deleteSlot(name) {
+    if (!confirm('Delete tower "' + name + '"? This cannot be undone.'))
+      return;
+    ['', '.1', '.2', '.3'].forEach(function (g) {
+      try { FS.unlink(slotPath(name) + g); } catch (e) {}
+    });
+    if (pendingTdt && pendingTdt.slot === name) pendingTdt = null;
+    draftSlots = draftSlots.filter(function (n) { return n !== name; });
+    syncPersist(renderSlots);
+  }
+  document.getElementById('newslotbtn').addEventListener('click', function () {
+    var to = prompt('Name your new tower:', 'My Tower');
+    if (!to || takenName(to)) return;
+    draftSlots.push(to);
+    selectSlot(to);
+  });
+  document.getElementById('importfile').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    readFileBytes(f).then(function (bytes) {
+      var base = f.name.replace(/\.(sav|tdt|twr)$/i, '')
+                       .replace(/[^A-Za-z0-9 _.-]/g, '').slice(0, 24) ||
+                 'Imported';
+      if (/\.(tdt|twr)$/i.test(f.name)) {
+        var slot = prompt('Import "' + f.name + '" as a new tower named:',
+                          base);
+        if (!slot || takenName(slot)) return;
+        pendingTdt = { slot: slot, bytes: bytes, src: f.name };
+        selectSlot(slot);
+        return;
+      }
+      /* .sav restore — verify the CTWR magic before trusting it */
+      if (!(bytes.length > 20 && bytes[0] === 0x43 && bytes[1] === 0x54 &&
+            bytes[2] === 0x57 && bytes[3] === 0x52)) {
+        alert('That is not a ConciliaTower .sav backup. Original 1994 ' +
+              'towers are .TDT files — those import here too.');
+        return;
+      }
+      var slot = prompt('Restore backup as a tower named:', base);
+      if (!slot) return;
+      if (!validSlotName(slot)) { takenName(slot); return; }
+      if (listSlotNames().indexOf(slot) >= 0 &&
+          !confirm('Overwrite the existing tower "' + slot + '"?')) return;
+      FS.writeFile(slotPath(slot), bytes);
+      syncPersist(function () { selectSlot(slot); });
+    }).catch(function (err) {
+      alert('Import failed: ' + err.message);
+    });
+  });
+
   /* Returning visitor: the remembered copy arms Start immediately. */
   exeLoad().then(function (bytes) {
     if (bytes && !exeBytes) acceptExe(bytes, 'Remembered SIMTOWER.EXE', true);
@@ -519,6 +799,7 @@
       statusEl.textContent = exeBytes ? statusEl.textContent
                                       : 'Engine ready. Waiting for your EXE…';
       Module.engineReady = true;
+      renderSlots();    /* IDBFS is loaded (run dependency) — list towers */
     },
     print: function (t) { console.log(t); },
     printErr: function (t) { console.warn(t); }
@@ -528,9 +809,18 @@
     if (!exeBytes) return;
     var boot = function () {
       FS.writeFile('/SIMTOWER.EXE', exeBytes);
+      var args = ['/SIMTOWER.EXE', '--save=' + slotPath(currentSlot)];
+      if (pendingTdt && pendingTdt.slot === currentSlot) {
+        /* Staged original-format tower: hand it to the engine's boot
+         * importer; the engine persists it into the slot immediately. */
+        FS.writeFile('/import.tdt', pendingTdt.bytes);
+        args.push('/import.tdt');
+        pendingTdt = null;
+      }
+      try { localStorage.setItem('ct-slot', currentSlot); } catch (e) {}
       document.getElementById('setup').style.display = 'none';
       document.getElementById('canvaswrap').style.display = 'block';
-      Module.callMain(['/SIMTOWER.EXE']);
+      Module.callMain(args);
       Module.canvas.focus();
     };
     if (Module.engineReady) boot();

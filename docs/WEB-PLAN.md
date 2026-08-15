@@ -53,14 +53,14 @@ native assumptions are system font paths and /tmp screenshot paths.
 ## Phase C — saves & persistence
 - [x] C1. (2026-08-10) Mount saves on IDBFS; FS.syncfs after every game_save (F5 /
       quit-prompt path) and on load.
-- [ ] C2. Import/export `.sav` as browser file download/upload.
-- [ ] C3. `.TDT` export (twr_export, F6) → browser download. A browser
+- [x] C2. (2026-08-14) Import/export `.sav` via the slot manager (browser-format backups; CTWR magic checked on import).
+- [x] C3. (2026-08-14) `.TDT` export: F6 in-game now triggers a browser download named after the slot (EM_ASM → ctDownloadFile). A browser
       tower openable in real 1994 SimTower under DOSBox is a launch
       demo that sells itself.
-- [ ] C4. `.TDT` IMPORT via upload too (twr_load exists — original
+- [x] C4. (2026-08-14) `.TDT` import via the manager: staged, opened through the boot importer, persisted into the slot immediately. (original
       1995/96 towers playable in the browser). Decided 2026-08-09.
-- [ ] C5. Web autosave: YES (Jonah 2026-08-09) — periodic IDBFS
-      autosave, flagged as web-port behavior.
+- [x] C5. (was already live) Daily in-game autosave to the ACTIVE slot
+      (CT_AUTOLOAD path) + syncfs; the manager shows last-saved age.
 
 ## Phase D — input & UX adaptation
 - [x] D1. (2026-08-10) Keyboard capture: Ctrl/Cmd+S aliases F5 in the
@@ -161,7 +161,7 @@ nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
       before the big launch; link from kvetch.io and the README.
       (Pairs with F4's community stats + the queued shareable-tower
       links.)
-- [ ] C6. Save MANAGER on the splash page (Jonah 2026-08-09): named
+- [x] C6. (2026-08-14) Save MANAGER on the splash page: named
       save slots in IndexedDB with metadata pulled from the header
       (tower name, day, stars, money — maybe a minimap thumbnail),
       load/rename/duplicate/delete, plus the import/export buttons

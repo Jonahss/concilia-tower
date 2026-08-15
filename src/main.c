@@ -4348,9 +4348,14 @@ static char event_messages[EVENT_MSG_COUNT][EVENT_MSG_LEN];
 static int  event_msg_head = 0;
 static int  event_msg_total = 0;
 
-/* Save file path: $CT_SAVE overrides; default lives next to the cwd */
+/* Save file path: --save=PATH (web slot manager) beats $CT_SAVE beats
+ * the cwd default. The argv form exists because the browser shell picks
+ * the slot at Start-click time — after the wasm runtime has already
+ * snapshotted ENV, so an env var can no longer carry it. */
+static const char *save_path_override = NULL;
 static const char *save_path(void)
 {
+    if (save_path_override && *save_path_override) return save_path_override;
     const char *env = getenv("CT_SAVE");
     return env && *env ? env : "concilliatower.sav";
 }
@@ -8337,6 +8342,12 @@ static void do_export_tdt(void)
     if (twr_export("ct_export.tdt", &game.tower, &game.sim,
                    terr, sizeof terr) == 0) {
         add_event_message("Exported ct_export.tdt (original format).");
+#ifdef __EMSCRIPTEN__
+        /* Hand the file to the browser as a download — MEMFS is not a
+         * place a player can reach. The shell defines ctDownloadFile. */
+        EM_ASM({ if (window.ctDownloadFile)
+                     ctDownloadFile(UTF8ToString($0)); }, "ct_export.tdt");
+#endif
         /* The original's file format carries at most 20 tenant names
          * (the port lets you name every tenant — a deliberate
          * divergence); warn when an export can't keep them all. */
@@ -9456,6 +9467,8 @@ int main(int argc, char *argv[])
             if (i + 1 < argc && argv[i+1][0] != '-') {
                 screenshot_path = argv[++i];
             }
+        } else if (strncmp(argv[i], "--save=", 7) == 0) {
+            save_path_override = argv[i] + 7;
         } else if (argv[i][0] != '-') {
             size_t n = strlen(argv[i]);
             if (n > 4 && (!strcasecmp(argv[i] + n - 4, ".tdt") ||
@@ -10270,6 +10283,13 @@ int main(int argc, char *argv[])
             game.sim.pending_treasure = 0;
             game.sim.treasure_found = game_treasure_condition(
                 &game.tower, game.tower.star_rating);
+#ifdef __EMSCRIPTEN__
+            /* Web slot flow: a .TDT imported into a named slot must be
+             * durable even if the player never presses F5 — persist the
+             * converted tower into the slot right away. */
+            if (game_save(&game.sim, &game.tower, save_path()) == 0)
+                web_syncfs();
+#endif
         } else {
             fprintf(stderr, "TWR import failed: %s\n", err);
             tower_init(&game.tower);
