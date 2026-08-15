@@ -591,6 +591,7 @@
       var base = (currentSlot || 'TOWER')
         .replace(/[^A-Za-z0-9 _.-]/g, '') || 'TOWER';
       downloadBytes(base + '.TDT', FS.readFile(path));
+      ctEvent('export-tdt');
     } catch (e) { console.warn('TDT download failed', e); }
   };
 
@@ -715,6 +716,7 @@
     var to = prompt('Name your new tower:', 'My Tower');
     if (!to || takenName(to)) return;
     draftSlots.push(to);
+    ctEvent('new-tower');
     selectSlot(to);
   });
   document.getElementById('importfile').addEventListener('change', function (e) {
@@ -730,6 +732,7 @@
                           base);
         if (!slot || takenName(slot)) return;
         pendingTdt = { slot: slot, bytes: bytes, src: f.name };
+        ctEvent('import-tdt');
         selectSlot(slot);
         return;
       }
@@ -746,6 +749,7 @@
       if (listSlotNames().indexOf(slot) >= 0 &&
           !confirm('Overwrite the existing tower "' + slot + '"?')) return;
       FS.writeFile(slotPath(slot), bytes);
+      ctEvent('import-sav');
       syncPersist(function () { selectSlot(slot); });
     }).catch(function (err) {
       alert('Import failed: ' + err.message);
@@ -780,6 +784,35 @@
     ingest(e.target.files);
   });
 
+  /* ---- Analytics (GoatCounter) --------------------------------------
+   * Cookie-less pageview counts + a few gameplay events, public site
+   * only — localhost/dev/e2e hosts stay silent. No PII, no cookies, so
+   * no consent banner needed. Dashboard: the GoatCounter site with the
+   * code below (Jonah's account). Tip: visiting the page with
+   * #toggle-goatcounter in the URL excludes your own browser. */
+  var gcOn = /\.github\.io$/.test(location.hostname);
+  var gcQueue = [];
+  function ctEvent(name) {
+    if (!gcOn) return;
+    if (window.goatcounter && window.goatcounter.count)
+      window.goatcounter.count({ path: name, event: true });
+    else gcQueue.push(name);
+  }
+  if (gcOn) {
+    var gcs = document.createElement('script');
+    gcs.async = true;
+    gcs.src = 'https://gc.zgo.at/count.js';
+    gcs.setAttribute('data-goatcounter',
+                     'https://conciliatower.goatcounter.com/count');
+    gcs.addEventListener('load', function () {
+      gcQueue.splice(0).forEach(function (n) {
+        if (window.goatcounter && window.goatcounter.count)
+          window.goatcounter.count({ path: n, event: true });
+      });
+    });
+    document.head.appendChild(gcs);
+  }
+
   var Module = {
     canvas: document.getElementById('canvas'),
     noInitialRun: true,
@@ -807,6 +840,7 @@
 
   startBtn.addEventListener('click', function () {
     if (!exeBytes) return;
+    ctEvent('play');
     var boot = function () {
       FS.writeFile('/SIMTOWER.EXE', exeBytes);
       var args = ['/SIMTOWER.EXE', '--save=' + slotPath(currentSlot)];
