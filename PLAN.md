@@ -1,4 +1,4 @@
-# ConcilliaTower — Build Plan
+# ConciliaTower — Build Plan
 
 > **Status: all six phases are complete** (March–July 2026). This document is
 > kept as the project's build map and phase history; for what the port does

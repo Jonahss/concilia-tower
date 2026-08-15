@@ -1,5 +1,5 @@
 #!/bin/bash
-# screenshot.sh — Take a screenshot of ConcilliaTower via xdotool F12
+# screenshot.sh — Take a screenshot of ConciliaTower via xdotool F12
 # Usage: ./scripts/screenshot.sh [output.png]
 #
 # If the game isn't running, uses --screenshot mode to render a frame.

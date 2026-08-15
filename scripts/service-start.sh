@@ -1,5 +1,5 @@
 #!/bin/bash
-# service-start.sh — systemd entrypoint for ConcilliaTower + VNC stack.
+# service-start.sh — systemd entrypoint for ConciliaTower + VNC stack.
 #
 # Brings up (idempotently) the display chain, then execs the game in the
 # FOREGROUND so systemd owns it: Xvfb :99 -> x11vnc :5900 -> websockify :6080 -> game.
@@ -63,5 +63,5 @@ fi
 # CT_AUTOLOAD: load concilliatower.sav at boot so restarts resume the
 # player's tower instead of a fresh lot (2026-08-01 lost-tower incident).
 export CT_AUTOLOAD=1
-echo "Launching ConcilliaTower on ${DISPLAY_NUM} (assets: ${EXE_PATH})"
+echo "Launching ConciliaTower on ${DISPLAY_NUM} (assets: ${EXE_PATH})"
 exec stdbuf -oL "${PROJECT_DIR}/simtower" "${EXE_PATH}" </dev/null >"${LOG}" 2>&1

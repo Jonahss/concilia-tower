@@ -1,5 +1,5 @@
 #!/bin/bash
-# launch.sh — Start ConcilliaTower on Xvfb:99 with VNC access
+# launch.sh — Start ConciliaTower on Xvfb:99 with VNC access
 # Usage: ./scripts/launch.sh [--rebuild]
 #
 # VNC access: http://192.168.1.145:6080/vnc.html
@@ -26,7 +26,7 @@ LOG="/tmp/simtower.log"
 
 # Rebuild if requested or binary missing
 if [[ "$1" == "--rebuild" ]] || [[ ! -f "${PROJECT_DIR}/simtower" ]]; then
-    echo "Building ConcilliaTower..."
+    echo "Building ConciliaTower..."
     make -j4
 fi
 
@@ -57,8 +57,8 @@ if ! pgrep -f "websockify.*6080" > /dev/null 2>&1; then
     sleep 0.5
 fi
 
-# Launch ConcilliaTower
-echo "Launching ConcilliaTower..."
+# Launch ConciliaTower
+echo "Launching ConciliaTower..."
 # stdbuf -oL forces line-buffered stdout so the log file gets written in real time
 DISPLAY=${DISPLAY_NUM} setsid nohup stdbuf -oL "${PROJECT_DIR}/simtower" "${EXE_PATH}" \
     </dev/null >"${LOG}" 2>&1 &
@@ -69,11 +69,11 @@ sleep 1
 
 # Verify it's running
 if kill -0 ${GAME_PID} 2>/dev/null; then
-    echo "✅ ConcilliaTower running (PID ${GAME_PID})"
+    echo "✅ ConciliaTower running (PID ${GAME_PID})"
     echo "   Log: ${LOG}"
     echo "   VNC: http://192.168.1.145:6080/vnc.html"
 else
-    echo "❌ ConcilliaTower failed to start. Check ${LOG}"
+    echo "❌ ConciliaTower failed to start. Check ${LOG}"
     tail -20 "${LOG}"
     exit 1
 fi

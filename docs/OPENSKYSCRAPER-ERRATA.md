@@ -160,7 +160,7 @@ data-driven. Real values: wait-frustration cap 300; full-queue rejection
 +5; **no route at all = instant 300** (cap-out); walking stress per span:
 escalator 16, stairs 35; star population thresholds 300/1k/5k/10k.
 Anything OS hardcoded for these is at best a guess; the resource is the
-canon (and is live-editable in ConcilliaTower's F4 panel).
+canon (and is live-editable in ConciliaTower's F4 panel).
 
 ## 7. Smaller things the EXE does that OS doesn't model
 

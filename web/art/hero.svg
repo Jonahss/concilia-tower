@@ -264,11 +264,11 @@
 
   <!-- ===================== EXTRUDED SIGN LETTERS (topmost) -->
   <g font-family="Liberation Serif" font-weight="bold" font-size="44" text-anchor="middle">
-    <text x="257" y="160" fill="#23262c">CONCILLIA TOWER</text>
-    <text x="256" y="159" fill="#2f333b">CONCILLIA TOWER</text>
-    <text x="255" y="158" fill="#3b404a">CONCILLIA TOWER</text>
-    <text x="254" y="157" fill="#474d59">CONCILLIA TOWER</text>
-    <text x="253" y="156" fill="#535a68">CONCILLIA TOWER</text>
-    <text x="252" y="155" fill="url(#letterFace)">CONCILLIA TOWER</text>
+    <text x="257" y="160" fill="#23262c">CONCILIA TOWER</text>
+    <text x="256" y="159" fill="#2f333b">CONCILIA TOWER</text>
+    <text x="255" y="158" fill="#3b404a">CONCILIA TOWER</text>
+    <text x="254" y="157" fill="#474d59">CONCILIA TOWER</text>
+    <text x="253" y="156" fill="#535a68">CONCILIA TOWER</text>
+    <text x="252" y="155" fill="url(#letterFace)">CONCILIA TOWER</text>
   </g>
 </svg>

@@ -1,4 +1,4 @@
-# ConcilliaTower on the Web — stage plan (drafted 2026-08-09)
+# ConciliaTower on the Web — stage plan (drafted 2026-08-09)
 
 Goal: the faithful port running in a browser tab, shareable by URL, with
 sound (which VNC never carried — this stage is the first time anyone
@@ -89,7 +89,7 @@ native assumptions are system font paths and /tmp screenshot paths.
 - Shareable towers: export/import as file first; maybe compressed-in-URL
   links later.
 - Touch/tablet controls.
-- Custom ConcilliaTower intro/splash (the long-deferred slot — its
+- Custom ConciliaTower intro/splash (the long-deferred slot — its
   natural home is the web landing page).
 - itch.io mirror at launch (discoverability, comments).
 - Engine/shell TS evolution (only if outside contributors want a
@@ -155,7 +155,7 @@ nisan, cousin Ben, Zack, Sarah, LR, crash, Noam, Wen
       (all-time days simulated, TOWER count) — nice launch-day flex.
 
 ## Community (added 2026-08-09)
-- [ ] G1. ConcilliaTower Discord server for the community — tower-file
+- [ ] G1. ConciliaTower Discord server for the community — tower-file
       sharing channel (.TDT/.sav uploads play in browser OR real 1994
       SimTower), bug reports, build-registry contributions. Spin up
       before the big launch; link from kvetch.io and the README.

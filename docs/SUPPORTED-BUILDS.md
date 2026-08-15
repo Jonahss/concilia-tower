@@ -1,6 +1,6 @@
 # Supported SIMTOWER.EXE builds
 
-ConcilliaTower reads the game's art, sound, and text out of your own copy of
+ConciliaTower reads the game's art, sound, and text out of your own copy of
 `SIMTOWER.EXE` at runtime — nothing is bundled. Different builds of SimTower
 exist (releases, pressings, localizations, patch levels), and this file is
 the registry of the ones we know about.

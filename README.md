@@ -1,4 +1,4 @@
-# ConcilliaTower
+# ConciliaTower
 
 A native Linux port of **SimTower** (Maxis / OpenBook, 1994), written fresh in
 C + SDL2. **All of the game code is written from scratch.** The mechanics are

@@ -5470,7 +5470,7 @@ static void render_ui(void)
     /* Update window title with current state (for VNC title bar) */
     char title[256];
     snprintf(title, sizeof(title),
-             "ConcilliaTower | %s | $%ld | %d★ | Pop: %d | Day %d | Build: %s",
+             "ConciliaTower | %s | $%ld | %d★ | Pop: %d | Day %d | Build: %s",
              game.sim.mode == MODE_SANDBOX ? "Sandbox" : "Campaign",
              game.tower.money, game.tower.star_rating, game.tower.population,
              game.tower.day, tower_item_name(game.build_type));
@@ -9480,7 +9480,7 @@ int main(int argc, char *argv[])
 #ifndef CT_BUILD_VERSION
 #define CT_BUILD_VERSION "dev"
 #endif
-    printf("ConcilliaTower — SimTower for Linux (build %s)\n", CT_BUILD_VERSION);
+    printf("ConciliaTower — SimTower for Linux (build %s)\n", CT_BUILD_VERSION);
     printf("Loading resources from: %s\n", exe_path);
 
     /* Load NE resources */
@@ -9539,7 +9539,7 @@ int main(int argc, char *argv[])
      * first web bug report, 2026-08-09). */
     wflags |= SDL_WINDOW_RESIZABLE;
 #endif
-    game.window = SDL_CreateWindow("ConcilliaTower",
+    game.window = SDL_CreateWindow("ConciliaTower",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         WINDOW_W, WINDOW_H, wflags);
     
@@ -10239,7 +10239,7 @@ int main(int argc, char *argv[])
     }
     if (getenv("CT_MODE")) game.sim.mode = atoi(getenv("CT_MODE"));
 
-    add_event_message("Welcome to ConcilliaTower!");
+    add_event_message("Welcome to ConciliaTower!");
     add_event_message("Click to build your tower.");
     
     /* Build demo tower only if --demo flag is passed */
@@ -10441,7 +10441,7 @@ int main(int argc, char *argv[])
     (void)show_underground;
     game.zoom = 1.0f;
     
-    printf("\n=== ConcilliaTower running ===\n");
+    printf("\n=== ConciliaTower running ===\n");
     printf("Controls:\n");
     printf("  Arrow keys: scroll camera\n");
     printf("  Mouse wheel: scroll vertically\n");
