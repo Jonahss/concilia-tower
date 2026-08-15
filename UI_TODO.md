@@ -103,6 +103,12 @@
   43 dialog texts load; titles/dialogs byte-checked via harness.
 
 ## Backlog / research / MODS
+- [ ] **Save-format export UI on the landing page** (Jonah 2026-08-15):
+  F6 works in-browser but is undiscoverable — add a .TDT export next to the
+  .sav backup button in the save manager (or a format picker with
+  explanations on one Save button). Needs a headless engine path: a
+  KEEPALIVE like ct_sav_to_tdt(savPath) that loads the slot into a temp
+  Tower and runs the F6 exporter without booting the game.
 - [ ] **MOD: merge F3 graphs into F7 financial report** — the over-time trend graphs (F3 Analytics: Population/Commuters, Income/Expenses, Value built/lost — a port invention) could be surfaced inside the faithful 1994 financial-report dialog (F7, art 0x81f4). Keep them optional/mod-gated since the original report has no graph. Jonah asked to keep both surfaces for now; merge later. (2026-07-16)
 - [x] Easter eggs (research original user guide — NOT in decomp): the money-click spot and grand lobby shipped 2026-07-29 (893f9b2) — and per Jonah 2026-07-30 they're documented in the shipped README guide, not secrets (see docs/ORIGINAL-BUGS.md Part 4). "Buried treasure" = the hidden debug menu's 9001 Treasure item (Part 3).
 - [ ] **Mod menu / feature-flags system** — toggle intentional "Jonah-additions" (mods) separate from faithful behavior. First mod candidate: the floor auto-fill behavior (store as an intentional Jonah-addition flag). Faithful base stays clean.
