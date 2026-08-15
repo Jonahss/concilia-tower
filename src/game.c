@@ -13,6 +13,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+/* Web analytics: star promotions (and the TOWER wedding, star=6) feed
+ * the landing page's event hook so the dashboard can chart the star
+ * funnel and the tower-day each star lands. No-op in native builds. */
+static void notify_star_up(const Tower *tower, int star)
+{
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ if (window.ctStarEvent) window.ctStarEvent($0, $1); },
+           star, tower->day);
+#else
+    (void)tower; (void)star;
+#endif
+}
 
 /* 0xB92C. The EXE saves this flag; the port keeps it file-static to
  * leave the v16 save layout untouched — after a load the gate simply
@@ -431,6 +447,7 @@ void game_wedding_daily(GameSim *sim, Tower *tower)
         sim->wedding.done = 1;
         tower->star_rating = 6;
         sim->pending_star_up = 6;
+        notify_star_up(tower, 6);
         sim->vip_satisfied = 0;   /* ceremonies clear [0xB923] (1148:004f) */
         printf("\xf0\x9f\x92\x92 The wedding is over — "
                "WELCOME TO TOWER! \xf0\x9f\x8f\x86\n");
@@ -1438,6 +1455,7 @@ static void evaluate_star_rating(GameSim *sim, Tower *tower)
     if (new_rating > tower->star_rating) {
         tower->star_rating = new_rating;
         sim->pending_star_up = new_rating;
+        notify_star_up(tower, new_rating);
         /* Every promotion ceremony clears the favorable-VIP flag
          * (1148:004f) — star 3 will need a fresh VIP before 4. */
         sim->vip_satisfied = 0;

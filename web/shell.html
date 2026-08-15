@@ -798,6 +798,12 @@
       window.goatcounter.count({ path: name, event: true });
     else gcQueue.push(name);
   }
+  /* Engine hook: game.c notify_star_up() reports each star promotion
+   * with the tower-day it landed, so the dashboard can chart the
+   * star funnel (filter "star-") and when stars are typically hit. */
+  window.ctStarEvent = function (star, day) {
+    ctEvent('star-' + (star >= 6 ? 'tower' : star) + '/d' + day);
+  };
   if (gcOn) {
     var gcs = document.createElement('script');
     gcs.async = true;
