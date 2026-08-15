@@ -112,6 +112,17 @@
 - [x] ~~MOD:~~ **metro tunnel — FAITHFUL, SHIPPED** (063ba52, 2026-08-13): this morning's "NOT faithful / no renderer reads 0xB3E8" verdict was wrong — the tunnel is an ordinary record, not a special render path. ConstructQ routes the finished platform piece (0x21) to MakeLobby, which lays the type-0x2D full-row band (the ground lobby's lot-wide mechanism); its art here is track tile 0x8F28. Port tiles it across the platform row. Jonah called it (twice).
 - [x] ~~MOD:~~ **buried treasure dig event — FAITHFUL, SHIPPED** (94d9ad9, 2026-08-13): Jonah's pushback ("i did hit buried treasure... while constructing underground") exposed a near-call the survey's far-reloc census missed. Real mechanism: at star 1/2/3, dig B3/B4/B5 wider than star×25 cells → next build pays $200k/$300k/$500k (dialog 0xBE0 "Wow!"), one-shot per tier, forfeited if over-dug before the promotion. The old "promotion bonus on star-up" payment was this payout misfiled and is removed. Save v18.
 - [ ] **MOD: window washing** — install window-washing cranes on the roof; pay washers a quarterly fee; cranes animate up/down washing the tower's faces. Pairs with the views/windows/light-wells/bridges mod family (dirty windows → lower desirability?).
+- [ ] **MOD: helipad** (Jonah, 2026-08-15) — roof-only placement on a flat top
+  segment. Two event hooks: (1) **super-VIP by air** — arrives on the pad and
+  enters from the TOP, so penthouse floors + express shafts are the first
+  impression (inverts the ground-lobby VIP flow; new pressure the original
+  never applies); (2) **medevac** — emergency event routes a patient up the
+  shafts to a chopper, gives the medical center an active role. Balance:
+  helicopters are LOUD — noise annoyance on top floors (like elevators vs
+  offices), so prestige access trades against penthouse ratings. Needs
+  original art (no 1994 sprites — SVG→dither pipeline). Gate behind the mod
+  menu/feature-flags system (line above) — helipad is the founding member.
+  Slot after beta-blocking odds and ends.
 
 ## Sprite-state decode — COMPLETE (Jonah decoded sheets, I wired by state)
 - [x] HOTEL: door + clean/occupied/dirty/roaches × day-night. `1e268da`
