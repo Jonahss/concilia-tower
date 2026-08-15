@@ -2192,8 +2192,15 @@ static void render_tower(void)
             if (busy && nframes > 1)
                 frame_idx = 1 + ((transport_anim / 4) % (nframes - 1));
             SDL_Rect src = { frame_idx * frame_w_hint, 0, frame_w_hint, spr->h };
-            int draw_h = item_floors * CELL_H;
-            int draw_y = ty - (item_floors - 1) * CELL_H;
+            /* Draw at the art's NATIVE height, flush with the unit's
+             * bottom edge. The EXE's stairs art is 60px — a 24px top
+             * band (the upper floor's tenant space only; its 12px
+             * ceiling slab stays clear) over a 36px bottom band —
+             * so stretching to 2 full floors (72px) made stairs 20%
+             * too tall (Jonah, 2026-08-14). Escalator art is a true
+             * 72px, for which this formula is pixel-identical. */
+            int draw_h = spr->h;
+            int draw_y = ty + CELL_H - draw_h;
             SDL_Rect dst = { tx, draw_y, tw, draw_h };
             SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
         } else {
@@ -5038,7 +5045,7 @@ static int tool_visible_rows(void)
 static int tool_win_height(void)
 {
     int grid_off = tool_grid_origin_y() - game.tool_y;   /* top chrome height */
-    return grid_off + tool_visible_rows() * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 20;
+    return grid_off + tool_visible_rows() * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 38;   /* room for the two-line name+price readout */
 }
 
 /* The j-th VISIBLE (unlocked) sub-item of group i, or -1. */
@@ -5254,25 +5261,29 @@ static void render_toolbox(void)
         if (tool_sub_visible_count(i) > 1) draw_pulldown_marker(bx, by);
     }
     
-    /* Cost display at bottom */
+    /* Name + cost readout at bottom. PORT ADDITION, not in the 1994
+     * toolbar (CmdBtnWndProc draws only its bitmap strips — no text);
+     * kept as a QoL aid since the port ships without the printed
+     * price list. Two centered lines so long names never clip. */
     if (game.build_type != ITEM_NONE && game.font_small) {
         SDL_Color black = {0, 0, 0, 255};
         char cost_buf[64];
         format_money(ITEM_COST[game.build_type], cost_buf, sizeof(cost_buf));
-        char full_buf[96];
-        snprintf(full_buf, sizeof(full_buf), "%s  %s",
-                 tower_item_name(game.build_type), cost_buf);
-        
+        const char *lines[2] = { tower_item_name(game.build_type), cost_buf };
+
         /* Place below the icon grid, which shrinks/grows with the unlocked set. */
         int rows = tool_visible_rows();
         int label_y = grid_y + rows * (TOOL_BTN_SIZE + TOOL_BTN_PAD) + 4;
-        SDL_Surface *ts = TTF_RenderText_Blended(game.font_small, full_buf, black);
-        if (ts) {
+        for (int li = 0; li < 2; li++) {
+            SDL_Surface *ts = TTF_RenderText_Blended(game.font_small,
+                                                     lines[li], black);
+            if (!ts) continue;
             SDL_Texture *tt = SDL_CreateTextureFromSurface(game.renderer, ts);
             int dw = ts->w > TOOL_WIN_W - 8 ? TOOL_WIN_W - 8 : ts->w;
             SDL_Rect src2 = { 0, 0, dw, ts->h };
-            SDL_Rect dst = { wx + 4, label_y, dw, ts->h };
+            SDL_Rect dst = { wx + (TOOL_WIN_W - dw) / 2, label_y, dw, ts->h };
             SDL_RenderCopy(game.renderer, tt, &src2, &dst);
+            label_y += ts->h + 1;
             SDL_DestroyTexture(tt);
             SDL_FreeSurface(ts);
         }
