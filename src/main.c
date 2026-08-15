@@ -6611,6 +6611,8 @@ typedef struct {
     int occ_n;
 } TiLayout;
 
+static void inspect_picture_size(const Tenant *t, int *w, int *h);
+
 static void ti_build(const Tenant *t, TiLayout *L)
 {
     memset(L, 0, sizeof *L);
@@ -6694,8 +6696,11 @@ static void ti_build(const Tenant *t, TiLayout *L)
     L->nf = nf;
 
     int pad = 10;
+    int pw, ph;
+    inspect_picture_size(t, &pw, &ph);
+    if (INSPECT_W < pw + 2 * pad) L->w = pw + 2 * pad;
     L->name_y = 8;
-    L->picture = (SDL_Rect){ pad, 32, INSPECT_W - 2 * pad, 46 };
+    L->picture = (SDL_Rect){ pad, 32, pw, ph };
     L->comment_y = L->picture.y + L->picture.h + 6;
     L->field_y0 = L->comment_y + L->comment_n * 14 + (L->comment_n ? 4 : 0);
     int y = L->field_y0;
@@ -6738,14 +6743,14 @@ static void ti_build(const Tenant *t, TiLayout *L)
         }
     }
     if (L->occ_n) {
-        L->occ_row = (SDL_Rect){ pad, y + 4, INSPECT_W - 2 * pad, PSTRIP_H };
+        L->occ_row = (SDL_Rect){ pad, y + 4, L->w - 2 * pad, PSTRIP_H };
         y += 4 + PSTRIP_H + 4;
     }
 
     int btn_y = y + 6;
     L->rename_btn = (SDL_Rect){ pad, btn_y, 64, 20 };
     if (L->has_newmovie) L->newmovie_btn = (SDL_Rect){ pad + 72, btn_y, 74, 20 };
-    L->ok_btn = (SDL_Rect){ INSPECT_W - pad - 56, btn_y, 56, 20 };
+    L->ok_btn = (SDL_Rect){ L->w - pad - 56, btn_y, 56, 20 };
     L->h = btn_y + 20 + pad;
 }
 
@@ -6875,43 +6880,60 @@ static void draw_patron_bar(SDL_Rect box, int val, int max)
  * centered on the unit, with the same-floor neighbors that fit, the focused
  * unit ringed. Mirrors the EXE's item-2 panel (seg_1100:4869 walks the
  * stable-id neighbor map and blits the floor strip). */
+/* Picture-box size per tenant class — the EXE's per-class dialog
+ * templates (RT_DIALOG 0x2EC+class, layout in the DTMP 0xFF04 blobs,
+ * item 2; extracted 2026-08-15): venues + food get a 248x60 two-story
+ * box, cathedral/medical 192x45, ordinary units ~124x41. The box is
+ * part of the template, so it reserves its space even when empty. */
+static void inspect_picture_size(const Tenant *t, int *w, int *h)
+{
+    switch (t->type) {
+    case ITEM_CINEMA: case ITEM_PARTY_HALL:
+    case ITEM_RESTAURANT: case ITEM_FAST_FOOD: *w = 248; *h = 60; break;
+    case ITEM_CATHEDRAL: case ITEM_MEDICAL:    *w = 192; *h = 45; break;
+    case ITEM_CONDO:                           *w = 155; *h = 42; break;
+    case ITEM_SHOP:                            *w = 159; *h = 45; break;
+    case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN:
+    case ITEM_HOTEL_SUITE:                     *w = 116; *h = 43; break;
+    case ITEM_HOUSEKEEPING:                    *w = 100; *h = 41; break;
+    default:                                   *w = 124; *h = 41; break;
+    }
+}
+
+/* The 1994 picture is a 1:1 CROP OF THE LIVE TOWER, not a synthetic
+ * sprite strip: TENANTINFODLOGFILTER's body renderer (dis16 seg33
+ * @4869) SetRects a world-coordinate source rect — left at the unit
+ * (venues exactly at their left edge, narrow units with a margin),
+ * top at the unit's top story + 12px (past the ceiling slab) — and
+ * the paint blits it into the template's item-2 box. So crowds,
+ * occupants and passing transport all show exactly as the tower
+ * renders them. We reproduce that by aiming the camera and running
+ * the real world renderer inside the box's clip. */
 static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
 {
-    SDL_SetRenderDrawColor(game.renderer, 176, 196, 222, 255);   /* sky backing */
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
     SDL_RenderFillRect(game.renderer, &box);
     SDL_Rect clip = { box.x + 1, box.y + 1, box.w - 2, box.h - 2 };
     SDL_RenderSetClipRect(game.renderer, &clip);
 
-    int inner = box.w - 8;
-    int ppc = (t->width > 0) ? inner * 62 / 100 / t->width : 6;  /* unit ~62% wide */
-    if (ppc < 2) ppc = 2;
-    int center_cell = t->x + t->width / 2;
-    int win_cells = ppc ? inner / ppc : t->width;
-    int win_left = center_cell - win_cells / 2;
+    int topf = t->floor + ITEM_HEIGHT[t->type] - 1;
+    int unit_px = t->width * CELL_W;
+    int xoff = 0;                            /* venues: flush left (EXE) */
+    if (unit_px < box.w &&
+        t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL &&
+        t->type != ITEM_RESTAURANT && t->type != ITEM_FAST_FOOD)
+        xoff = -(box.w - unit_px) / 2;       /* narrow units: margined */
+    int wx0 = t->x * CELL_W + xoff;
+    int wy0 = -topf * CELL_H + 12;           /* skip the ceiling slab */
 
-    for (int i = 0; i < game.tower.tenant_count; i++) {
-        Tenant *n = &game.tower.tenants[i];
-        if (n->type == ITEM_NONE || n->floor != t->floor) continue;
-        if (n->x + n->width <= win_left || n->x >= win_left + win_cells) continue;
-        int fw = 0, floors = 1;
-        uint16_t sid = item_sprite_id(n->type, &fw, &floors);
-        Sprite *spr = sid ? sprites_find(&game.sprites, sid) : NULL;
-        if (!spr || !spr->texture || fw <= 0 || spr->h <= 0) continue;
-        SDL_Rect src = { 0, 0, fw, spr->h };
-        int dw = n->width * ppc;
-        int dh = spr->h * dw / fw;
-        if (dh > box.h - 8) dh = box.h - 8;
-        int dx = box.x + 4 + (n->x - win_left) * ppc;
-        int dy = box.y + box.h - 4 - dh;              /* bottom-aligned floor line */
-        SDL_Rect dst = { dx, dy, dw, dh };
-        SDL_RenderCopy(game.renderer, spr->texture, &src, &dst);
-        if (n->id == t->id) {                          /* ring the focused unit */
-            SDL_SetRenderDrawColor(game.renderer, 255, 226, 40, 255);
-            SDL_RenderDrawRect(game.renderer, &dst);
-            SDL_Rect d2 = { dst.x - 1, dst.y - 1, dst.w + 2, dst.h + 2 };
-            SDL_RenderDrawRect(game.renderer, &d2);
-        }
-    }
+    float sx = game.cam_fx, sy = game.cam_fy;
+    game.cam_fx = (float)(wx0 + game.screen_w / 2 - clip.x);
+    game.cam_fy = (float)(wy0 + game.screen_h / 2 - clip.y);
+    render_sky();
+    render_tower();
+    render_people();
+    game.cam_fx = sx; game.cam_fy = sy;
+
     SDL_RenderSetClipRect(game.renderer, NULL);
     SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
     SDL_RenderDrawRect(game.renderer, &box);

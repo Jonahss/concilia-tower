@@ -2617,7 +2617,13 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             else if (tod == TOD_EVENING)
                 show_cap = t->quota_matinee + t->quota_evening;
         } else if (t->type == ITEM_PARTY_HALL)
-            show_cap = (tod == TOD_EVENING) ? t->quota_evening : 0;
+            /* Guests are summoned at the 1:00 PM open (VenueT dispatcher
+             * ft 1200: open + summon; leave + income at the 5 PM close).
+             * The old TOD_EVENING window spawned them AFTER the close, so
+             * every guest arrived at a locked hall — the arrivals gate
+             * dropped them: no crowd frame, no party income, ever. */
+            show_cap = (tod == TOD_AFTERNOON && ps->ft_in_day >= 1200)
+                           ? t->quota_evening : 0;
         int patron = show_cap > 0;
         /* Maids (MainteT, referee 2026-08-07): six permanent staff per
          * unit, pumped every 16 ticks like the EXE's 1/16 person LOD.
