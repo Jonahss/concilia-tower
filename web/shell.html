@@ -804,6 +804,11 @@
   window.ctStarEvent = function (star, day) {
     ctEvent('star-' + (star >= 6 ? 'tower' : star) + '/d' + day);
   };
+  /* Engine hook: population peak crossing a milestone (game.c
+   * notify_pop_milestones) — filter "pop-" for the growth funnel. */
+  window.ctPopEvent = function (pop, day) {
+    ctEvent('pop-' + pop + '/d' + day);
+  };
   if (gcOn) {
     var gcs = document.createElement('script');
     gcs.async = true;

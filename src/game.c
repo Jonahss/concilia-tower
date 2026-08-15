@@ -30,6 +30,32 @@ static void notify_star_up(const Tower *tower, int star)
 #endif
 }
 
+/* Population milestones for the same funnel. Fired when the tower's
+ * peak first crosses a threshold. The reported floor seeds from the
+ * first recompute of the session (lives outside GameSim on purpose —
+ * the save serializes structs raw), so booting or importing a big
+ * tower reports nothing until it climbs past its loaded peak. */
+static void notify_pop_milestones(const Tower *tower, int peak)
+{
+#ifdef __EMSCRIPTEN__
+    static const int MILESTONES[] =
+        { 100, 300, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000 };
+    static int reported = -1;              /* -1 = unseeded */
+    if (reported < 0) { reported = peak; return; }
+    while (reported < peak) {
+        int next = -1;
+        for (unsigned i = 0; i < sizeof MILESTONES / sizeof *MILESTONES; i++)
+            if (MILESTONES[i] > reported) { next = MILESTONES[i]; break; }
+        if (next < 0 || next > peak) { reported = peak; break; }
+        EM_ASM({ if (window.ctPopEvent) window.ctPopEvent($0, $1); },
+               next, tower->day);
+        reported = next;
+    }
+#else
+    (void)tower; (void)peak;
+#endif
+}
+
 /* 0xB92C. The EXE saves this flag; the port keeps it file-static to
  * leave the v16 save layout untouched — after a load the gate simply
  * re-verifies at the next 5:58 AM stage call (worst case a promotion
@@ -198,6 +224,7 @@ int game_calc_population(GameSim *sim, Tower *tower)
     sim->standing_population = pop;   /* one number, everywhere */
     sim->tenants_occupied = occupied;
     if (pop > sim->max_population) sim->max_population = pop;
+    notify_pop_milestones(tower, sim->max_population);
 
     return pop;
 }
