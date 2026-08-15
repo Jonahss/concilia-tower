@@ -8,3 +8,4 @@ concilliatower.sav.*
 web/dist/
 *.EXE
 web/dev-assets/
+tests/web/out/
