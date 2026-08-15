@@ -4018,15 +4018,14 @@ static void render_elv_edit_mode(void)
  * floor off — e.g. on the motor cap / pit arrows) an existing same-type
  * shaft, extend that shaft's column rather than starting a new one at the
  * click cell. The original's cap arrows are exactly this affordance. */
-static int elevator_drag_column(void)
+static int elevator_snap_column_at(int cell0, int floor0)
 {
     int w = ITEM_WIDTH[game.build_type];
     static const int dfs[] = { 0, -1, 1 };
     for (int i = 0; i < 3; i++) {
-        int fidx = floor_to_index(game.drag_start_floor + dfs[i]);
+        int fidx = floor_to_index(floor0 + dfs[i]);
         if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) continue;
-        for (int cx = game.drag_start_cell - w + 1;
-             cx <= game.drag_start_cell + w - 1; cx++) {
+        for (int cx = cell0 - w + 1; cx <= cell0 + w - 1; cx++) {
             if (cx < 0 || cx >= TOWER_WIDTH) continue;
             TowerCell *cell = &game.tower.grid[fidx][cx];
             if (cell->type != game.build_type) continue;
@@ -4034,7 +4033,36 @@ static int elevator_drag_column(void)
             if (t) return t->x;
         }
     }
-    return game.drag_start_cell;
+    return cell0;
+}
+
+static int elevator_drag_column(void)
+{
+    return elevator_snap_column_at(game.drag_start_cell,
+                                   game.drag_start_floor);
+}
+
+static int elv_car_cost(ItemType t);
+
+/* Read-only twin of elev_add_car_at (the click handler below): would a
+ * click here add a car? 1 = yes (ghost green), -1 = inside the shaft
+ * but refused — cars maxed or funds short (ghost red), 0 = not an
+ * add-a-car spot at all. Keeps the build shadow honest over existing
+ * shafts, where tower_can_place rightly fails (Jonah, 2026-08-14). */
+static int elev_can_add_car_at(int x, int floor)
+{
+    int fidx = floor_to_index(floor);
+    if (fidx < 0 || fidx >= TOWER_FLOOR_COUNT) return 0;
+    PeopleSim *ps = &game.sim.people;
+    for (int i = 0; i < ps->shaft_count; i++) {
+        ElevatorShaft *s = &ps->shafts[i];
+        if (!s->active || s->type != (ItemType)game.build_type || s->x != x)
+            continue;
+        if (fidx < s->lo || fidx > s->hi) continue;   /* cap = extend, not add */
+        if (s->num_cars >= CARS_PER_SHAFT) return -1;
+        return game.tower.money >= elv_car_cost(s->type) ? 1 : -1;
+    }
+    return 0;
 }
 
 /* Build origin cell, centered on the cursor so the tile straddles the pointer
@@ -4086,11 +4114,20 @@ static void render_build_ghost(void)
         int x = elevator_drag_column();
         int f0 = game.drag_start_floor, f1 = game.mouse_floor;
         int df = (f1 >= f0) ? 1 : -1;
+        /* Segments already inside the shaft aren't failed placements —
+         * releasing there ADDS A CAR. Color them by that outcome. */
+        int addcar = elev_can_add_car_at(x, f0);
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
         for (int f = f0; ; f += df) {
             int gx, gy;
             grid_to_screen(f, x, &gx, &gy);
-            if (tower_can_place(&game.tower, game.build_type, f, x))
+            int fidx = floor_to_index(f);
+            int in_shaft = fidx >= 0 && fidx < TOWER_FLOOR_COUNT &&
+                           game.tower.grid[fidx][x].type == game.build_type;
+            int ok = in_shaft ? (addcar > 0)
+                              : tower_can_place(&game.tower, game.build_type,
+                                                f, x);
+            if (ok)
                 SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 80);
             else
                 SDL_SetRenderDrawColor(game.renderer, 200, 0, 0, 80);
@@ -4191,7 +4228,22 @@ static void render_build_ghost(void)
         grid_to_screen(of, oc, &gx, &gy);
 
         int can = tower_can_place(&game.tower, game.build_type, of, oc);
-        
+
+        /* Elevator tool over an existing same-type shaft: a click there
+         * adds a car, so snap the ghost onto the shaft and color it by
+         * the add-a-car outcome, not by (correctly impossible) shaft
+         * placement (Jonah, 2026-08-14). */
+        if (item_is_elevator(game.build_type)) {
+            int px = elevator_snap_column_at(game.mouse_cell,
+                                             game.mouse_floor);
+            int r = elev_can_add_car_at(px, game.mouse_floor);
+            if (r) {
+                can = r > 0;
+                oc = px;
+                grid_to_screen(of, oc, &gx, &gy);
+            }
+        }
+
         SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_BLEND);
         if (can) {
             SDL_SetRenderDrawColor(game.renderer, 0, 200, 0, 100);
