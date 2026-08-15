@@ -163,6 +163,21 @@ works. Kept so we don't keep asking.
 
 - **There is no call button — the queue IS the button.** ✅ First person to join
   an empty floor-queue triggers `CallElevator`.
+- **Escalator landings are validated once, at placement — never again.** ✅ HIGH
+  (Jonah 2026-08-15: "can't place an escalator over a recycling center, but I
+  bulldozed shops and placed a recycling center behind existing escalators.")
+  Both directions are faithful. The escalator placer (11f8:1452) checks its two
+  landing cells against the commercial whitelist (10c0:0775/087d — recycling
+  isn't in it) and records the unit ONLY in StairsT's own 64-slot table
+  (0xBD70) + the walk map; it never writes floor records. Unit placement
+  (recycling = venue builder 1fa5 → probe 321e → create 17fd, all three
+  disassembled 2026-08-15) validates the span purely against the floor-record
+  partition (bare type-0 deck required) and **never reads the stairs table** —
+  the only stairs-table reader that constrains placement is elevator clearance
+  (10a0:10e8). Demolish (DeleteTenant 35ac) has no landing guard either. So the
+  bulldoze-shops-then-build trick strands a landing inside a non-commercial
+  unit in real 1994 SimTower too, and the escalator keeps working (routing uses
+  the walk map, not the landing tenant).
 - **"No route at all" = instant maximum stress (300),** not gradual. ✅
 - **Service elevators never accrue wait stress** — staff can't get angry about
   waiting. ✅ TripT seg_1210.
