@@ -169,6 +169,9 @@
     <p class="privacy">Your EXE and saves live in this browser's local
        storage only &mdash; upload once, it's remembered here.
        Sound starts with your first click (browser rule, not ours).</p>
+    <p class="privacy">Open source &mdash;
+       <a href="https://github.com/Jonahss/concilia-tower" target="_blank"
+          rel="noopener">github.com/Jonahss/concilia-tower</a></p>
   </div>
   <div id="canvaswrap">
     <button id="fsbtn" title="Fullscreen">&#x26F6;</button>
@@ -790,7 +793,8 @@
    * no consent banner needed. Dashboard: the GoatCounter site with the
    * code below (Jonah's account). Tip: visiting the page with
    * #toggle-goatcounter in the URL excludes your own browser. */
-  var gcOn = /\.github\.io$/.test(location.hostname);
+  var gcOn = /\.github\.io$/.test(location.hostname) ||
+             /(^|\.)kvetch\.io$/.test(location.hostname);
   var gcQueue = [];
   function ctEvent(name) {
     if (!gcOn) return;
@@ -798,16 +802,53 @@
       window.goatcounter.count({ path: name, event: true });
     else gcQueue.push(name);
   }
+
+  /* ---- Tower roster (Cloudflare Worker + KV) ------------------------
+   * Where GoatCounter counts anonymous aggregates, the roster keeps one
+   * record PER TOWER, keyed by a random per-browser player id + the
+   * slot name; partial state reports merge server-side.
+   * Roster page: https://conciliatower-roster.jonahss.workers.dev/
+   * Same public-site gate as GoatCounter; fire-and-forget, no cookies,
+   * nothing identifying beyond the self-minted random id. */
+  var ROSTER = 'https://conciliatower-roster.jonahss.workers.dev/report';
+  function ctPid() {
+    var id = null;
+    try { id = localStorage.getItem('ct-pid'); } catch (e) {}
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem('ct-pid', id); } catch (e) {}
+    }
+    return id;
+  }
+  function ctRoster(patch) {
+    if (!gcOn) return;
+    patch.k = ctPid() + '/' + (currentSlot || DEFAULT_SLOT);
+    try {
+      /* String body = a CORS "simple request" — no preflight needed. */
+      fetch(ROSTER, { method: 'POST', body: JSON.stringify(patch),
+                      mode: 'cors', keepalive: true })
+        .catch(function () {});
+    } catch (e) {}
+  }
+
   /* Engine hook: game.c notify_star_up() reports each star promotion
    * with the tower-day it landed, so the dashboard can chart the
    * star funnel (filter "star-") and when stars are typically hit. */
   window.ctStarEvent = function (star, day) {
     ctEvent('star-' + (star >= 6 ? 'tower' : star) + '/d' + day);
+    ctRoster({ s: star, d: day });
   };
   /* Engine hook: population peak crossing a milestone (game.c
    * notify_pop_milestones) — filter "pop-" for the growth funnel. */
   window.ctPopEvent = function (pop, day) {
     ctEvent('pop-' + pop + '/d' + day);
+    ctRoster({ p: pop, d: day });
+  };
+  /* Engine hook: complete state snapshot at each in-game dawn (game.c
+   * notify_day_report, the 4:59AM settle tick) — keeps the roster live
+   * through long sessions. */
+  window.ctDayEvent = function (day, pop, star, money) {
+    ctRoster({ n: currentSlot, d: day, p: pop, s: star, m: money });
   };
   if (gcOn) {
     var gcs = document.createElement('script');
@@ -852,6 +893,12 @@
   startBtn.addEventListener('click', function () {
     if (!exeBytes) return;
     ctEvent('play');
+    /* Roster login: report this tower's saved vitals (fresh slots and
+     * staged imports have no readable save yet — name-only is fine). */
+    var rm = slotExists(currentSlot) ? slotMeta(currentSlot) : null;
+    ctRoster(rm && rm.exact
+      ? { n: currentSlot, d: rm.day, p: rm.pop, s: rm.stars, m: rm.money }
+      : { n: currentSlot });
     var boot = function () {
       FS.writeFile('/SIMTOWER.EXE', exeBytes);
       var args = ['/SIMTOWER.EXE', '--save=' + slotPath(currentSlot)];

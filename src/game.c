@@ -56,6 +56,21 @@ static void notify_pop_milestones(const Tower *tower, int peak)
 #endif
 }
 
+/* Tower-roster snapshot for the web shell (Worker + KV): one complete
+ * vitals report per in-game day, at the 4:59AM settle tick, so the
+ * public roster stays live through long sessions. Money rides as a
+ * double — it can outgrow EM_ASM's int32 default. No-op native. */
+static void notify_day_report(const Tower *tower)
+{
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ if (window.ctDayEvent) window.ctDayEvent($0, $1, $2, $3); },
+           tower->day, tower->population, tower->star_rating,
+           (double)tower->money);
+#else
+    (void)tower;
+#endif
+}
+
 /* 0xB92C. The EXE saves this flag; the port keeps it file-static to
  * leave the v16 save layout untouched — after a load the gate simply
  * re-verifies at the next 5:58 AM stage call (worst case a promotion
@@ -1826,6 +1841,7 @@ void game_update(GameSim *sim, Tower *tower)
     /* THE 4:59AM ROW (TimeT ft 0x9E5 = 2533): the daily judge and the
      * finance settlement — the EXE's dawn bookkeeping tick. */
     if (tick_in_day == FT_DAILY_SETTLE) {
+            notify_day_report(tower);
             /* THE DAILY JUDGE (JudgeTenant tail, 4:59AM): categorize
              * offices/condos/shops and re-arm any vacant unit whose
              * verdict climbed off stressed — this is the whole rental
