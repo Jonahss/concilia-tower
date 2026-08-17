@@ -28,6 +28,16 @@ const STUB = `<!doctype html>
   a { color: #7fa7dd; text-decoration: none; }
   a:hover { text-decoration: underline; }
   ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  .news { margin-top: 44px; }
+  .news p { margin-bottom: 12px; font-size: 15px; }
+  .news form { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .news input { font: 15px/1.4 system-ui, sans-serif; padding: 9px 12px;
+    min-width: 15rem; background: #161a24; color: #eef2fa;
+    border: 1px solid #2a3040; border-radius: 6px; }
+  .news button { font: 600 15px/1.4 system-ui, sans-serif; padding: 9px 18px;
+    background: #7fa7dd; color: #10131a; border: 0; border-radius: 6px;
+    cursor: pointer; }
+  .news button:hover { background: #9dbde8; }
 </style></head><body><main>
   <h1>kvetch.io</h1>
   <p>Jonah's corner of the internet — proper site coming.</p>
@@ -35,6 +45,16 @@ const STUB = `<!doctype html>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
     <li><a href="https://github.com/Jonahss">GitHub</a></li>
   </ul>
+  <div class="news">
+    <p>Occasional emails when something new happens — same list as
+       <a href="https://www.wyldcard.io">Wyldcard</a>.</p>
+    <form action="https://buttondown.com/api/emails/embed-subscribe/wyldcard"
+          method="post">
+      <input type="email" name="email" placeholder="you@example.com"
+             aria-label="Email address" required>
+      <button type="submit">Sign up</button>
+    </form>
+  </div>
 </main></body></html>`;
 
 export default {
