@@ -1853,10 +1853,14 @@ static void render_tower(void)
                 if (frame_idx >= nframes) frame_idx = nframes - 1;
                 if (frame_idx < 0) frame_idx = 0;
                 
-                /* Cathedral: frame 1 is the lit night version */
+                /* Cathedral: frame 1 is the dark night version — but the
+                 * ceremony composite is a SINGLE frame, so asking it for
+                 * frame 1 blits nothing (the vanishing cathedral Jonah
+                 * hit on wedding evening, 2026-08-17). */
                 if (tenant->type == ITEM_CATHEDRAL)
-                    frame_idx = (game.sim.time_of_day == TOD_NIGHT ||
-                                 game.sim.time_of_day == TOD_EVENING) ? 1 : 0;
+                    frame_idx = (!game.sim.wedding.active &&
+                                 (game.sim.time_of_day == TOD_NIGHT ||
+                                  game.sim.time_of_day == TOD_EVENING)) ? 1 : 0;
 
                 /* Under construction: draw the dark construction-grid floor
                  * (0x8E28, one floor tall, tileable) instead of the finished
