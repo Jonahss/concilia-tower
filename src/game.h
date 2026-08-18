@@ -664,16 +664,19 @@ typedef struct {
     /* Game mode: 0 = Campaign (star-gated unlocks), 1 = Sandbox (all unlocked) */
     int           mode;
 
-    /* --- TOWER wedding ceremony (ChurchT: OpenChurch/StartMarry/
-     * CheckMarry) --- The 5-star -> TOWER promotion is a special event,
-     * not the daily star check (LevelUp 5->T always returns 0): once a
-     * 5-star tower reaches 15,000 population with a cathedral built and
-     * a satisfied VIP visit, the wedding is held the next day. While
-     * active the cathedral shows the ceremony art (cherubs + "Welcome
-     * to Tower" banner) and the procession walks the entrance floor;
-     * at the following dawn the tower is crowned TOWER (star 6). */
+    /* --- TOWER wedding ceremony (ChurchT: OpenChurch/InChurchPeple/
+     * StartMarry/CheckMarry/CloseChurch, byte-verified seg_1040) ---
+     * The 5-star -> TOWER promotion is a special event, not the daily
+     * star check (LevelUp 5->T always returns 0). The EXE's script:
+     * 7AM OpenChurch summons the 40 wedding guests (they only travel
+     * on weekends); if all 40 are inside before 12:30PM and the tower
+     * qualifies (15,000 pop), StartMarry fires AT THAT MOMENT — the
+     * couple animation begins, the camera pans to the cathedral,
+     * star_rating becomes 6 (award dialog + fanfare right then), and
+     * the wedding music plays. 1PM CloseChurch sends everyone home.
+     * wed_phase/wed_counter live in the v19 tail below. */
     struct {
-        int active;          /* ceremony running today */
+        int active;          /* ceremony running (StartMarry .. 1PM) */
         int done;            /* TOWER awarded, never repeats */
         int day;             /* day the ceremony ran */
     } wedding;
@@ -792,6 +795,15 @@ typedef struct {
      * (@0047-004a) — an already-over-dug basement forfeits that tier. */
     int           treasure_found;      /* 0xB922 latch */
     int           pending_treasure;    /* payout awaiting its dialog ($) */
+
+    /* --- v19 tail: ChurchT wedding rework + promoted static --- */
+    int           wed_phase;      /* 0 idle; 1 guests summoned (morning);
+                                   * 2 ceremony running */
+    int           wed_counter;    /* AnimateWeddingCouple script counter
+                                   * (the EXE's event dword 0xB40C) */
+    int           wed_center_req; /* StartMarry camera pan, UI consumes */
+    int           recycling_adequate; /* 0xB92C (was file-static; promoted
+                                       * at the v19 bump as planned) */
 } GameSim;
 
 /* Initialize simulation */

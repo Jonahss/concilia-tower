@@ -1905,31 +1905,85 @@ static void test_wedding(void)
     sim.promo.has_cathedral = 1;
     sim.promo.vip_visited = 1;
 
-    game_wedding_daily(&sim, &tw);
-    CHECK(sim.wedding.active == 1, "eligible tower holds its wedding");
-    CHECK(tw.star_rating == 5, "still 5 stars during the ceremony");
+    uint16_t cid = fplace(ITEM_CATHEDRAL, TOWER_MAX_FLOOR, 100);
+    Tenant *cath = tenant(cid);
+    cath->state = TENANT_OCCUPIED;
+    while (game_is_weekend(&tw) == 0) tw.day++;   /* guests travel WE only */
 
-    game_wedding_daily(&sim, &tw);
-    CHECK(sim.wedding.active == 0 && sim.wedding.done == 1,
-          "ceremony ends the next dawn");
-    CHECK(tw.star_rating == 6, "tower crowned TOWER (star 6)");
+    /* 7AM OpenChurch: the summon */
+    sim.hour = 7;
+    game_venue_hourly(&sim, &tw);
+    CHECK(cath->venue_state == 1 && sim.wed_phase == 1 &&
+          cath->quota_evening == 40, "7AM weekend summon opens the church");
+    CHECK(tw.star_rating == 5, "still 5 stars while the guests travel");
 
-    game_wedding_daily(&sim, &tw);
-    CHECK(tw.star_rating == 6 && !sim.wedding.active,
+    /* 39 arrivals: no ceremony yet */
+    sim.hour = 11; sim.minute = 0;
+    for (int a = 0; a < 39; a++) {
+        sim.people.venue_arrivals = 1;
+        sim.people.venue_arrival_tenant[0] = cid;
+        game_venue_arrivals(&sim, &tw);
+    }
+    CHECK(!sim.wedding.active && cath->patrons_today == 39,
+          "39 guests inside: no ceremony yet");
+
+    /* the 40th guest walks in -> StartMarry crowns AT the ceremony */
+    sim.people.venue_arrivals = 1;
+    sim.people.venue_arrival_tenant[0] = cid;
+    game_venue_arrivals(&sim, &tw);
+    CHECK(sim.wedding.active == 1 && sim.wed_phase == 2,
+          "the 40th guest starts the ceremony");
+    CHECK(tw.star_rating == 6 && sim.pending_star_up == 6 &&
+          sim.wedding.done == 1,
+          "TOWER crowned DURING the wedding (StartMarry, not next dawn)");
+
+    /* 1PM CloseChurch ends it */
+    sim.hour = 13;
+    game_venue_hourly(&sim, &tw);
+    CHECK(!sim.wedding.active && cath->venue_state == 0 &&
+          sim.wed_phase == 0, "1PM CloseChurch ends the event");
+
+    /* never repeats */
+    sim.hour = 7;
+    game_venue_hourly(&sim, &tw);
+    CHECK(cath->venue_state == 0 && tw.star_rating == 6,
           "wedding never repeats");
 
     /* requirements are real requirements */
     fresh();
     tw.star_rating = 5;
     tw.population = 15000; sim.standing_population = 15000;
-    sim.promo.has_cathedral = 0;           /* no venue */
-    sim.promo.vip_visited = 1;
-    game_wedding_daily(&sim, &tw);
-    CHECK(!sim.wedding.active, "no cathedral, no wedding");
+    sim.promo.has_cathedral = 1;
+    uint16_t cid2 = fplace(ITEM_CATHEDRAL, TOWER_MAX_FLOOR, 100);
+    Tenant *cath2 = tenant(cid2);
+    cath2->state = TENANT_OCCUPIED;
+    while (game_is_weekend(&tw) == 0) tw.day++;
+
+    sim.promo.has_cathedral = 0;           /* no venue flag */
+    sim.hour = 7; game_venue_hourly(&sim, &tw);
+    CHECK(cath2->venue_state == 0, "no cathedral flag, no wedding");
     sim.promo.has_cathedral = 1;
     tw.population = 14999; sim.standing_population = 14999;
-    game_wedding_daily(&sim, &tw);
-    CHECK(!sim.wedding.active, "below 15,000 population, no wedding");
+    game_venue_hourly(&sim, &tw);
+    CHECK(cath2->venue_state == 0, "below 15,000 population, no wedding");
+    sim.standing_population = 15000;
+    tw.day++;                              /* a weekday */
+    while (game_is_weekend(&tw)) tw.day++;
+    game_venue_hourly(&sim, &tw);
+    CHECK(cath2->venue_state == 0,
+          "weekday: the summoned guests never travel, no event");
+
+    /* the 12:30 deadline: late arrivals hold no ceremony */
+    while (game_is_weekend(&tw) == 0) tw.day++;
+    game_venue_hourly(&sim, &tw);
+    CHECK(cath2->venue_state == 1, "back on a weekend the church reopens");
+    cath2->patrons_today = 39;
+    sim.hour = 12; sim.minute = 45;
+    sim.people.venue_arrivals = 1;
+    sim.people.venue_arrival_tenant[0] = cid2;
+    game_venue_arrivals(&sim, &tw);
+    CHECK(!sim.wedding.active && cath2->patrons_today == 40,
+          "a guest after 12:30 completes the flock but starts nothing");
 }
 
 /* The retail patron economy (Restaurant.c seg_11a8 + MoneyT 1178:126c,
@@ -3585,10 +3639,10 @@ static void write_v14_save(const char *path, const GameSim *s, const Tower *t)
     FILE *f = fopen(path, "wb");
     if (!f) return;
     static const unsigned char zeros[140];
-    /* v14 predates the v18 treasure tail too — its GameSim is the
-     * current one minus treasure_found/pending_treasure, plus the v15
-     * dead padding. */
-    size_t gs14 = sizeof(GameSim) - 2 * sizeof(int);
+    /* v14 predates the v18 treasure tail and the v19 wedding tail —
+     * its GameSim is the current one minus those six ints, plus the
+     * v15 dead padding. */
+    size_t gs14 = sizeof(GameSim) - 6 * sizeof(int);
     uint32_t hdr[5] = { 0x52575443u, 14u,
                         (uint32_t)(sizeof(Tower) + MAX_TENANTS * 8u),
                         (uint32_t)(gs14 + 144u),

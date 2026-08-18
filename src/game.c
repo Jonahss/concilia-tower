@@ -71,12 +71,6 @@ static void notify_day_report(const Tower *tower)
 #endif
 }
 
-/* 0xB92C. The EXE saves this flag; the port keeps it file-static to
- * leave the v16 save layout untouched — after a load the gate simply
- * re-verifies at the next 5:58 AM stage call (worst case a promotion
- * waits a day). Promote into GameSim at the next SAVE_VERSION bump. */
-static int g_recycling_adequate;
-
 /* Forward declarations */
 static int calc_lobby_maintenance(Tower *tower);
 
@@ -339,7 +333,7 @@ static void scan_promotion_flags(GameSim *sim, Tower *tower)
      * stage-5 call is the end-of-day capacity verdict); the promo scan
      * just reads it, like medical. */
     (void)recycling_centers;
-    sim->promo.recycling_adequate = g_recycling_adequate;
+    sim->promo.recycling_adequate = sim->recycling_adequate;
 
     /* 0xB92D lives on the sim (armed 7AM, cleared by the no-center path);
      * the scan just mirrors it into the flag bank */
@@ -484,28 +478,46 @@ void game_parking_nag_daily(GameSim *sim, Tower *tower)
  * the tower; a newly-eligible tower holds its wedding today. */
 void game_wedding_daily(GameSim *sim, Tower *tower)
 {
-    if (sim->wedding.active) {
-        sim->wedding.active = 0;
-        sim->wedding.done = 1;
-        tower->star_rating = 6;
-        sim->pending_star_up = 6;
-        notify_star_up(tower, 6);
-        sim->vip_satisfied = 0;   /* ceremonies clear [0xB923] (1148:004f) */
-        printf("\xf0\x9f\x92\x92 The wedding is over — "
-               "WELCOME TO TOWER! \xf0\x9f\x8f\x86\n");
-    } else if (!sim->wedding.done && tower->star_rating == 5 &&
-               sim->standing_population >= STAR_POP_THRESHOLD[5] &&
-               /* No VIP condition: [0xB923]'s only gameplay reader is the
-                * 3->4 gate (VIP-topology referee 2026-08-03, full caller
-                * census — no ChurchT reader exists; and the flag clears at
-                * every ceremony, so requiring it here would make TOWER
-                * unreachable). */
-               sim->promo.has_cathedral) {
-        sim->wedding.active = 1;
-        sim->wedding.day = tower->day;
-        printf("\xf0\x9f\x92\x92 A wedding is being held at the "
-               "cathedral today! (Day %d)\n", tower->day);
-    }
+    (void)tower;
+    /* Dawn housekeeping only. The crown moved to game_wedding_start —
+     * the EXE promotes DURING the ceremony (StartMarry 1040:02B5 calls
+     * 1140:00A8: star_rating <- 6 mid-wedding, dialog + fanfare right
+     * then), not at the next dawn as this function used to. */
+    sim->wedding.active = 0;
+    sim->wed_phase = 0;
+    sim->wed_counter = 0;
+}
+
+/* CheckMarry (1040:03BB): would today's ceremony crown the tower?
+ * The EXE tests level_calc_star() > star_rating; at star 5 that is the
+ * 15,000-population line (plus the cathedral that hosts the event).
+ * No VIP condition: [0xB923]'s only gameplay reader is the 3->4 gate
+ * (VIP-topology referee 2026-08-03 — no ChurchT reader exists). */
+static int game_wedding_eligible(const GameSim *sim, const Tower *tower)
+{
+    return !sim->wedding.done && tower->star_rating == 5 &&
+           sim->standing_population >= STAR_POP_THRESHOLD[5] &&
+           sim->promo.has_cathedral;
+}
+
+/* StartMarry (1040:02B5), fired by the 40th guest walking in: couple
+ * animation starts, camera pans to the cathedral, and the tower is
+ * crowned TOWER on the spot — award dialog, fanfare, wedding music. */
+static void game_wedding_start(GameSim *sim, Tower *tower)
+{
+    sim->wedding.active = 1;
+    sim->wedding.day = tower->day;
+    sim->wed_phase = 2;
+    sim->wed_counter = 0;
+    sim->wed_center_req = 1;
+    sim->wedding.done = 1;
+    tower->star_rating = 6;
+    sim->pending_star_up = 6;
+    notify_star_up(tower, 6);
+    sim->vip_satisfied = 0;   /* ceremonies clear [0xB923] (1148:004f) */
+    printf("\xf0\x9f\x92\x92 All 40 guests are inside — the wedding "
+           "begins. WELCOME TO TOWER! \xf0\x9f\x8f\x86 (Day %d)\n",
+           tower->day);
 }
 
 /* The 3->4 and 4->5 branches of levelup_check also gate on the CLOCK:
@@ -1241,12 +1253,12 @@ static void game_trash_fill(GameSim *sim, Tower *tower, int stage)
 {
     if (tower->star_rating <= 2) return;
     int centers = trash_center_count(tower);
-    if (centers == 0) { g_recycling_adequate = 0; return; }
+    if (centers == 0) { sim->recycling_adequate = 0; return; }
     int required = trash_required_level(tower, centers);
     int level, adequate;
     if (stage < required) { level = stage; adequate = 0; }
     else                  { level = required; adequate = 1; }
-    g_recycling_adequate = adequate;
+    sim->recycling_adequate = adequate;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_RECYCLING) continue;
@@ -1263,12 +1275,12 @@ static void game_trash_fill(GameSim *sim, Tower *tower, int stage)
 static void game_trash_collect(GameSim *sim, Tower *tower)
 {
     if (tower->star_rating <= 2) return;
-    if (trash_center_count(tower) == 0) { g_recycling_adequate = 0; return; }
+    if (trash_center_count(tower) == 0) { sim->recycling_adequate = 0; return; }
     int any = 0;
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
         if (t->type != ITEM_RECYCLING) continue;
-        if (t->fill_state != 0 && g_recycling_adequate) {
+        if (t->fill_state != 0 && sim->recycling_adequate) {
             t->fill_state = 6;
             any = 1;
         }
@@ -1621,6 +1633,13 @@ void game_update(GameSim *sim, Tower *tower)
     sim->ticks_per_quarter = GAME_TICKS_PER_QUARTER;
     sim->frame++;
     sim->tick++;
+
+    /* AnimateWeddingCouple's clock (1028:17F0): the script counter
+     * advances a step at a time — <14 the two walk in from the ends,
+     * <19 the ceremony frames, then the held pose until CloseChurch. */
+    if (sim->wedding.active && sim->wed_counter < 1000 &&
+        sim->frame % 20 == 0)
+        sim->wed_counter++;
 
     /* (The old frame-derived recycling truck-sound cycle is gone: the
      * TrashT schedule below owns the real 7:00 AM collection.) */
@@ -2817,13 +2836,39 @@ void game_venue_hourly(GameSim *sim, Tower *tower)
 {
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
-        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL) continue;
+        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL &&
+            t->type != ITEM_CATHEDRAL) continue;
         if (t->state == TENANT_EMPTY || t->state == TENANT_CONSTRUCTION ||
             t->state == TENANT_ABANDONED) continue;
         /* .TDT cinemas import as TWO strips (24-cell hall + 7-cell
          * entrance, both ITEM_CINEMA) — only the hall runs the show,
          * or an imported theater would sell every ticket twice. */
         if (t->type == ITEM_CINEMA && t->width < 20) continue;
+
+        /* Cathedral = the wedding venue (ChurchT). 7AM OpenChurch
+         * summons the 40 guests; the EXE summons daily but summoned
+         * sims only travel on weekends (UniPeple gate 1220:5fa5), so
+         * the observable summon is weekend-only. 1PM CloseChurch ends
+         * the event whether or not the ceremony fired. */
+        if (t->type == ITEM_CATHEDRAL) {
+            if (sim->hour == 7 && game_is_weekend(tower) &&
+                game_wedding_eligible(sim, tower) && t->venue_state == 0) {
+                t->patrons_today = 0;
+                t->quota_matinee = 0;
+                t->quota_evening = 40;        /* 8 guests x 5 sections */
+                t->venue_state = 1;
+                sim->wed_phase = 1;
+                printf("\xf0\x9f\x92\x92 Wedding guests are on their "
+                       "way to the cathedral. (Day %d)\n", tower->day);
+            } else if (sim->hour == 13 && t->venue_state != 0) {
+                t->venue_state = 0;
+                t->quota_evening = 0;
+                sim->wedding.active = 0;      /* ceremony (if any) ends */
+                sim->wed_phase = 0;
+                people_venue_dismiss(&sim->people, tower, t->id);
+            }
+            continue;
+        }
         int is_movie = t->type == ITEM_CINEMA;
 
         switch (sim->hour) {
@@ -2898,11 +2943,20 @@ void game_venue_arrivals(GameSim *sim, Tower *tower)
     for (int a = 0; a < sim->people.venue_arrivals; a++) {
         Tenant *t = tower_tenant(tower, sim->people.venue_arrival_tenant[a]);
         if (!t) continue;
-        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL) continue;
+        if (t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL &&
+            t->type != ITEM_CATHEDRAL) continue;
         int cap = t->quota_matinee + t->quota_evening;
         if (t->venue_state >= 1 && t->patrons_today < cap) {
             t->patrons_today++;
             if (t->venue_state == 1) t->venue_state = 2;
+            /* InChurchPeple (1040:00F0): the ceremony fires the moment
+             * the LAST of the 40 guests walks in — but only before the
+             * EXE's ft 0x320 = 12:30 PM deadline. A short congregation
+             * means no wedding today; everyone goes home at 1 PM. */
+            if (t->type == ITEM_CATHEDRAL && sim->wed_phase == 1 &&
+                t->patrons_today >= 40 &&
+                (sim->hour < 12 || (sim->hour == 12 && sim->minute < 30)))
+                game_wedding_start(sim, tower);
         }
     }
     sim->people.venue_arrivals = 0;
@@ -4085,7 +4139,11 @@ void game_update_santa(GameSim *sim)
  * Struct layout drift is caught by the size fields. (.TWR import from
  * the original's FileT format is a separate, future milestone.) */
 #define SAVE_MAGIC   0x52575443u    /* "CTWR" */
-#define SAVE_VERSION 18u  /* v18: buried treasure (GameSim.treasure_found +
+#define SAVE_VERSION 19u  /* v19: ChurchT wedding rework tail (wed_phase/
+                             wed_counter/wed_center_req) + recycling_adequate
+                             promoted from a file-static; older saves load
+                             with the short read, new fields zeroed.
+                             v18: buried treasure (GameSim.treasure_found +
                              pending_treasure appended; v17/v16 saves load
                              with the short read and the latch seeded from
                              the ceremony rule, like the EXE re-seeds it).
@@ -4180,7 +4238,8 @@ _Static_assert(offsetof(GameSim, hotel_pass_day) == 1592,
 
 static int load_v15_blobs(FILE *f, GameSim *sim, Tower *tower)
 {
-    size_t gs17 = sizeof(GameSim) - 2 * sizeof(int);  /* pre-treasure tail */
+    size_t gs17 = sizeof(GameSim) - 6 * sizeof(int);  /* pre-treasure AND
+                                                         pre-v19 tails */
     size_t old_tw = sizeof(Tower) + (size_t)MAX_TENANTS * V15_TENANT_EXTRA;
     size_t old_gs = gs17 + V15_GS_EXTRA;
     unsigned char *buf = malloc(old_tw > old_gs ? old_tw : old_gs);
@@ -4274,18 +4333,27 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
     uint32_t hdr[5];
     int ok = fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == SAVE_MAGIC;
     int legacy = 0;
-    /* v18 appended two ints to GameSim's tail; v17/v16 saves are the
-     * same layout minus that tail (short-read below, then seed). */
-    size_t v17_gs = sizeof(GameSim) - 2 * sizeof(int);
-    int pre18 = 0;
+    /* Tail history: v18 appended 2 ints (treasure), v19 appended 4 more
+     * (wedding rework + promoted recycling flag). Older saves are the
+     * same layout minus their missing tail (short-read, then seed). */
+    size_t v18_gs = sizeof(GameSim) - 4 * sizeof(int);
+    size_t v17_gs = v18_gs - 2 * sizeof(int);
+    size_t read_gs = sizeof(GameSim);
+    int pre18 = 0, pre19 = 0;
     if (ok) {
         if (hdr[1] == SAVE_VERSION) {
             ok = hdr[2] == sizeof(Tower) && hdr[3] == sizeof(GameSim) &&
                  hdr[4] == sizeof(Tuning);
+        } else if (hdr[1] == 18u) {
+            pre19 = 1;
+            read_gs = v18_gs;
+            ok = hdr[2] == sizeof(Tower) && hdr[3] == v18_gs &&
+                 hdr[4] == sizeof(Tuning);
         } else if (hdr[1] == 17u || hdr[1] == 16u) {
             /* v17/v16 = v18 layout minus the treasure tail; v16 also has
              * the 1-based day (migrated below) */
-            pre18 = 1;
+            pre18 = pre19 = 1;
+            read_gs = v17_gs;
             ok = hdr[2] == sizeof(Tower) && hdr[3] == v17_gs &&
                  hdr[4] == sizeof(Tuning);
         } else if (hdr[1] == 15u || hdr[1] == 14u) {
@@ -4302,7 +4370,7 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
             ok = load_v15_blobs(f, sim, tower);
         else
             ok = fread(tower, sizeof(*tower), 1, f) == 1 &&
-                 fread(sim, pre18 ? v17_gs : sizeof(*sim), 1, f) == 1;
+                 fread(sim, read_gs, 1, f) == 1;
         ok = ok && fread(&TUNING, sizeof(TUNING), 1, f) == 1;
         /* Pre-v18 saves carry no treasure latch: seed it the way the EXE's
          * ceremony does (@0047) — condition(current star). An already
@@ -4311,6 +4379,15 @@ int game_load(GameSim *sim, Tower *tower, const char *path)
             sim->pending_treasure = 0;
             sim->treasure_found =
                 game_treasure_condition(tower, tower->star_rating);
+        }
+        /* Pre-v19: zero the wedding-rework tail; the recycling verdict
+         * re-establishes at the next trash stage (same as the old
+         * file-static did after every load). */
+        if (ok && (pre19 || legacy)) {
+            sim->wed_phase = 0;
+            sim->wed_counter = 0;
+            sim->wed_center_req = 0;
+            sim->recycling_adequate = 0;
         }
     }
     fclose(f);

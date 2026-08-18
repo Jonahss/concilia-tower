@@ -1627,7 +1627,8 @@ static void trip_arrived(PeopleSim *ps, Tower *tower, Person *p, int frame)
     }
     /* A patron at the box office — the venue pass counts attendance */
     if (t && !p->going_home &&
-        (t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL) &&
+        (t->type == ITEM_CINEMA || t->type == ITEM_PARTY_HALL ||
+         t->type == ITEM_CATHEDRAL) &&
         ps->venue_arrivals < (int)(sizeof ps->venue_arrival_tenant /
                                    sizeof ps->venue_arrival_tenant[0]))
         ps->venue_arrival_tenant[ps->venue_arrivals++] = p->home_tenant;
@@ -2624,6 +2625,11 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
              * dropped them: no crowd frame, no party income, ever. */
             show_cap = (tod == TOD_AFTERNOON && ps->ft_in_day >= 1200)
                            ? t->quota_evening : 0;
+        else if (t->type == ITEM_CATHEDRAL)
+            /* The 40 wedding guests, summoned by OpenChurch at 7AM on an
+             * eligible weekend (game_venue_hourly opens the venue); the
+             * pump trickles them in through the morning like any crowd. */
+            show_cap = t->venue_state >= 1 ? t->quota_evening : 0;
         int patron = show_cap > 0;
         /* Maids (MainteT, referee 2026-08-07): six permanent staff per
          * unit, pumped every 16 ticks like the EXE's 1/16 person LOD.
@@ -2715,7 +2721,11 @@ static void spawn_phase(PeopleSim *ps, Tower *tower, int frame, int tod,
             if (condo_in)   /* the classifier's fixed family slots */
                 ps->people[sp - 1].member = (tod == TOD_AFTERNOON) ? 2 : 0;
             if (patron)
-                ps->people[sp - 1].stay = (uint8_t)(6 + (i * 5) % 18);
+                /* Wedding guests hold their pews until the 1PM
+                 * CloseChurch dismissal (long-stay backstop only). */
+                ps->people[sp - 1].stay =
+                    t->type == ITEM_CATHEDRAL ? 200
+                                              : (uint8_t)(6 + (i * 5) % 18);
             if (walkin) {
                 ps->people[sp - 1].stay = (uint8_t)(8 + (i * 5) % 12);
                 /* The EXE counts walk-ins at DISPATCH (quota gate
@@ -2891,6 +2901,28 @@ void people_medical_dispatch(PeopleSim *ps, Tower *tower,
         p->dest_floor = (uint8_t)cfx;
         p->state = PERSON_PLANNING;
         return;
+    }
+}
+
+/* CloseChurch's people half (1040:0179): every guest of the venue who
+ * is inside (or still inbound) turns for home. */
+void people_venue_dismiss(PeopleSim *ps, Tower *tower, uint16_t tenant_id)
+{
+    (void)tower;
+    for (int i = 0; i < ps->people_high; i++) {
+        Person *p = &ps->people[i];
+        if (p->home_tenant != tenant_id || p->going_home) continue;
+        if (p->state != PERSON_AT_DEST && p->state != PERSON_PLANNING &&
+            p->state != PERSON_WALKING && p->state != PERSON_QUEUED &&
+            p->state != PERSON_RIDING) continue;
+        p->stay = 0;
+        if (p->state == PERSON_AT_DEST) {
+            p->going_home = 1;
+            p->dest_floor = p->entry_floor;
+            p->state = PERSON_PLANNING;
+        } else {
+            p->stay = 1;   /* inbound: turn around on arrival, quickly */
+        }
     }
 }
 

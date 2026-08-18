@@ -5598,28 +5598,40 @@ static void render_crane(void)
         SDL_RenderCopy(game.renderer, game.crane->texture, NULL, &crane_dst);
     }
 
-    /* Wedding procession: bride, groom and guests walk the cathedral's
-     * entrance floor through the morning and stand for the ceremony. */
+    /* The wedding couple — AnimateWeddingCouple's script verbatim
+     * (1028:17F0, counter = the event dword 0xB40C): counter < 14, the
+     * bride (frame 0) walks in from cell 0 while the groom (frame 1)
+     * walks from cell 27; they meet at cell 13, play ceremony frames
+     * 2-6, then hold frame 7 until CloseChurch. The 0x8828 sheet is
+     * eight 16px cells. The old drawn-out procession line standing at
+     * the door all day was a port invention (Jonah's report). */
     if (game.sim.wedding.active) {
-        Sprite *proc = sprites_find(&game.sprites, 0x8828);
+        Sprite *sheet = sprites_find(&game.sprites, SPR_WEDDING_ANIM);
         const Tenant *cath = NULL;
         for (int i = 0; i < game.tower.tenant_count; i++)
             if (game.tower.tenants[i].type == ITEM_CATHEDRAL) {
                 cath = &game.tower.tenants[i];
                 break;
             }
-        if (proc && cath) {
-            int minutes = (game.sim.hour - 7) * 60 + game.sim.minute;
-            float walk = minutes / 240.0f;          /* arrive by 11am */
-            if (walk < 0.0f) walk = 0.0f;
-            if (walk > 1.0f) walk = 1.0f;
-            int door_x = cath->x * CELL_W + (cath->width * CELL_W - proc->w) / 2;
-            int start_x = cath->x * CELL_W - proc->w - 80;
-            int wx = start_x + (int)((door_x - start_x) * walk);
+        if (sheet && cath) {
+            int fw = sheet->w / 8;
+            int c = game.sim.wed_counter;
             int tx, ty;
-            grid_to_screen(cath->floor, 0, &tx, &ty);
-            SDL_Rect dst = { tx + wx, ty, proc->w, CELL_H };
-            SDL_RenderCopy(game.renderer, proc->texture, NULL, &dst);
+            grid_to_screen(cath->floor, cath->x, &tx, &ty);
+            int by = ty + CELL_H - sheet->h;   /* feet on the floor */
+            if (c < 14) {
+                SDL_Rect s0 = { 0, 0, fw, sheet->h };
+                SDL_Rect d0 = { tx + c * CELL_W, by, fw, sheet->h };
+                SDL_RenderCopy(game.renderer, sheet->texture, &s0, &d0);
+                SDL_Rect s1 = { fw, 0, fw, sheet->h };
+                SDL_Rect d1 = { tx + (27 - c) * CELL_W, by, fw, sheet->h };
+                SDL_RenderCopy(game.renderer, sheet->texture, &s1, &d1);
+            } else {
+                int f = c < 19 ? c - 12 : 7;   /* 2..6, then the held pose */
+                SDL_Rect s = { f * fw, 0, fw, sheet->h };
+                SDL_Rect d = { tx + 13 * CELL_W, by, fw, sheet->h };
+                SDL_RenderCopy(game.renderer, sheet->texture, &s, &d);
+            }
         }
     }
 }
@@ -10813,8 +10825,11 @@ int main(int argc, char *argv[])
         game.cam_fx = atof(getenv("CT_CAM_X")) * CELL_W;
     if (getenv("CT_MAP_MODE"))
         game.map_mode = atoi(getenv("CT_MAP_MODE")) & 3;
-    if (getenv("CT_WEDDING"))          /* demo: run the TOWER ceremony */
+    if (getenv("CT_WEDDING")) {        /* demo: run the TOWER ceremony */
         game.sim.wedding.active = 1;
+        game.sim.wed_phase = 2;
+        game.sim.wed_counter = atoi(getenv("CT_WEDDING"));
+    }
     if (getenv("CT_FIRE")) {           /* demo: force a fire (arg = floor) —
                                         * goes through StartFire's real gates
                                         * (star>2, security, no cathedral),
@@ -11318,6 +11333,20 @@ int main(int argc, char *argv[])
                           "$^000", num);
                 show_notice_modal(line, exe_dlg_text(0xBE0, 0, "Wow!"));
                 game.sim.pending_treasure = 0;
+            }
+
+            /* StartMarry's camera pan (1040:02B5 CenterCameraOn):
+             * consume before the award dialog so the crowd is on
+             * screen when the Congratulations card opens. */
+            if (game.sim.wed_center_req) {
+                game.sim.wed_center_req = 0;
+                for (int i = 0; i < game.tower.tenant_count; i++) {
+                    const Tenant *ct = &game.tower.tenants[i];
+                    if (ct->type != ITEM_CATHEDRAL) continue;
+                    find_center_camera(floor_to_index(ct->floor),
+                                       ct->x + ct->width / 2);
+                    break;
+                }
             }
 
             if (game.sim.pending_star_up) {

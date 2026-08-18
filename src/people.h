@@ -372,6 +372,7 @@ int people_nearest_transport(PeopleSim *ps, Tower *tower, int from_fidx,
 
 /* Sick office worker -> medical center round-trip (statuses 2/0x42/
  * 0x23/0x63): called by the star>=3 sick roll once a center admits. */
+void people_venue_dismiss(PeopleSim *ps, Tower *tower, uint16_t tenant_id);
 void people_medical_dispatch(PeopleSim *ps, Tower *tower,
                              int office_floor, int center_floor);
 
