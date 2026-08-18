@@ -7073,6 +7073,20 @@ static void draw_field31_text(SDL_Rect r, const char *s, SDL_Color c)
     }
 }
 
+/* Field label: right-aligned inside its template rect and vertically
+ * centered on the ADJACENT field row (labels rects are 16 tall against
+ * 18-tall fields offset by -2px in the DTMP — centering on the rect
+ * alone leaves the text riding high; Jonah 2026-08-17). */
+static void draw_label31(SDL_Rect r, const char *s, SDL_Color c)
+{
+    int tw, th;
+    SDL_Texture *t = render_text(s, c, &tw, &th);
+    if (!t) return;
+    SDL_Rect d = { r.x + r.w - tw - 4, r.y + (r.h - th) / 2 + 1, tw, th };
+    SDL_RenderCopy(game.renderer, t, NULL, &d);
+    SDL_DestroyTexture(t);
+}
+
 /* Win3.1 push button: black border, double bevel, default ring. */
 static void draw_btn31(SDL_Rect r, const char *label, int is_default, int enabled)
 {
@@ -7635,11 +7649,11 @@ static void render_inspect_popup(void)
                    : 10;                                  /* hotels */
         SDL_Rect lr = TIABS(ti_item(L.tp, lbl_id));
         if (L.has_eval) {
-            stats_label(lr.x, lr.y + 2, "Eval", ink);
+            draw_label31(lr, "Eval", ink);
             draw_eval_gauge31(g, L.eval_val, 80, L.eval_hi);
         } else {
-            stats_label(lr.x, lr.y + 2, L.cls == TI_CLS_SHOP
-                        ? "Patronage" : "Today's Patronage", ink);
+            draw_label31(lr, L.cls == TI_CLS_SHOP
+                         ? "Patronage" : "Today's Patronage", ink);
             SDL_Rect bar = { g.x, g.y, g.w - 34, g.h };
             draw_field31(bar);
             SDL_Rect fill = { bar.x + 2, bar.y + 2,
@@ -7652,43 +7666,53 @@ static void render_inspect_popup(void)
             stats_label(g.x + g.w - 28, g.y + 3, num, ink);
         }
     } else if (L.cls == TI_CLS_CINEMA) {
-        stats_label(wx + ti_item(L.tp, 11).x, wy + ti_item(L.tp, 11).y + 2,
-                    "Playing", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 11).x,
+                        wy + ti_item(L.tp, 11).y, ti_item(L.tp, 11).w,
+                        ti_item(L.tp, 11).h }, "Playing", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 6)), L.movie, ink);
     } else if (L.cls == TI_CLS_ESC || L.cls == TI_CLS_STAIR) {
-        stats_label(wx + ti_item(L.tp, 8).x, wy + ti_item(L.tp, 8).y + 2,
-                    "Now on board", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 8).x,
+                        wy + ti_item(L.tp, 8).y, ti_item(L.tp, 8).w,
+                        ti_item(L.tp, 8).h }, "Now on board", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 6)), L.val9, ink);
     }
 
     /* items 9-14: the per-class label/field rows */
     switch (L.cls) {
     case TI_CLS_OFFICE: case TI_CLS_CONDO:
-        stats_label(wx + ti_item(L.tp, 10).x, wy + ti_item(L.tp, 10).y + 2,
-                    "Length", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 10).x,
+                        wy + ti_item(L.tp, 10).y, ti_item(L.tp, 10).w,
+                        ti_item(L.tp, 10).h }, "Length", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
-        stats_label(wx + ti_item(L.tp, 11).x, wy + ti_item(L.tp, 11).y + 2,
-                    L.cls == TI_CLS_CONDO ? "Price" : "Rent", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 11).x,
+                     wy + ti_item(L.tp, 11).y, ti_item(L.tp, 11).w,
+                     ti_item(L.tp, 11).h },
+                     L.cls == TI_CLS_CONDO ? "Price" : "Rent", ink);
         break;
     case TI_CLS_HS: case TI_CLS_HT: case TI_CLS_HSU:
-        stats_label(wx + ti_item(L.tp, 9).x, wy + ti_item(L.tp, 9).y + 2,
-                    "Rate", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 9).x,
+                        wy + ti_item(L.tp, 9).y, ti_item(L.tp, 9).w,
+                        ti_item(L.tp, 9).h }, "Rate", ink);
         break;
     case TI_CLS_SHOP:
-        stats_label(wx + ti_item(L.tp, 10).x, wy + ti_item(L.tp, 10).y + 2,
-                    "Rent", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 10).x,
+                        wy + ti_item(L.tp, 10).y, ti_item(L.tp, 10).w,
+                        ti_item(L.tp, 10).h }, "Rent", ink);
         break;
     case TI_CLS_FOOD:
-        stats_label(wx + ti_item(L.tp, 12).x, wy + ti_item(L.tp, 12).y + 2,
-                    "Yesterday's Profit", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 12).x,
+                        wy + ti_item(L.tp, 12).y, ti_item(L.tp, 12).w,
+                        ti_item(L.tp, 12).h }, "Yesterday's Profit", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
         break;
     case TI_CLS_CINEMA:
-        stats_label(wx + ti_item(L.tp, 12).x, wy + ti_item(L.tp, 12).y + 2,
-                    "Today's Income", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 12).x,
+                        wy + ti_item(L.tp, 12).y, ti_item(L.tp, 12).w,
+                        ti_item(L.tp, 12).h }, "Today's Income", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 10)), L.val10, ink);
-        stats_label(wx + ti_item(L.tp, 14).x, wy + ti_item(L.tp, 14).y + 2,
-                    "Length of Showing", ink);
+        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 14).x,
+                        wy + ti_item(L.tp, 14).y, ti_item(L.tp, 14).w,
+                        ti_item(L.tp, 14).h }, "Length of Showing", ink);
         break;
     default:
         break;
