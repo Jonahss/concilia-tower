@@ -588,14 +588,16 @@
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
   }
-  /* The engine calls this after F6 writes ct_export.tdt to MEMFS. */
+  /* The engine calls this after a menu/F-key export writes its file
+   * to MEMFS — .TDT and .sav both route here; name by extension. */
   window.ctDownloadFile = function (path) {
     try {
       var base = (currentSlot || 'TOWER')
         .replace(/[^A-Za-z0-9 _.-]/g, '') || 'TOWER';
-      downloadBytes(base + '.TDT', FS.readFile(path));
-      ctEvent('export-tdt');
-    } catch (e) { console.warn('TDT download failed', e); }
+      var tdt = /\.tdt$/i.test(path);
+      downloadBytes(base + (tdt ? '.TDT' : '.sav'), FS.readFile(path));
+      ctEvent(tdt ? 'export-tdt' : 'export-sav');
+    } catch (e) { console.warn('export download failed', e); }
   };
 
   function renderSlots() {
@@ -655,9 +657,10 @@
       startBtn.click();
     }, 'play');
     if (onDisk) {
-      op('⬇', 'Download a .sav backup (this-browser format; ' +
-         'use F6 in-game for the original .TDT format)',
+      op('⬇sav', 'Download as .sav — the web save, re-importable here',
          function () { exportSlot(name); });
+      op('⬇TDT', 'Download as .TDT — the original 1994 SimTower format',
+         function () { exportSlotTdt(name); });
       op('✎', 'Rename', function () { renameSlot(name); });
       op('⧉', 'Duplicate', function () { duplicateSlot(name); });
       op('✕', 'Delete', function () { deleteSlot(name); });
@@ -674,8 +677,23 @@
     renderSlots();
   }
   function exportSlot(name) {
-    try { downloadBytes(name + '.sav', FS.readFile(slotPath(name))); }
+    try {
+      downloadBytes(name + '.sav', FS.readFile(slotPath(name)));
+      ctEvent('export-sav');
+    }
     catch (e) { alert('Could not read that save: ' + e.message); }
+  }
+  function exportSlotTdt(name) {
+    /* Headless engine-side conversion (ct_sav_to_tdt KEEPALIVE) —
+     * no need to open the tower first. */
+    if (!Module.engineReady) { alert('Engine still loading — one moment.'); return; }
+    try {
+      var p = Module.ccall('ct_sav_to_tdt', 'string', ['string'],
+                           [slotPath(name)]);
+      if (!p) { alert('Could not convert that save to .TDT.'); return; }
+      downloadBytes(name + '.TDT', FS.readFile(p));
+      ctEvent('export-tdt');
+    } catch (e) { alert('TDT export failed: ' + e.message); }
   }
   function takenName(to) {
     if (!validSlotName(to)) {

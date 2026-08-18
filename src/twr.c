@@ -201,8 +201,13 @@ int twr_import(const char *path, Tower *tower, GameSim *sim,
                 if (ten->type == ITEM_CINEMA)          ten->movie_id = id % 14;
                 else if (ten->type == ITEM_PARTY_HALL) ten->movie_id = 0xFF;
                 if (it == ITEM_RESTAURANT || it == ITEM_SHOP ||
-                    it == ITEM_FAST_FOOD)
-                    ten->retail_ref = t[6] + 1;
+                    it == ITEM_FAST_FOOD) {
+                    /* auxIndex +6..7 is a WORD (save_format.md: the
+                     * table is 512 x 18B) — the old byte read halved
+                     * the address space. */
+                    unsigned ri = t[6] | ((unsigned)t[7] << 8);
+                    ten->retail_ref = (uint16_t)((ri < 512 ? ri : 0) + 1);
+                }
                 /* Art style: record word +6..7 for the five styled
                  * types (polymorphic field — retail index above). */
                 ten->style = (uint8_t)(((t[6] | (t[7] << 8)))
@@ -612,7 +617,24 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
     Out out = { malloc(1 << 20), 1 << 20, 0, 0 };
     if (!out.p) { if (err) snprintf(err, errlen, "out of memory"); return -1; }
 
-    /* === retail table: give port-built retail tenants a slot === */
+    /* === retail table: give port-built retail tenants a slot ===
+     * Free = any slot no LIVING retail tenant references. The old scan
+     * trusted the stored occupancy bytes, so a demolished shop's slot
+     * stayed "taken" forever — after months of rebuilding, exports died
+     * with a full table on towers holding far fewer than 256 retail
+     * units (Jonah's tower, day 267, 2026-08-17). */
+    uint8_t slot_used[512] = { 0 };
+    int live_retail = 0;
+    for (int i = 0; i < tower->tenant_count; i++) {
+        const Tenant *t = &tower->tenants[i];
+        if (t->type != ITEM_RESTAURANT && t->type != ITEM_SHOP &&
+            t->type != ITEM_FAST_FOOD)
+            continue;
+        live_retail++;
+        if (t->retail_ref) slot_used[(t->retail_ref - 1) & 0x1FF] = 1;
+    }
+    if (live_retail > 512)
+        EFAIL("more than 512 retail units - the 1994 format cannot hold them");
     int retail_seq[ITEM_TYPE_COUNT] = {0};
     for (int i = 0; i < tower->tenant_count; i++) {
         Tenant *t = &tower->tenants[i];
@@ -621,20 +643,17 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             continue;
         retail_seq[t->type]++;
         if (t->retail_ref) continue;
-        for (int s = 0; s < 256; s++) {       /* +6 in the record is u8 */
+        for (int s = 0; s < 512; s++) {   /* auxIndex is a word: 512 slots */
+            if (slot_used[s]) continue;
             uint8_t *e = tower->twr_retail + s * 18;
-            /* free slot: negative floor byte (the file's empty marker)
-             * or an untouched all-zero entry on a fresh tower */
-            int allzero = 1;
-            for (int k = 0; k < 18; k++) allzero &= !e[k];
-            if (e[0] < 0x80 && !allzero) continue;
             retail_template(t->type, t->floor + 10,
                             retail_seq[t->type] - 1,
                             t->id % twr_variant_count(t->type), e);
-            t->retail_ref = s + 1;
+            t->retail_ref = (uint16_t)(s + 1);
+            slot_used[s] = 1;
             break;
         }
-        if (!t->retail_ref) EFAIL("retail table full (256 slots)");
+        if (!t->retail_ref) EFAIL("retail table full (512 slots)");
     }
     /* Sync the live retail economy back into the records (the inverse of
      * the import read; state 0xFF = un-let shop slot is preserved). */
@@ -756,8 +775,11 @@ int twr_export(const char *path, Tower *tower, const GameSim *sim,
             if (r->ten && r->ten->state == TENANT_CONSTRUCTION) ty = -ty;
             t[4] = (uint8_t)(int8_t)ty;
             /* +7 people ref stays 0: no people exported */
-            if (r->ten && r->ten->retail_ref)
-                t[6] = (uint8_t)(r->ten->retail_ref - 1);
+            if (r->ten && r->ten->retail_ref) {
+                unsigned ri = (unsigned)(r->ten->retail_ref - 1);
+                t[6] = (uint8_t)(ri & 0xFF);
+                t[7] = (uint8_t)(ri >> 8);
+            }
             if (r->ten) {
                 /* Hotel rooms: condition band in the STATUS byte +5
                  * (day variants; no people exported, so every room

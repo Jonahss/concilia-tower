@@ -21,7 +21,8 @@ const DIST = path.join(REPO, 'web/dist');
 const OUT = path.join(__dirname, 'out-probe');
 const PORT = 8615;
 const URL_BASE = `http://127.0.0.1:${PORT}/index.html`;
-const SAV = path.join(REPO, 'tests/fixtures/SCHMITT.TDT');
+const SAV = process.env.PROBE_SAV ||
+            path.join(REPO, 'tests/fixtures/SCHMITT.TDT');
 
 function findExe() {
   const cands = [

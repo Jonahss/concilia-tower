@@ -4324,6 +4324,29 @@ const char *ct_sav_meta(const char *path)
              hdr[1], exact, day, stars, money, pop);
     return out;
 }
+
+/* Landing-page .TDT export: load the slot into SCRATCH state (never the
+ * live game's) and run the normal exporter headless. Returns the MEMFS
+ * path of the fresh .TDT, or "" on any failure. The KEEPALIVE the
+ * splash-page export button was waiting on (queue 2ed7bcd). */
+int twr_export(const char *path, Tower *tower, const GameSim *sim,
+               char *err, int errlen);      /* twr.h (avoid the include) */
+EMSCRIPTEN_KEEPALIVE
+const char *ct_sav_to_tdt(const char *sav_path)
+{
+    static Tower *tw;
+    static GameSim *sm;
+    static char terr[128];
+    if (!tw) tw = malloc(sizeof *tw);
+    if (!sm) sm = malloc(sizeof *sm);
+    if (!tw || !sm) return "";
+    Tuning keep = TUNING;          /* game_load overwrites the global */
+    int ok = game_load(sm, tw, sav_path) == 0 &&
+             twr_export("/slot_export.tdt", tw, sm, terr, sizeof terr) == 0;
+    TUNING = keep;
+    if (!ok) printf("slot->TDT export failed: %s\n", terr);
+    return ok ? "/slot_export.tdt" : "";
+}
 #endif
 
 int game_load(GameSim *sim, Tower *tower, const char *path)

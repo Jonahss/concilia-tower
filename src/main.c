@@ -616,6 +616,7 @@ typedef struct {
 #define ACT_FIND_TENANT   27
 #define ACT_FIRE_RESCUE   28   /* Options menu 40008 (10e8:01e2 mid-fire
                                   chopper purchase) */
+#define ACT_EXPORT_SAV    30   /* Game menu: portable web-save download */
 #define ACT_MASS_PRICING  29   /* Port tool (Jonah 2026-08-12): bulk rent-
                                   class changes; no EXE counterpart */
 
@@ -701,6 +702,7 @@ static const MenuItem menu_file[] = {
     { "Save\tF5",          ITEM_NONE,  ACT_SAVE },
     { "Load\tF9",          ITEM_NONE,  ACT_LOAD },
     { "Export .TDT\tF6",   ITEM_NONE,  ACT_EXPORT_TDT },
+    { "Export .sav",       ITEM_NONE,  ACT_EXPORT_SAV },
     { NULL, ITEM_NONE, ACT_NONE },     /* separator */
     { "Campaign Mode\tF8", ITEM_NONE,  ACT_MODE_CAMPAIGN },
     { "Sandbox Mode\tF8",  ITEM_NONE,  ACT_MODE_SANDBOX },
@@ -8796,6 +8798,22 @@ static void do_export_tdt(void)
     }
 }
 
+/* The .sav twin of the TDT export: snapshot the CURRENT state to its
+ * own file (never the autosave slot) and, on web, hand it down as a
+ * download. Jonah 2026-08-17: both formats belong in the menu. */
+static void do_export_sav(void)
+{
+    if (game_save(&game.sim, &game.tower, "ct_export.sav") == 0) {
+        add_event_message("Exported ct_export.sav (web-save format).");
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ if (window.ctDownloadFile)
+                     ctDownloadFile(UTF8ToString($0)); }, "ct_export.sav");
+#endif
+    } else {
+        add_event_message(".sav export FAILED!");
+    }
+}
+
 static void execute_menu_item(const MenuItem *item)
 {
     if (item->build_type != ITEM_NONE) {
@@ -8859,6 +8877,7 @@ static void execute_menu_item(const MenuItem *item)
     case ACT_SAVE:       do_save_game();  break;
     case ACT_LOAD:       do_load_game();  break;
     case ACT_EXPORT_TDT: do_export_tdt(); break;
+    case ACT_EXPORT_SAV: do_export_sav(); break;
     case ACT_STATS:  game.show_stats  = !game.show_stats;  break;
     case ACT_TUNING: game.show_tuning = !game.show_tuning; break;
     case ACT_SANTA:
