@@ -515,6 +515,9 @@ typedef struct {
      * and VIP visits (dialogs 0xBB9/0xBBA/0xBBB/0xBC5/0xBCF/0xBD0), pausing
      * until dismissed. Text/button come straight from the dialog resource. */
     int             notice_modal;
+    int             autosave_blocked;     /* save file present but unloadable:
+                                           * never autosave over it (a manual
+                                           * F5 save re-arms) */
     int             find_mark_floor; /* find-target arrow (DISPLAYED floor) */
     int             find_mark_x;
     int             find_mark_until; /* sim frame the arrow persists to */
@@ -8703,6 +8706,7 @@ static void do_save_game(void)
     elv_edit_exit();
     if (game_save(&game.sim, &game.tower, save_path()) == 0) {
         add_event_message("Game saved.");
+        game.autosave_blocked = 0;   /* a deliberate save re-arms autosave */
         web_syncfs();
     } else
         add_event_message("Save FAILED!");
@@ -10703,6 +10707,18 @@ int main(int argc, char *argv[])
             printf("Boot autoload: %s (tenants=%d pop=%d money=%ld)\n",
                    save_path(), game.tower.tenant_count,
                    game.tower.population, (long)game.tower.money);
+            /* The file is there but wouldn't load (different build/ABI,
+             * or corrupt): starting a silent fresh campaign here once
+             * let a dawn autosave pave over the real save. Say so, and
+             * hold the autosaves until a deliberate manual save. */
+            if (!booted_from_save) {
+                game.autosave_blocked = 1;
+                show_notice_modal(
+                    "This tower file could not be loaded - it may have "
+                    "been made by an incompatible build.\nDaily autosave "
+                    "is paused so the file is not overwritten; saving "
+                    "manually (F5) resumes it.", "OK");
+            }
         }
     }
 
@@ -10976,7 +10992,7 @@ int main(int argc, char *argv[])
              * empty lot over a real tower — that guard is the 2026-08-01
              * lesson in code. */
             if (game.tower.day != prev_day && getenv("CT_AUTOLOAD") &&
-                game.tower.tenant_count > 0) {
+                game.tower.tenant_count > 0 && !game.autosave_blocked) {
                 if (game_save(&game.sim, &game.tower, save_path()) == 0) {
                     printf("Autosave: day %d (tenants=%d pop=%d money=%ld)\n",
                            game.tower.day, game.tower.tenant_count,
