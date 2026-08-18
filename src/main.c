@@ -7151,41 +7151,77 @@ static void draw_eval_gauge31(SDL_Rect box, int val, int t_blue, int t_yel)
  * centered on the unit, with the same-floor neighbors that fit, the focused
  * unit ringed. Mirrors the EXE's item-2 panel (seg_1100:4869 walks the
  * stable-id neighbor map and blits the floor strip). */
-/* The 1994 picture is a 1:1 CROP OF THE LIVE TOWER, not a synthetic
- * sprite strip: TENANTINFODLOGFILTER's body renderer (dis16 seg33
- * @4869) SetRects a world-coordinate source rect — left at the unit
- * (venues exactly at their left edge, narrow units with a margin),
- * top at the unit's top story + 12px (past the ceiling slab) — and
- * the paint blits it into the template's item-2 box. So crowds,
- * occupants and passing transport all show exactly as the tower
- * renders them. We reproduce that by aiming the camera and running
- * the real world renderer inside the box's clip. */
+/* The 1994 picture is a live crop OF THE UNIT'S OWN CELLS — no
+ * neighbors, no world context. TENANTINFODLOGFILTER's rect builder
+ * (dis16 seg33 @4869, per-type jump table @4cd7) sets a source rect
+ * of exactly the unit: left/right at its cells, top at its top story
+ * + 12px (past the ceiling slab). Per class: retail resolves through
+ * the retail table to the same exact-unit rect (@4a17); cinema takes
+ * its whole 31-cell venue and party hall its whole 24-cell hall, both
+ * 2 stories (@48ae/@495f); recycling both its stories (@4b0f); metro
+ * the TOP TWO of its 3 stories (@4b82); cathedral all 5 (@4bfb);
+ * everything else the default 1-story unit rect (@4c7a). The paint
+ * (@4439) fills the item box grey RGB(204,204,204), then WinG-blits
+ * the crop from the LIVE back buffer — so in-unit crowds and anything
+ * the tower renderer drew inside those cells show — scaled to fit
+ * centered (@4d1d): enlarge by the smaller ratio capped at 200%,
+ * cover-crop by the larger ratio when the unit outsizes the box both
+ * ways. We reproduce it by rendering the world to an offscreen target
+ * aimed at the unit, then blitting the crop with the same fit rules. */
 static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
 {
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderFillRect(game.renderer, &box);
-    SDL_Rect clip = { box.x + 1, box.y + 1, box.w - 2, box.h - 2 };
-    SDL_RenderSetClipRect(game.renderer, &clip);
-
+    int stories = ITEM_HEIGHT[t->type];
+    if (t->type == ITEM_METRO && stories > 2)
+        stories = 2;                 /* EXE: top 2 of the 3-story station */
     int topf = t->floor + ITEM_HEIGHT[t->type] - 1;
-    int unit_px = t->width * CELL_W;
-    int xoff = 0;                    /* two-story 248px boxes: flush left */
-    if (box.w < 240)                 /* smaller boxes: crop centered on
-                                      * the unit (margins when narrower,
-                                      * a center slice when wider) */
-        xoff = (unit_px - box.w) / 2;
-    int wx0 = t->x * CELL_W + xoff;
+    int src_w = t->width * CELL_W;
+    int src_h = stories * CELL_H - 12;
+    int wx0 = t->x * CELL_W;
     int wy0 = -topf * CELL_H + 12;           /* skip the ceiling slab */
 
-    float sx = game.cam_fx, sy = game.cam_fy;
-    game.cam_fx = (float)(wx0 + game.screen_w / 2 - clip.x);
-    game.cam_fy = (float)(wy0 + game.screen_h / 2 - clip.y);
-    render_sky();
-    render_tower();
-    render_people();
-    game.cam_fx = sx; game.cam_fy = sy;
+    static SDL_Texture *tgt = NULL;
+    static int tgt_w = 0, tgt_h = 0;
+    if (!tgt || tgt_w != game.screen_w || tgt_h != game.screen_h) {
+        if (tgt) SDL_DestroyTexture(tgt);
+        tgt = SDL_CreateTexture(game.renderer, SDL_PIXELFORMAT_ARGB8888,
+                                SDL_TEXTUREACCESS_TARGET,
+                                game.screen_w, game.screen_h);
+        tgt_w = game.screen_w; tgt_h = game.screen_h;
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+        if (tgt) SDL_SetTextureScaleMode(tgt, SDL_ScaleModeNearest);
+#endif
+    }
+    if (tgt) {
+        SDL_SetRenderTarget(game.renderer, tgt);
+        float sx = game.cam_fx, sy = game.cam_fy;
+        game.cam_fx = (float)(wx0 + game.screen_w / 2);
+        game.cam_fy = (float)(wy0 + game.screen_h / 2);
+        render_sky();
+        render_tower();
+        render_people();
+        game.cam_fx = sx; game.cam_fy = sy;
+        SDL_SetRenderTarget(game.renderer, NULL);
+    }
 
-    SDL_RenderSetClipRect(game.renderer, NULL);
+    SDL_SetRenderDrawColor(game.renderer, 204, 204, 204, 255);
+    SDL_RenderFillRect(game.renderer, &box);
+    if (tgt && src_w > 0 && src_h > 0) {
+        int rw = box.w * 100 / src_w, rh = box.h * 100 / src_h, scale;
+        if (rw < 100 && rh < 100) {
+            scale = rw > rh ? rw : rh;       /* cover: crop the overflow */
+        } else {
+            scale = rw < rh ? rw : rh;       /* fit, at most doubled */
+            if (scale > 200) scale = 200;
+        }
+        int dw = src_w * scale / 100, dh = src_h * scale / 100;
+        SDL_Rect clip = { box.x + 1, box.y + 1, box.w - 2, box.h - 2 };
+        SDL_Rect src = { 0, 0, src_w, src_h };
+        SDL_Rect dst = { box.x + (box.w - dw) / 2,
+                         box.y + (box.h - dh) / 2, dw, dh };
+        SDL_RenderSetClipRect(game.renderer, &clip);
+        SDL_RenderCopy(game.renderer, tgt, &src, &dst);
+        SDL_RenderSetClipRect(game.renderer, NULL);
+    }
     SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
     SDL_RenderDrawRect(game.renderer, &box);
 }
@@ -10049,10 +10085,15 @@ int main(int argc, char *argv[])
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_ELEV_QUEUE);
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_PEOPLE_EMERG);
     sprites_apply_white_key(&game.sprites, game.renderer, SPR_MAID_INROOM);
-    /* person figure sheets (portrait rows) are white-keyed too */
-    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NORMAL);
-    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_NAMED);
-    sprites_apply_white_key(&game.sprites, game.renderer, SPR_FIGURE_VIP);
+    /* person figure sheets sit on a light-grey RGB(230,230,230) ground,
+     * not white — keying white left an opaque grey box around every
+     * figure in the occupant strips and portraits */
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_FIGURE_NORMAL,
+                            230, 230, 230);
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_FIGURE_NAMED,
+                            230, 230, 230);
+    sprites_apply_color_key(&game.sprites, game.renderer, SPR_FIGURE_VIP,
+                            230, 230, 230);
     /* the in-tenant people band (AnimPeple, 0x85E8-0x85EE) is white-keyed */
     for (uint16_t id = 0x85E8; id <= 0x85EE; id++)
         sprites_apply_white_key(&game.sprites, game.renderer, id);
@@ -10799,6 +10840,10 @@ int main(int argc, char *argv[])
                 game.inspect_y = 70;
                 if (getenv("CT_NAME_EDIT")) open_name_editor(t);
                 if (getenv("CT_MOVIE_DLG")) game.movie_dlg_open = 1;
+                /* test hook: force the venue state (party/show frames
+                 * without simming to 1PM; the 10AM reset will clear it) */
+                if (getenv("CT_VENUE_STATE"))
+                    t->venue_state = (uint8_t)atoi(getenv("CT_VENUE_STATE"));
                 break;
             }
         }
@@ -11554,6 +11599,14 @@ int main(int argc, char *argv[])
         if (!shot_frame)
             shot_frame = getenv("SHOT_FRAME") ? atoi(getenv("SHOT_FRAME")) : 200;
         if (auto_screenshot && frame == shot_frame) {
+            {
+                Tenant *it = tower_tenant(&game.tower, game.inspect_tid);
+                printf("[shot] day %d hour %d:%02d  inspect tid=%d type=%d "
+                       "venue_state=%d patrons=%d\n", game.tower.day,
+                       game.sim.hour, game.sim.minute, game.inspect_tid,
+                       it ? it->type : -1, it ? it->venue_state : -1,
+                       it ? it->patrons_today : -1);
+            }
             /* Deterministic click-injection for headless UI tests:
              * ELV_TEST_CLICKS="x,y;x,y;..." routes each through the dialog
              * click handler before the capture, so state changes are visible. */
