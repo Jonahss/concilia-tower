@@ -9,3 +9,5 @@ web/dist/
 *.EXE
 web/dev-assets/
 tests/web/out/
+decomp-work/
+tests/web/out-probe/

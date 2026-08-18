@@ -4303,6 +4303,11 @@ static void render_build_ghost(void)
 
 /* Forward declarations for Win3.1 drawing helpers */
 static void draw_win31_rect(int x, int y, int w, int h, int raised);
+static void draw_dlg_frame(SDL_Rect r);
+static void draw_field31(SDL_Rect r);
+static void draw_field31_text(SDL_Rect r, const char *s, SDL_Color c);
+static void draw_btn31(SDL_Rect r, const char *label, int is_default, int enabled);
+static void draw_eval_gauge31(SDL_Rect box, int val, int t_blue, int t_yel);
 static int draw_menu_text(const char *text, int x, int y, int selected);
 
 /* ========== Win3.1-style Sub-Windows ========== */
@@ -6028,7 +6033,7 @@ static void render_notice_modal(void)
     notice_dims(&w, &h, &art);
     int wx = (game.screen_w - w) / 2;
     int wy = (game.screen_h - h) / 2;
-    draw_win31_rect(wx, wy, w, h, 1);
+    draw_dlg_frame((SDL_Rect){ wx, wy, w, h });
     SDL_Color black = { 0, 0, 0, 255 };
     int tx = wx + 18;
     if (art && art->texture) {
@@ -6038,7 +6043,8 @@ static void render_notice_modal(void)
     }
     draw_text_wrapped(game.notice_text, tx, wy + 16,
                       wx + w - 18 - tx, black);
-    draw_modal_button(notice_btn_rect(), game.notice_btn);
+    draw_btn31(notice_btn_rect(),
+               game.notice_btn[0] ? game.notice_btn : "OK", 1, 1);
 }
 
 static void notice_close(void)
@@ -6063,13 +6069,13 @@ static void render_quit_confirm(void)
     if (!game.quit_confirm) return;
     int wx = (game.screen_w - QUITC_W) / 2;
     int wy = (game.screen_h - QUITC_H) / 2;
-    draw_win31_rect(wx, wy, QUITC_W, QUITC_H, 1);
+    draw_dlg_frame((SDL_Rect){ wx, wy, QUITC_W, QUITC_H });
     SDL_Color black = { 0, 0, 0, 255 };
     draw_text_wrapped("Save the tower before quitting?",
                       wx + 18, wy + 20, QUITC_W - 36, black);
-    draw_modal_button(quitc_btn(0), "Save & Quit");
-    draw_modal_button(quitc_btn(1), "Quit");
-    draw_modal_button(quitc_btn(2), "Cancel");
+    draw_btn31(quitc_btn(0), "Save & Quit", 1, 1);
+    draw_btn31(quitc_btn(1), "Quit", 0, 1);
+    draw_btn31(quitc_btn(2), "Cancel", 0, 1);
 }
 
 static void quit_confirm_click(int mx, int my)
@@ -6571,9 +6577,9 @@ static void inspect_title(const Tenant *t, char *buf, int n)
     /* Burn rubble names itself (bank 0x2C6 idx 47; strings survey). */
     if (t->state == TENANT_ABANDONED && t->burned)
         base = exe_str(0x2C6, 47, "Burned Area");
-    if (t->floor == 0)     snprintf(buf, n, "%s  -  Lobby", base);
-    else if (t->floor < 0) snprintf(buf, n, "%s  -  B%d", base, -t->floor);
-    else                   snprintf(buf, n, "%s  -  %dF", base, t->floor);
+    if (t->floor == 0)     snprintf(buf, n, "%s, Lobby", base);
+    else if (t->floor < 0) snprintf(buf, n, "%s, Floor B%d", base, -t->floor);
+    else                   snprintf(buf, n, "%s, Floor %d", base, t->floor);
 }
 
 /* "Length" (EXE tenant +0x17 as quarters -> "N Year M Q" / "Over 30 years"). */
@@ -6591,150 +6597,292 @@ static void inspect_showing_str(const Tenant *t, char *buf, int n)
     else         snprintf(buf, n, "%d Q", a / 3 + 1);
 }
 
+/* ---- Tenant-info dialog templates ----
+ * Byte-exact DTMP 0xFF04 layouts from the EXE (tools/ne_dump_dtmp.py;
+ * class = RT_DIALOG id - 0x2EC, selected by the type jump table at
+ * seg33 @03fc/@054e). Item ids: 1 OK, 2 live picture, 3 title field,
+ * 4 people-strip well (the tenant-dialog people lists, 1100:28bc..3149),
+ * 5 status/value field, 6 gauge (cinema: movie-title field), 7 Rename,
+ * 8 comment well (escalator/stairs: "Now on board" label), 9-12/14
+ * per-class labels+fields, 13 rent combo (cinema: New Movie button).
+ * A zero rect = item absent in that template. */
+typedef struct { short x, y, w, h; } TiR;
+typedef struct { short w, h; TiR it[14]; } TiTemplate;   /* it[id-1] */
+
+#define TIR(l,t,r,b) { l, t, (r)-(l), (b)-(t) }
+static const TiTemplate TI_TEMPLATES[] = {
+    /* 0: 0x2EC office */
+    { 282, 265, { TIR(160,232,250,252), TIR(32,40,156,81), TIR(32,13,250,34),
+      TIR(32,122,97,158), TIR(167,40,266,58), TIR(65,88,225,106),
+      TIR(32,232,132,252), TIR(32,171,250,225), TIR(150,119,250,137),
+      TIR(98,121,147,137), TIR(98,146,147,162), TIR(32,89,63,105),
+      TIR(150,142,250,238), {0,0,0,0} } },
+    /* 1: 0x2ED hotel single */
+    { 304, 267, { TIR(170,232,270,252), TIR(32,40,148,83), TIR(32,13,270,33),
+      TIR(32,122,97,158), TIR(159,40,270,58), TIR(65,88,225,106),
+      TIR(32,232,132,252), TIR(32,171,270,225), TIR(114,146,166,162),
+      TIR(32,90,63,106), {0,0,0,0}, {0,0,0,0},
+      TIR(170,142,270,238), {0,0,0,0} } },
+    /* 2: 0x2EE hotel twin */
+    { 303, 265, { TIR(170,232,270,252), TIR(32,39,148,82), TIR(32,13,270,33),
+      TIR(32,122,97,158), TIR(159,39,270,57), TIR(65,88,225,106),
+      TIR(32,232,132,252), TIR(32,171,270,225), TIR(114,146,166,162),
+      TIR(32,90,63,106), {0,0,0,0}, {0,0,0,0},
+      TIR(170,142,270,206), {0,0,0,0} } },
+    /* 3: 0x2EF hotel suite */
+    { 294, 266, { TIR(170,232,270,252), TIR(32,39,148,82), TIR(32,13,270,33),
+      TIR(32,122,97,158), TIR(159,39,270,57), TIR(65,88,225,106),
+      TIR(32,232,132,252), TIR(32,171,270,225), TIR(114,146,166,162),
+      TIR(32,90,63,106), {0,0,0,0}, {0,0,0,0},
+      TIR(170,142,270,238), {0,0,0,0} } },
+    /* 4: 0x2F0 condo */
+    { 298, 265, { TIR(188,232,278,252), TIR(20,39,175,81), TIR(20,13,278,33),
+      TIR(20,122,89,158), TIR(178,39,278,57), TIR(60,88,220,106),
+      TIR(20,232,120,252), TIR(20,171,278,225), TIR(178,119,278,137),
+      TIR(126,122,175,138), TIR(126,146,175,162), TIR(20,91,50,107),
+      TIR(178,142,278,238), {0,0,0,0} } },
+    /* 5: 0x2F1 shop */
+    { 287, 279, { TIR(177,246,267,266), TIR(20,38,179,83), TIR(20,13,267,33),
+      TIR(20,141,267,176), TIR(188,51,267,69), TIR(145,88,267,106),
+      TIR(20,246,120,266), TIR(20,185,267,239), TIR(20,89,142,105),
+      TIR(134,119,164,135), {0,0,0,0}, {0,0,0,0},
+      TIR(167,115,267,211), {0,0,0,0} } },
+    /* 6: 0x2F2 housekeeping (picture RIGHT, staff strip left) */
+    { 283, 190, { TIR(160,152,250,172), TIR(150,40,250,81), TIR(32,13,250,34),
+      TIR(32,40,145,76), {0,0,0,0}, {0,0,0,0},
+      TIR(32,152,132,172), TIR(32,91,250,145), {0,0,0,0},
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 7: 0x2F3 security */
+    { 287, 189, { TIR(169,152,250,172), TIR(126,40,250,81), TIR(32,13,250,34),
+      TIR(32,40,97,76), {0,0,0,0}, {0,0,0,0},
+      TIR(32,152,132,172), TIR(32,91,250,145), {0,0,0,0},
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 8: 0x2F4 generic (parking/metro/recycling/SECOM...) — OK only */
+    { 237, 190, { TIR(77,155,157,175), TIR(20,40,212,85), TIR(20,12,212,32),
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0},
+      TIR(20,94,212,148), {0,0,0,0},
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 9: 0x2F5 medical + cathedral (the BIG two-story live box) */
+    { 280, 281, { TIR(174,247,264,267), TIR(16,37,264,97), TIR(16,12,264,32),
+      TIR(16,102,264,138), {0,0,0,0}, {0,0,0,0},
+      TIR(16,247,116,267), TIR(16,186,264,240), TIR(16,144,264,180),
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 10: 0x2F6 cinema (New Movie in the button row) */
+    { 280, 360, { TIR(214,323,264,343), TIR(16,37,264,97), TIR(16,12,264,32),
+      TIR(16,178,264,214), TIR(149,154,264,172), TIR(79,108,264,126),
+      TIR(122,323,208,343), TIR(16,262,264,316), TIR(16,220,264,256),
+      TIR(149,131,264,149), TIR(14,110,74,126), TIR(36,134,144,150),
+      TIR(16,323,116,343), TIR(36,156,144,172) } },
+    /* 11: 0x2F7 party hall */
+    { 280, 280, { TIR(174,247,264,267), TIR(16,37,264,97), TIR(16,12,264,32),
+      TIR(16,102,264,138), {0,0,0,0}, {0,0,0,0},
+      TIR(16,247,116,267), TIR(16,186,264,240), TIR(16,144,264,180),
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 12: 0x2F8 restaurant + fast food (smaller centered picture) */
+    { 287, 279, { TIR(177,246,267,266), TIR(65,38,224,83), TIR(16,13,271,33),
+      TIR(16,141,271,176), {0,0,0,0}, TIR(145,88,267,106),
+      TIR(16,246,120,266), TIR(16,185,271,239), TIR(145,112,267,130),
+      TIR(16,89,142,105), {0,0,0,0}, TIR(16,114,142,130),
+      {0,0,0,0}, {0,0,0,0} } },
+    /* 13: 0x2F9 escalator ("Now on board" + two rider strips, no pic) */
+    { 316, 229, { TIR(111,191,205,211), {0,0,0,0}, TIR(20,12,296,32),
+      TIR(20,101,296,137), {0,0,0,0}, TIR(218,58,296,76),
+      {0,0,0,0}, TIR(103,60,213,76), TIR(20,143,296,179),
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+    /* 14: 0x2FA stairs (one rider strip) */
+    { 316, 211, { TIR(111,165,205,185), {0,0,0,0}, TIR(20,12,296,32),
+      TIR(20,101,296,137), {0,0,0,0}, TIR(218,58,296,76),
+      {0,0,0,0}, TIR(103,60,213,76), {0,0,0,0},
+      {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} } },
+};
+#undef TIR
+
+enum { TI_CLS_OFFICE = 0, TI_CLS_HS = 1, TI_CLS_HT = 2, TI_CLS_HSU = 3,
+       TI_CLS_CONDO = 4, TI_CLS_SHOP = 5, TI_CLS_KEEP = 6, TI_CLS_SEC = 7,
+       TI_CLS_GENERIC = 8, TI_CLS_VENUE = 9, TI_CLS_CINEMA = 10,
+       TI_CLS_PARTY = 11, TI_CLS_FOOD = 12, TI_CLS_ESC = 13, TI_CLS_STAIR = 14 };
+
+/* Port item -> template class, mirroring the EXE jump table exactly:
+ * medical shares the cathedral's big-box class 9; restaurants and fast
+ * food share class 0xC; parking/metro/recycling/SECOM etc. fall to the
+ * OK-only generic 8. */
+static int ti_class(const Tenant *t)
+{
+    switch (t->type) {
+    case ITEM_OFFICE:       return TI_CLS_OFFICE;
+    case ITEM_HOTEL_SINGLE: return TI_CLS_HS;
+    case ITEM_HOTEL_TWIN:   return TI_CLS_HT;
+    case ITEM_HOTEL_SUITE:  return TI_CLS_HSU;
+    case ITEM_CONDO:        return TI_CLS_CONDO;
+    case ITEM_SHOP:         return TI_CLS_SHOP;
+    case ITEM_HOUSEKEEPING: return TI_CLS_KEEP;
+    case ITEM_SECURITY:     return TI_CLS_SEC;
+    case ITEM_MEDICAL:
+    case ITEM_CATHEDRAL:    return TI_CLS_VENUE;
+    case ITEM_CINEMA:       return inspect_is_cinema(t) ? TI_CLS_CINEMA
+                                                        : TI_CLS_GENERIC;
+    case ITEM_PARTY_HALL:   return TI_CLS_PARTY;
+    case ITEM_RESTAURANT:
+    case ITEM_FAST_FOOD:    return TI_CLS_FOOD;
+    case ITEM_ESCALATOR:    return TI_CLS_ESC;
+    case ITEM_STAIRS:       return TI_CLS_STAIR;
+    default:                return TI_CLS_GENERIC;
+    }
+}
+
 /* ---- Layout: computed once, shared by render and click so rects never
- * drift. All rects are dialog-LOCAL (add the window origin at use). ---- */
-typedef enum { TIF_TEXT, TIF_EVAL, TIF_PRICE, TIF_PATRON } TiFieldKind;
-typedef struct { TiFieldKind kind; char label[24]; char value[40]; int ival, imax; } TiField;
+ * drift. All rects are dialog-LOCAL (add the window origin at use).
+ * Geometry comes verbatim from the class template; only the strings and
+ * gauge values are computed here. ---- */
 typedef struct {
+    const TiTemplate *tp;
+    int cls;
     int w, h;
-    int name_y, comment_y, comment_n, field_y0;
+    char title[72];
+    char status[40];                  /* item 5 field text */
+    char val9[40], val10[40];         /* item 9 / item 10 field texts */
+    char movie[40];                   /* cinema: item 6 movie-title field */
     char comments[3][48];
+    int comment_n;
     SDL_Rect picture;
-    TiField fields[6];
-    int nf, price_field;              /* index of the FLD_PRICE row, or -1 */
-    int price_locked;                 /* row shown grayed + inert (sold condo) */
+    int has_eval, eval_val, eval_hi;      /* item 6 gauge (eval classes) */
+    int has_patron, patron_val, patron_max; /* item 6 gauge (retail/food) */
+    int has_price, price_locked;
     SDL_Rect price_box, price_items[4];
     int has_newmovie;
     SDL_Rect newmovie_btn, rename_btn, ok_btn;
-    SDL_Rect occ_row;                 /* occupants-now silhouette strip */
-    uint16_t occ_pid[12];
-    int occ_n;
+    int has_rename;
+    SDL_Rect occ_row, occ_row2;       /* item 4 (+ item 9) people wells */
+    uint16_t occ_pid[24];
+    int occ_n, occ_cap1;              /* figures well 1 can hold */
 } TiLayout;
 
-static void inspect_picture_size(const Tenant *t, int *w, int *h);
+static SDL_Rect ti_item(const TiTemplate *tp, int id)
+{
+    const TiR *r = &tp->it[id - 1];
+    return (SDL_Rect){ r->x, r->y, r->w, r->h };
+}
+static int ti_has(const TiTemplate *tp, int id)
+{
+    return tp->it[id - 1].w > 0;
+}
 
 static void ti_build(const Tenant *t, TiLayout *L)
 {
     memset(L, 0, sizeof *L);
-    L->w = INSPECT_W;
-    L->price_field = -1;
+    int cls = ti_class(t);
+    const TiTemplate *tp = &TI_TEMPLATES[cls];
+    L->cls = cls;
+    L->tp = tp;
+    L->w = tp->w;
+    L->h = tp->h;
+    inspect_title(t, L->title, sizeof L->title);
+    L->picture = ti_item(tp, 2);
+    L->comment_n = game_tenant_comments(&game.sim, &game.tower, t,
+                                        L->comments, 3);
 
-    L->comment_n = game_tenant_comments(&game.sim, &game.tower, t, L->comments, 3);
+    L->ok_btn = ti_item(tp, 1);
+    L->has_rename = ti_has(tp, 7);
+    if (L->has_rename) L->rename_btn = ti_item(tp, 7);
 
-    TiField *f = L->fields;
-    int nf = 0, riders_field = -1;
     int evbar = (game.tower.star_rating >= 4) ? 200 : 150;
-    ItemType ty = t->type;
-    if (ty == ITEM_OFFICE || ty == ITEM_CONDO) {
-        f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
-        f[nf].ival = game_tenant_eval_metric(&game.sim, &game.tower, t);
-        f[nf].imax = evbar; nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Length");
-        inspect_length_str(t, f[nf].value, 40); nf++;
-        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, ty == ITEM_CONDO ? "Price" : "Rent");
-        L->price_field = nf; nf++;
-        /* A SOLD condo's price row is grayed and inert in the EXE
-         * (dlgproc @098a: status < 0x18 -> EnableWindow(FALSE), condo
-         * category only — placement/economy referee 2026-08-09). Every
-         * other priced family stays editable forever. */
-        L->price_locked = (ty == ITEM_CONDO &&
-                           t->state >= TENANT_OCCUPIED &&
-                           t->state != TENANT_ABANDONED);
-        /* Status word (res 0x2c8): condos sell, offices rent. */
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
-        snprintf(f[nf].value, 40, "%s",
-                 (t->state >= TENANT_OCCUPIED &&
-                  t->state != TENANT_ABANDONED) ? "Occupied"
-               : ty == ITEM_CONDO              ? "For Sale" : "For Rent");
-        nf++;
-    } else if (item_is_hotel_room(ty)) {
-        f[nf].kind = TIF_EVAL; snprintf(f[nf].label, 24, "Eval");
-        f[nf].ival = game_tenant_eval_metric(&game.sim, &game.tower, t);
-        f[nf].imax = evbar; nf++;
-        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, "Rate");
-        L->price_field = nf; nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
-        snprintf(f[nf].value, 40, "%s",
-                 t->condition != ROOM_CLEAN ? "Dirty"
-               : t->state == TENANT_OCCUPIED ? "Occupied" : "Clean"); nf++;
-    } else if (ty == ITEM_SHOP) {
-        f[nf].kind = TIF_PATRON; snprintf(f[nf].label, 24, "Patronage");
-        f[nf].ival = t->customers_today; f[nf].imax = 30; nf++;
-        f[nf].kind = TIF_PRICE; snprintf(f[nf].label, 24, "Rent");
-        L->price_field = nf; nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Status");
-        snprintf(f[nf].value, 40, "%s",
-                 (t->state >= TENANT_OCCUPIED &&
-                  t->state != TENANT_ABANDONED) ? "Occupied" : "For Rent");
-        nf++;
-    } else if (inspect_is_cinema(t)) {
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Playing");
-        snprintf(f[nf].value, 40, "%s", movie_title(t->movie_id)); nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Showing");
-        inspect_showing_str(t, f[nf].value, 40); nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Today");
-        { char m[24]; format_money(game_venue_today_income(t), m, sizeof m);
-          snprintf(f[nf].value, 40, "%s", m); } nf++;
-        L->has_newmovie = 1;
-    } else if (ty == ITEM_RESTAURANT || ty == ITEM_FAST_FOOD) {
-        f[nf].kind = TIF_PATRON; snprintf(f[nf].label, 24, "Patronage");
-        f[nf].ival = t->customers_today; f[nf].imax = 50; nf++;
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Yest. Profit");
-        { char m[24]; format_money(t->yesterday_profit, m, sizeof m);
-          snprintf(f[nf].value, 40, "%s", m); } nf++;
-    } else if (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) {
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Riders");
-        riders_field = nf; nf++;
-    } else if (ty == ITEM_MEDICAL) {
-        /* The EXE's panel counter (MedicalT +0x02, comparison C11 /
-         * A31): today's admissions against the 40-a-day cap — full
-         * centers turn the sick away until tomorrow. */
-        f[nf].kind = TIF_TEXT; snprintf(f[nf].label, 24, "Patients");
-        snprintf(f[nf].value, 40, "%d / 40 today", t->patients_today);
-        nf++;
-    }
-    L->nf = nf;
+    int occupied = t->state >= TENANT_OCCUPIED && t->state != TENANT_ABANDONED;
 
-    int pad = 10;
-    int pw, ph;
-    inspect_picture_size(t, &pw, &ph);
-    if (INSPECT_W < pw + 2 * pad) L->w = pw + 2 * pad;
-    L->name_y = 8;
-    L->picture = (SDL_Rect){ pad, 32, pw, ph };
-    L->comment_y = L->picture.y + L->picture.h + 6;
-    L->field_y0 = L->comment_y + L->comment_n * 14 + (L->comment_n ? 4 : 0);
-    int y = L->field_y0;
-    for (int i = 0; i < nf; i++) {
-        if (i == L->price_field) {
-            L->price_box = (SDL_Rect){ pad + 96, y - 1, 116, 18 };
-            for (int k = 0; k < 4; k++)
-                L->price_items[k] = (SDL_Rect){ L->price_box.x, L->price_box.y + 18 * (k + 1),
-                                                L->price_box.w, 18 };
+    switch (cls) {
+    case TI_CLS_OFFICE:
+    case TI_CLS_CONDO:
+        L->has_eval = 1;
+        L->eval_val = game_tenant_eval_metric(&game.sim, &game.tower, t);
+        L->eval_hi = evbar;
+        inspect_length_str(t, L->val9, sizeof L->val9);
+        L->has_price = 1;
+        /* A SOLD condo's price row is grayed and inert in the EXE
+         * (dlgproc @098a: EnableWindow(FALSE), condo category only). */
+        L->price_locked = (cls == TI_CLS_CONDO && occupied);
+        snprintf(L->status, sizeof L->status, "%s",
+                 occupied ? "Occupied"
+                          : cls == TI_CLS_CONDO ? "For Sale" : "For Rent");
+        break;
+    case TI_CLS_HS: case TI_CLS_HT: case TI_CLS_HSU:
+        L->has_eval = 1;
+        L->eval_val = game_tenant_eval_metric(&game.sim, &game.tower, t);
+        L->eval_hi = evbar;
+        L->has_price = 1;
+        snprintf(L->status, sizeof L->status, "%s",
+                 t->condition != ROOM_CLEAN ? "Dirty"
+               : t->state == TENANT_OCCUPIED ? "Occupied" : "Clean");
+        break;
+    case TI_CLS_SHOP:
+        L->has_patron = 1;
+        L->patron_val = t->customers_today;
+        L->patron_max = 30;
+        L->has_price = 1;
+        snprintf(L->status, sizeof L->status, "%s",
+                 occupied ? "Occupied" : "For Rent");
+        break;
+    case TI_CLS_FOOD:
+        L->has_patron = 1;
+        L->patron_val = t->customers_today;
+        L->patron_max = 50;
+        { char m[24]; format_money(t->yesterday_profit, m, sizeof m);
+          snprintf(L->val9, sizeof L->val9, "%s", m); }
+        break;
+    case TI_CLS_CINEMA:
+        snprintf(L->movie, sizeof L->movie, "%s", movie_title(t->movie_id));
+        { char m[24]; format_money(game_venue_today_income(t), m, sizeof m);
+          snprintf(L->val10, sizeof L->val10, "%s", m); }
+        inspect_showing_str(t, L->status, sizeof L->status);
+        L->has_newmovie = 1;
+        L->newmovie_btn = ti_item(tp, 13);
+        break;
+    case TI_CLS_VENUE:
+        /* Medical: today's admissions vs the 40-a-day cap (MedicalT
+         * +0x02) rides the comment well. */
+        if (t->type == ITEM_MEDICAL && L->comment_n < 3) {
+            snprintf(L->comments[L->comment_n], 48,
+                     "Patients: %d / 40 today", t->patients_today);
+            L->comment_n++;
         }
-        y += 20;
+        break;
+    default:
+        break;
     }
-    /* Occupants-now row (the original's people-list family, 1100:327f):
-     * everyone whose home is this tenant and who is inside it right now,
-     * as clickable silhouettes feeding the person popup. */
-    L->occ_n = 0;
-    if (ty == ITEM_STAIRS || ty == ITEM_ESCALATOR) {
-        /* Riders mid-leg on this stair/escalator (the original lists
-         * people in transit too — same people-list widget). */
-        PeopleSim *ps = &game.sim.people;
+
+    if (L->has_price) {
+        SDL_Rect c = ti_item(tp, 13);
+        L->price_box = (SDL_Rect){ c.x, c.y, c.w, 18 };
+        for (int k = 0; k < 4; k++)
+            L->price_items[k] = (SDL_Rect){ c.x, c.y + 18 * (k + 1), c.w, 18 };
+    }
+
+    /* People wells (item 4, and item 9 where the template has a second
+     * one): everyone whose home is this tenant and who is inside right
+     * now, as clickable silhouettes — or the riders mid-leg for
+     * stairs/escalators. Capacity comes from the wells' widths. */
+    SDL_Rect w1 = ti_has(tp, 4) ? ti_item(tp, 4) : (SDL_Rect){ 0, 0, 0, 0 };
+    SDL_Rect w2 = (cls == TI_CLS_VENUE || cls == TI_CLS_CINEMA ||
+                   cls == TI_CLS_PARTY || cls == TI_CLS_ESC) &&
+                  ti_has(tp, 9) ? ti_item(tp, 9) : (SDL_Rect){ 0, 0, 0, 0 };
+    L->occ_row = w1;
+    L->occ_row2 = w2;
+    L->occ_cap1 = w1.w > 0 ? (w1.w - 8) / PSTRIP_PITCH : 0;
+    int cap = L->occ_cap1 + (w2.w > 0 ? (w2.w - 8) / PSTRIP_PITCH : 0);
+    if (cap > 24) cap = 24;
+
+    PeopleSim *ps = &game.sim.people;
+    if (t->type == ITEM_STAIRS || t->type == ITEM_ESCALATOR) {
         int total = 0;
         for (int i = 0; i < ps->people_high; i++) {
             const Person *p = &ps->people[i];
             if (p->state != PERSON_WALKING || p->walk_stair != t->id)
                 continue;
             total++;
-            if (L->occ_n < 12) L->occ_pid[L->occ_n++] = (uint16_t)(i + 1);
+            if (L->occ_n < cap) L->occ_pid[L->occ_n++] = (uint16_t)(i + 1);
         }
-        if (riders_field >= 0)
-            snprintf(L->fields[riders_field].value, 40, "%d", total);
-    } else {
-        PeopleSim *ps = &game.sim.people;
+        snprintf(L->val9, sizeof L->val9, "%d", total);
+    } else if (w1.w > 0) {
         int fidx = floor_to_index(t->floor);
-        for (int i = 0; i < ps->people_high && L->occ_n < 12; i++) {
+        for (int i = 0; i < ps->people_high && L->occ_n < cap; i++) {
             const Person *p = &ps->people[i];
             if (p->home_tenant != t->id) continue;
             if (p->state != PERSON_AT_DEST) continue;
@@ -6742,16 +6890,6 @@ static void ti_build(const Tenant *t, TiLayout *L)
             L->occ_pid[L->occ_n++] = (uint16_t)(i + 1);
         }
     }
-    if (L->occ_n) {
-        L->occ_row = (SDL_Rect){ pad, y + 4, L->w - 2 * pad, PSTRIP_H };
-        y += 4 + PSTRIP_H + 4;
-    }
-
-    int btn_y = y + 6;
-    L->rename_btn = (SDL_Rect){ pad, btn_y, 64, 20 };
-    if (L->has_newmovie) L->newmovie_btn = (SDL_Rect){ pad + 72, btn_y, 74, 20 };
-    L->ok_btn = (SDL_Rect){ L->w - pad - 56, btn_y, 56, 20 };
-    L->h = btn_y + 20 + pad;
 }
 
 /* Total dialog height, for on-open clamping. */
@@ -6795,8 +6933,12 @@ static void open_tenant_popup_at(uint16_t tid, int x, int y)
     }
     game.inspect_x = x + 16;
     game.inspect_y = y - 40;
-    if (game.inspect_x + INSPECT_W > game.screen_w)
-        game.inspect_x = game.screen_w - INSPECT_W - 8;
+    {
+        Tenant *ct = tower_tenant(&game.tower, tid);
+        int dw = ct ? TI_TEMPLATES[ti_class(ct)].w : 282;
+        if (game.inspect_x + dw > game.screen_w)
+            game.inspect_x = game.screen_w - dw - 8;
+    }
     /* keep the whole body (incl. button rows) on screen — basement
      * clicks used to hang off the bottom edge */
     int pbh = inspect_body_h(tower_tenant(&game.tower, tid));
@@ -6876,30 +7018,104 @@ static void draw_patron_bar(SDL_Rect box, int val, int max)
     SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
     SDL_RenderDrawRect(game.renderer, &box);
 }
+
+/* ---- Win3.1 dialog furniture ----
+ * The EXE's info/event popups are stock Windows 3.1 modal dialogs; the
+ * chrome below reproduces that look: the thick raised frame with an
+ * inner groove, sunken white fields, beveled buttons with the
+ * default-button ring, and the drop-down combo. */
+
+/* Modal frame: 1px black outline, raised gray band, sunken groove line
+ * inset around the content. Content area = r deflated by DLG_INSET. */
+#define DLG_INSET 8
+static void draw_dlg_frame(SDL_Rect r)
+{
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_RenderFillRect(game.renderer, &r);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &r);
+    SDL_Rect band = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
+    draw_bevel(band, 1);
+    SDL_Rect groove = { r.x + 6, r.y + 6, r.w - 12, r.h - 12 };
+    draw_bevel(groove, 0);
+}
+
+/* Sunken white field (title boxes, value boxes, comment wells). */
+static void draw_field31(SDL_Rect r)
+{
+    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+    SDL_RenderFillRect(game.renderer, &r);
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(game.renderer, &r);
+    SDL_SetRenderDrawColor(game.renderer, 128, 128, 128, 255);
+    SDL_RenderDrawLine(game.renderer, r.x + 1, r.y + 1, r.x + r.w - 2, r.y + 1);
+    SDL_RenderDrawLine(game.renderer, r.x + 1, r.y + 1, r.x + 1, r.y + r.h - 2);
+}
+
+/* Field with text vertically centered, left-padded. */
+static void draw_field31_text(SDL_Rect r, const char *s, SDL_Color c)
+{
+    draw_field31(r);
+    if (!s || !s[0]) return;
+    int tw, th;
+    SDL_Texture *t = render_text(s, c, &tw, &th);
+    if (t) {
+        SDL_Rect d = { r.x + 5, r.y + (r.h - th) / 2, tw, th };
+        SDL_RenderCopy(game.renderer, t, NULL, &d);
+        SDL_DestroyTexture(t);
+    }
+}
+
+/* Win3.1 push button: black border, double bevel, default ring. */
+static void draw_btn31(SDL_Rect r, const char *label, int is_default, int enabled)
+{
+    SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    if (is_default) {
+        SDL_RenderDrawRect(game.renderer, &r);
+        SDL_Rect r1 = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
+        SDL_RenderDrawRect(game.renderer, &r1);
+        r = (SDL_Rect){ r.x + 2, r.y + 2, r.w - 4, r.h - 4 };
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+    }
+    SDL_RenderDrawRect(game.renderer, &r);
+    SDL_Rect face = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
+    SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+    SDL_RenderFillRect(game.renderer, &face);
+    draw_bevel(face, 1);
+    SDL_Rect face2 = { face.x + 1, face.y + 1, face.w - 2, face.h - 2 };
+    draw_bevel(face2, 1);
+    SDL_Color c = enabled ? (SDL_Color){ 0, 0, 0, 255 }
+                          : (SDL_Color){ 128, 128, 128, 255 };
+    draw_centered(r, label, c);
+}
+
+/* The Eval gauge, per the EXE's GdiT painter (61:01d8 + ticks 61:02bd):
+ * sunken box, INVERTED fill (filled = (300-eval)/300 — long bar = happy
+ * tenant), bar colored by the eval value's band (blue good / yellow /
+ * red bad; the yellow-red threshold relaxes to 200 at 4+ stars), tick
+ * lines at both thresholds' inverted positions. */
+static void draw_eval_gauge31(SDL_Rect box, int val, int t_blue, int t_yel)
+{
+    draw_field31(box);
+    int v = val < 0 ? 0 : val > 300 ? 300 : val;
+    SDL_Color c = v < t_blue ? (SDL_Color){ 40, 80, 200, 255 }
+                : v < t_yel  ? (SDL_Color){ 224, 192, 30, 255 }
+                :              (SDL_Color){ 200, 40, 40, 255 };
+    SDL_Rect fill = { box.x + 2, box.y + 2,
+                      (box.w - 4) * (300 - v) / 300, box.h - 4 };
+    SDL_SetRenderDrawColor(game.renderer, c.r, c.g, c.b, 255);
+    SDL_RenderFillRect(game.renderer, &fill);
+    SDL_SetRenderDrawColor(game.renderer, 70, 70, 70, 255);
+    int tx1 = box.x + 2 + (box.w - 4) * (300 - t_yel) / 300;
+    int tx2 = box.x + 2 + (box.w - 4) * (300 - t_blue) / 300;
+    SDL_RenderDrawLine(game.renderer, tx1, box.y + 1, tx1, box.y + box.h - 2);
+    SDL_RenderDrawLine(game.renderer, tx2, box.y + 1, tx2, box.y + box.h - 2);
+}
+
 /* The tenant schematic (item id 2): the unit shown IN CONTEXT — its floor,
  * centered on the unit, with the same-floor neighbors that fit, the focused
  * unit ringed. Mirrors the EXE's item-2 panel (seg_1100:4869 walks the
  * stable-id neighbor map and blits the floor strip). */
-/* Picture-box size per tenant class — the EXE's per-class dialog
- * templates (RT_DIALOG 0x2EC+class, layout in the DTMP 0xFF04 blobs,
- * item 2; extracted 2026-08-15): venues + food get a 248x60 two-story
- * box, cathedral/medical 192x45, ordinary units ~124x41. The box is
- * part of the template, so it reserves its space even when empty. */
-static void inspect_picture_size(const Tenant *t, int *w, int *h)
-{
-    switch (t->type) {
-    case ITEM_CINEMA: case ITEM_PARTY_HALL:
-    case ITEM_RESTAURANT: case ITEM_FAST_FOOD: *w = 248; *h = 60; break;
-    case ITEM_CATHEDRAL: case ITEM_MEDICAL:    *w = 192; *h = 45; break;
-    case ITEM_CONDO:                           *w = 155; *h = 42; break;
-    case ITEM_SHOP:                            *w = 159; *h = 45; break;
-    case ITEM_HOTEL_SINGLE: case ITEM_HOTEL_TWIN:
-    case ITEM_HOTEL_SUITE:                     *w = 116; *h = 43; break;
-    case ITEM_HOUSEKEEPING:                    *w = 100; *h = 41; break;
-    default:                                   *w = 124; *h = 41; break;
-    }
-}
-
 /* The 1994 picture is a 1:1 CROP OF THE LIVE TOWER, not a synthetic
  * sprite strip: TENANTINFODLOGFILTER's body renderer (dis16 seg33
  * @4869) SetRects a world-coordinate source rect — left at the unit
@@ -6918,11 +7134,11 @@ static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
 
     int topf = t->floor + ITEM_HEIGHT[t->type] - 1;
     int unit_px = t->width * CELL_W;
-    int xoff = 0;                            /* venues: flush left (EXE) */
-    if (unit_px < box.w &&
-        t->type != ITEM_CINEMA && t->type != ITEM_PARTY_HALL &&
-        t->type != ITEM_RESTAURANT && t->type != ITEM_FAST_FOOD)
-        xoff = -(box.w - unit_px) / 2;       /* narrow units: margined */
+    int xoff = 0;                    /* two-story 248px boxes: flush left */
+    if (box.w < 240)                 /* smaller boxes: crop centered on
+                                      * the unit (margins when narrower,
+                                      * a center slice when wider) */
+        xoff = (unit_px - box.w) / 2;
     int wx0 = t->x * CELL_W + xoff;
     int wy0 = -topf * CELL_H + 12;           /* skip the ceiling slab */
 
@@ -6941,32 +7157,48 @@ static void draw_tenant_picture(const Tenant *t, SDL_Rect box)
 static void draw_price_dropdown(const Tenant *t, SDL_Rect box, const SDL_Rect *items,
                                 int locked)
 {
-    /* locked = the EXE's EnableWindow(FALSE) look: Win31 gray field,
-     * dim text, no arrow, dropdown never opens (sold condos). */
+    /* Win3.1 combobox. locked = the EXE's EnableWindow(FALSE) look:
+     * gray field, dim text, no arrow, dropdown never opens (sold
+     * condos). The arrow rides a raised square button at the right. */
     SDL_Color ink = locked ? (SDL_Color){ 128, 128, 128, 255 }
                            : (SDL_Color){ 0, 0, 0, 255 };
     char m[24]; format_money(tenant_rent(t->type, t->rent_class), m, sizeof m);
-    if (locked) SDL_SetRenderDrawColor(game.renderer, 192, 192, 192, 255);
-    else        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderFillRect(game.renderer, &box);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &box);
-    stats_label(box.x + 6, box.y + 2, m, ink);
+    draw_field31(box);
+    if (locked) {
+        SDL_Rect in = { box.x + 2, box.y + 2, box.w - 4, box.h - 4 };
+        SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+        SDL_RenderFillRect(game.renderer, &in);
+    }
+    stats_label(box.x + 6, box.y + 3, m, ink);
     if (!locked) {
-        int ax = box.x + box.w - 15, ay = box.y + 7;
-        SDL_Point tri[4] = { { ax, ay }, { ax + 8, ay }, { ax + 4, ay + 5 }, { ax, ay } };
-        SDL_RenderDrawLines(game.renderer, tri, 4);
+        SDL_Rect ab = { box.x + box.w - 17, box.y + 1, 16, box.h - 2 };
+        SDL_SetRenderDrawColor(game.renderer, WIN31_BG, 255);
+        SDL_RenderFillRect(game.renderer, &ab);
+        draw_bevel(ab, 1);
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        int ax = ab.x + 4, ay = ab.y + (ab.h - 5) / 2;
+        for (int i = 0; i < 4; i++)
+            SDL_RenderDrawLine(game.renderer, ax + i, ay + i,
+                               ax + 7 - i, ay + i);
     }
     if (game.rent_dd_open && !locked) {
+        SDL_Rect list = { items[0].x, items[0].y,
+                          items[0].w, items[3].y + items[3].h - items[0].y };
+        SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
+        SDL_RenderFillRect(game.renderer, &list);
+        SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(game.renderer, &list);
         for (int k = 0; k < 4; k++) {
-            SDL_Rect r = items[k];
+            SDL_Rect r = { items[k].x + 1, items[k].y + 1,
+                           items[k].w - 2, items[k].h - 1 };
             int sel = (k == t->rent_class);
-            SDL_SetRenderDrawColor(game.renderer, sel ? 208 : 246, sel ? 224 : 246, sel ? 255 : 246, 255);
-            SDL_RenderFillRect(game.renderer, &r);
-            SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
-            SDL_RenderDrawRect(game.renderer, &r);
+            if (sel) {   /* Win3.1 selection: inverted row */
+                SDL_SetRenderDrawColor(game.renderer, 0, 0, 0, 255);
+                SDL_RenderFillRect(game.renderer, &r);
+            }
             char mk[24]; format_money(tenant_rent(t->type, k), mk, sizeof mk);
-            stats_label(r.x + 6, r.y + 2, mk, ink);
+            stats_label(r.x + 5, r.y + 2, mk,
+                        sel ? (SDL_Color){ 255, 255, 255, 255 } : ink);
         }
     }
 }
@@ -7370,65 +7602,133 @@ static void render_inspect_popup(void)
     if (!t) { game.inspect_open = 0; return; }
     TiLayout L; ti_build(t, &L);
     int wx = game.inspect_x, wy = game.inspect_y;
-    SDL_Color ink = { 0, 0, 0, 255 }, warn = { 150, 20, 20, 255 };
+    SDL_Color ink = { 0, 0, 0, 255 };
+    #define TIABS(r) (SDL_Rect){ wx + (r).x, wy + (r).y, (r).w, (r).h }
 
-    SDL_Rect panel = { wx, wy, L.w, L.h };
-    SDL_SetRenderDrawColor(game.renderer, 198, 198, 198, 255);
-    SDL_RenderFillRect(game.renderer, &panel);
-    draw_bevel(panel, 1);
-    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
-    SDL_RenderDrawRect(game.renderer, &panel);
+    draw_dlg_frame((SDL_Rect){ wx, wy, L.w, L.h });
 
-    char title[72]; inspect_title(t, title, sizeof title);
-    stats_label(wx + 10, wy + L.name_y, title, ink);
-    SDL_SetRenderDrawColor(game.renderer, 120, 120, 120, 255);
-    SDL_RenderDrawLine(game.renderer, wx + 8, wy + 28, wx + L.w - 8, wy + 28);
+    /* item 3: title in its sunken field ("Office, Floor 44") */
+    draw_field31_text(TIABS(ti_item(L.tp, 3)), L.title, ink);
 
-    SDL_Rect pic = { wx + L.picture.x, wy + L.picture.y, L.picture.w, L.picture.h };
-    draw_tenant_picture(t, pic);
+    /* item 2: the live tower crop */
+    if (ti_has(L.tp, 2))
+        draw_tenant_picture(t, TIABS(L.picture));
 
-    for (int i = 0; i < L.comment_n; i++)
-        stats_label(wx + 10, wy + L.comment_y + i * 14, L.comments[i], warn);
-
-    int y = L.field_y0;
-    for (int i = 0; i < L.nf; i++) {
-        TiField *f = &L.fields[i];
-        stats_label(wx + 10, wy + y, f->label, ink);
-        if (f->kind == TIF_EVAL) {
-            SDL_Rect g = { wx + 10 + 96, wy + y + 1, 116, 12 };
-            draw_eval_gauge(g, f->ival, 80, f->imax);
-        } else if (f->kind == TIF_PATRON) {
-            SDL_Rect g = { wx + 10 + 96, wy + y + 1, 84, 12 };
-            draw_patron_bar(g, f->ival, f->imax);
-            char num[16]; snprintf(num, 16, "%d", f->ival);
-            stats_label(g.x + g.w + 6, wy + y, num, ink);
-        } else if (f->kind == TIF_PRICE) {
-            /* the dropdown is drawn last, so its open list overlays fields */
-        } else {
-            stats_label(wx + 10 + 96, wy + y, f->value, ink);
-        }
-        y += 20;
+    /* item 5: status/value field */
+    if (ti_has(L.tp, 5)) {
+        const char *s = L.cls == TI_CLS_CINEMA ? L.status : L.status;
+        draw_field31_text(TIABS(ti_item(L.tp, 5)), s, ink);
     }
 
-    if (L.price_field >= 0) {
-        SDL_Rect box = { wx + L.price_box.x, wy + L.price_box.y, L.price_box.w, L.price_box.h };
+    /* item 6 + its label: gauge (or the cinema's movie-title field) */
+    if (L.has_eval || L.has_patron) {
+        SDL_Rect g = TIABS(ti_item(L.tp, 6));
+        int lbl_id = (L.cls == TI_CLS_OFFICE || L.cls == TI_CLS_CONDO) ? 12
+                   : (L.cls == TI_CLS_SHOP || L.cls == TI_CLS_FOOD)   ? (L.cls == TI_CLS_SHOP ? 9 : 10)
+                   : 10;                                  /* hotels */
+        SDL_Rect lr = TIABS(ti_item(L.tp, lbl_id));
+        if (L.has_eval) {
+            stats_label(lr.x, lr.y + 2, "Eval", ink);
+            draw_eval_gauge31(g, L.eval_val, 80, L.eval_hi);
+        } else {
+            stats_label(lr.x, lr.y + 2, L.cls == TI_CLS_SHOP
+                        ? "Patronage" : "Today's Patronage", ink);
+            SDL_Rect bar = { g.x, g.y, g.w - 34, g.h };
+            draw_field31(bar);
+            SDL_Rect fill = { bar.x + 2, bar.y + 2,
+                              L.patron_max ? (bar.w - 4) * (L.patron_val > L.patron_max
+                                  ? L.patron_max : L.patron_val) / L.patron_max : 0,
+                              bar.h - 4 };
+            SDL_SetRenderDrawColor(game.renderer, 60, 110, 200, 255);
+            SDL_RenderFillRect(game.renderer, &fill);
+            char num[16]; snprintf(num, 16, "%d", L.patron_val);
+            stats_label(g.x + g.w - 28, g.y + 3, num, ink);
+        }
+    } else if (L.cls == TI_CLS_CINEMA) {
+        stats_label(wx + ti_item(L.tp, 11).x, wy + ti_item(L.tp, 11).y + 2,
+                    "Playing", ink);
+        draw_field31_text(TIABS(ti_item(L.tp, 6)), L.movie, ink);
+    } else if (L.cls == TI_CLS_ESC || L.cls == TI_CLS_STAIR) {
+        stats_label(wx + ti_item(L.tp, 8).x, wy + ti_item(L.tp, 8).y + 2,
+                    "Now on board", ink);
+        draw_field31_text(TIABS(ti_item(L.tp, 6)), L.val9, ink);
+    }
+
+    /* items 9-14: the per-class label/field rows */
+    switch (L.cls) {
+    case TI_CLS_OFFICE: case TI_CLS_CONDO:
+        stats_label(wx + ti_item(L.tp, 10).x, wy + ti_item(L.tp, 10).y + 2,
+                    "Length", ink);
+        draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
+        stats_label(wx + ti_item(L.tp, 11).x, wy + ti_item(L.tp, 11).y + 2,
+                    L.cls == TI_CLS_CONDO ? "Price" : "Rent", ink);
+        break;
+    case TI_CLS_HS: case TI_CLS_HT: case TI_CLS_HSU:
+        stats_label(wx + ti_item(L.tp, 9).x, wy + ti_item(L.tp, 9).y + 2,
+                    "Rate", ink);
+        break;
+    case TI_CLS_SHOP:
+        stats_label(wx + ti_item(L.tp, 10).x, wy + ti_item(L.tp, 10).y + 2,
+                    "Rent", ink);
+        break;
+    case TI_CLS_FOOD:
+        stats_label(wx + ti_item(L.tp, 12).x, wy + ti_item(L.tp, 12).y + 2,
+                    "Yesterday's Profit", ink);
+        draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
+        break;
+    case TI_CLS_CINEMA:
+        stats_label(wx + ti_item(L.tp, 12).x, wy + ti_item(L.tp, 12).y + 2,
+                    "Today's Income", ink);
+        draw_field31_text(TIABS(ti_item(L.tp, 10)), L.val10, ink);
+        stats_label(wx + ti_item(L.tp, 14).x, wy + ti_item(L.tp, 14).y + 2,
+                    "Length of Showing", ink);
+        break;
+    default:
+        break;
+    }
+
+    /* item 8: comment well — black text inside the sunken box (the
+     * red floating lines were a port-ism; the EXE prints plain text) */
+    if (L.cls != TI_CLS_ESC && L.cls != TI_CLS_STAIR && ti_has(L.tp, 8)) {
+        SDL_Rect cw = TIABS(ti_item(L.tp, 8));
+        draw_field31(cw);
+        for (int i = 0; i < L.comment_n; i++)
+            stats_label(cw.x + 6, cw.y + 4 + i * 15, L.comments[i], ink);
+    }
+
+    /* item 4 (+9): people wells with the occupants-now silhouettes */
+    if (L.occ_row.w > 0) {
+        SDL_Rect w1 = TIABS(L.occ_row);
+        draw_field31(w1);
+        int n1 = L.occ_n < L.occ_cap1 ? L.occ_n : L.occ_cap1;
+        SDL_RenderSetClipRect(game.renderer, &w1);
+        draw_person_strip(L.occ_pid, n1, w1.x + 4, w1.y + (w1.h - PSTRIP_H) / 2);
+        SDL_RenderSetClipRect(game.renderer, NULL);
+        if (L.occ_row2.w > 0) {
+            SDL_Rect w2 = TIABS(L.occ_row2);
+            draw_field31(w2);
+            if (L.occ_n > n1) {
+                SDL_RenderSetClipRect(game.renderer, &w2);
+                draw_person_strip(L.occ_pid + n1, L.occ_n - n1,
+                                  w2.x + 4, w2.y + (w2.h - PSTRIP_H) / 2);
+                SDL_RenderSetClipRect(game.renderer, NULL);
+            }
+        }
+    }
+
+    if (L.has_price) {
+        SDL_Rect box = TIABS(L.price_box);
         SDL_Rect items[4];
-        for (int k = 0; k < 4; k++)
-            items[k] = (SDL_Rect){ wx + L.price_items[k].x, wy + L.price_items[k].y,
-                                   L.price_items[k].w, L.price_items[k].h };
+        for (int k = 0; k < 4; k++) items[k] = TIABS(L.price_items[k]);
         draw_price_dropdown(t, box, items, L.price_locked);
     }
 
-    if (L.occ_n)
-        draw_person_strip(L.occ_pid, L.occ_n,
-                          wx + L.occ_row.x, wy + L.occ_row.y);
-
-    draw_dlg_button((SDL_Rect){ wx + L.rename_btn.x, wy + L.rename_btn.y, L.rename_btn.w, L.rename_btn.h },
-                    "Rename", 1);
+    if (L.has_rename)
+        draw_btn31(TIABS(L.rename_btn), "Rename", 0, 1);
     if (L.has_newmovie)
-        draw_dlg_button((SDL_Rect){ wx + L.newmovie_btn.x, wy + L.newmovie_btn.y,
-                                    L.newmovie_btn.w, L.newmovie_btn.h }, "New Movie", 1);
-    draw_dlg_button((SDL_Rect){ wx + L.ok_btn.x, wy + L.ok_btn.y, L.ok_btn.w, L.ok_btn.h }, "OK", 1);
+        draw_btn31(TIABS(L.newmovie_btn), "New Movie", 0, 1);
+    draw_btn31(TIABS(L.ok_btn), "OK", 1, 1);
+    #undef TIABS
 }
 
 /* ---- Name-editor sub-dialog (res 0x2DC: EDIT + Rename/Delete/Cancel) ----
@@ -7488,20 +7788,13 @@ static void render_name_editor(void)
     SDL_SetRenderDrawBlendMode(game.renderer, SDL_BLENDMODE_NONE);
 
     SDL_Rect d = name_dlg_rect();
-    SDL_SetRenderDrawColor(game.renderer, 198, 198, 198, 255);
-    SDL_RenderFillRect(game.renderer, &d);
-    draw_bevel(d, 1);
-    SDL_SetRenderDrawColor(game.renderer, 90, 90, 90, 255);
-    SDL_RenderDrawRect(game.renderer, &d);
+    draw_dlg_frame(d);
     stats_label(d.x + 12, d.y + 10,
                 game.name_edit_person ? "Person's name:" : "Tenant's name:",
                 ink);
 
     SDL_Rect e = name_dlg_edit(d);
-    SDL_SetRenderDrawColor(game.renderer, 255, 255, 255, 255);
-    SDL_RenderFillRect(game.renderer, &e);
-    SDL_SetRenderDrawColor(game.renderer, 60, 60, 60, 255);
-    SDL_RenderDrawRect(game.renderer, &e);
+    draw_field31(e);
     int tw = 0, th = 0;
     if (game.name_edit_len > 0) {
         SDL_Texture *tex = render_text(game.name_edit_buf, ink, &tw, &th);
@@ -7637,7 +7930,7 @@ static int inspect_popup_click(int mx, int my)
     #define TIABS(r) (SDL_Rect){ wx + (r).x, wy + (r).y, (r).w, (r).h }
 
     /* An open dropdown: an item click selects; anything else just closes it. */
-    if (game.rent_dd_open && L.price_field >= 0) {
+    if (game.rent_dd_open && L.has_price) {
         for (int k = 0; k < 4; k++)
             if (point_in_rect(mx, my, TIABS(L.price_items[k]))) {
                 if (game_set_rent_class(&game.sim, &game.tower, t, k)) {
@@ -7651,12 +7944,15 @@ static int inspect_popup_click(int mx, int my)
             }
         game.rent_dd_open = 0;
     }
-    if (L.price_field >= 0 && point_in_rect(mx, my, TIABS(L.price_box))) {
+    if (L.has_price && point_in_rect(mx, my, TIABS(L.price_box))) {
         if (!L.price_locked)
             game.rent_dd_open = !game.rent_dd_open;
         return 1;
     }
-    if (point_in_rect(mx, my, TIABS(L.rename_btn))) { open_name_editor(t); return 1; }
+    if (L.has_rename && point_in_rect(mx, my, TIABS(L.rename_btn))) {
+        open_name_editor(t);
+        return 1;
+    }
     if (L.has_newmovie && point_in_rect(mx, my, TIABS(L.newmovie_btn))) {
         game.movie_dlg_open = 1;
         return 1;
@@ -7666,9 +7962,14 @@ static int inspect_popup_click(int mx, int my)
         return 1;
     }
     if (L.occ_n) {
-        uint16_t pid = person_strip_hit(L.occ_pid, L.occ_n,
-                                        wx + L.occ_row.x, wy + L.occ_row.y,
-                                        mx, my);
+        int n1 = L.occ_n < L.occ_cap1 ? L.occ_n : L.occ_cap1;
+        uint16_t pid = person_strip_hit(L.occ_pid, n1,
+                wx + L.occ_row.x + 4,
+                wy + L.occ_row.y + (L.occ_row.h - PSTRIP_H) / 2, mx, my);
+        if (!pid && L.occ_n > n1 && L.occ_row2.w > 0)
+            pid = person_strip_hit(L.occ_pid + n1, L.occ_n - n1,
+                wx + L.occ_row2.x + 4,
+                wy + L.occ_row2.y + (L.occ_row2.h - PSTRIP_H) / 2, mx, my);
         if (pid) { open_person_popup_at(pid, mx, my); return 1; }
     }
     SDL_Rect panel = { wx, wy, L.w, L.h };
@@ -10980,12 +11281,20 @@ int main(int argc, char *argv[])
                 st = st < 2 ? 2 : st > 6 ? 6 : st;
                 /* Gold-star art 0x2716 rides every rating-up dialog
                  * (DTMP companions of 0xBD6..0xBDA; bitmap survey). */
-                show_notice_modal_art(
-                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 0,
-                                 "Congratulations!\nYour tower has been "
-                                 "given a new Star Rating!"),
-                    exe_dlg_text((uint16_t)(0xBD6 + st - 2), 1, "OK"),
-                    0xA716);
+                /* 0xBDA (the TOWER card) has an empty filler STATIC
+                 * as control 1 — the OK button is control 2 (strings
+                 * survey; Jonah hit the blank button 2026-08-17). */
+                {
+                    uint16_t did = (uint16_t)(0xBD6 + st - 2);
+                    const char *btn = exe_dlg_text(did, 1, "OK");
+                    if (!btn[0]) btn = exe_dlg_text(did, 2, "OK");
+                    if (!btn[0]) btn = "OK";
+                    show_notice_modal_art(
+                        exe_dlg_text(did, 0,
+                                     "Congratulations!\nYour tower has been "
+                                     "given a new Star Rating!"),
+                        btn, 0xA716);
+                }
                 game.sim.pending_star_up = 0;
             }
 
