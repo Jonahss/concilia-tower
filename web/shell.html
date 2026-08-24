@@ -12,26 +12,44 @@
   :root { color-scheme: dark; }
   body {
     margin: 0; min-height: 100vh; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 18px;
+    align-items: center; justify-content: center;
     background: #10141c; color: #cfd6e4;
     font-family: Georgia, 'Times New Roman', serif;
   }
   h1 { position: absolute; width: 1px; height: 1px; overflow: hidden;
        clip: rect(0 0 0 0); white-space: nowrap; }
-  #setup {
-    background: #1a2130; border: 1px solid #2c3648; border-radius: 8px;
-    overflow: hidden; padding: 0 0 22px;
-    width: min(642px, calc(100vw - 20px)); text-align: center;
+
+  /* ---- Title screen: the hero fills the viewport, the menu floats
+   * over the lobby like a game main menu. ---- */
+  #stage {
+    position: relative; width: 100%; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; overflow: hidden; padding: 84px 0 64px;
+    box-sizing: border-box;
   }
-  #hero { display: block; width: 100%; height: auto;
-          image-rendering: pixelated; border-bottom: 3px solid #167060; }
-  .tagline { font-family: Georgia, 'Times New Roman', serif;
-             font-size: 15px; letter-spacing: 1px; color: #cfd6e4;
-             margin: 16px 24px 0; }
+  #hero {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: center top;
+    image-rendering: pixelated; z-index: 0;
+  }
+  #shade {
+    position: absolute; inset: 0; z-index: 1;
+    background: linear-gradient(rgba(6,8,14,.10) 0%, rgba(6,8,14,.25) 45%,
+                                rgba(6,8,14,.72) 100%);
+  }
+  #menu {
+    position: relative; z-index: 2;
+    background: rgba(13,17,26,.88);
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    border: 1px solid #37435a; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    width: min(500px, calc(100vw - 24px));
+    padding: 16px 26px 20px; text-align: center; box-sizing: border-box;
+  }
+  .tagline { font-size: 15px; letter-spacing: 1px; color: #cfd6e4;
+             margin: 2px 0 0; }
   .tagline em { color: #e8ded0; }
-  #setup p { font-size: 14px; line-height: 1.55; color: #aab3c5;
-             margin-left: 36px; margin-right: 36px; }
-  #setup .privacy { font-size: 12px; color: #77809a; }
+  #menu p { font-size: 14px; line-height: 1.55; color: #aab3c5; }
   input[type=file] { display: none; }
   label.pick, button.start {
     display: inline-block; cursor: pointer; margin: 8px 6px 0;
@@ -41,7 +59,11 @@
   label.pick:hover, button.start:hover { background: #1d8a76; }
   button.start[disabled] { background: #2a3040; color: #6a7288;
                            cursor: default; }
-  #status { font-size: 13px; color: #9fb7d8; min-height: 18px; }
+  .drophint { font-size: 12px; color: #77809a; margin-top: 8px; }
+  #status { font-size: 13px; color: #9fb7d8; min-height: 18px;
+            margin-top: 10px; }
+  #hashnote { font-size: 12px; color: #c9a45a; margin: 6px auto 0;
+              display: none; }
   #canvaswrap { display: none; position: relative; }
   canvas {
     display: block; image-rendering: pixelated;
@@ -67,10 +89,11 @@
   #canvaswrap:fullscreen canvas {
     width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
   }
-  #towers { margin: 18px 36px 4px; text-align: left; display: none; }
+  #towers { margin: 12px 0 4px; text-align: left; }
   #towers h2 { font-size: 14px; letter-spacing: 1px; color: #cfd6e4;
                margin: 0 0 8px; font-weight: normal;
                border-bottom: 1px solid #2c3648; padding-bottom: 6px; }
+  #slotlist { max-height: min(300px, 38vh); overflow-y: auto; }
   .slot { display: flex; align-items: center; gap: 10px;
           padding: 7px 10px; border-radius: 5px; cursor: pointer; }
   .slot:hover { background: #202839; }
@@ -87,91 +110,158 @@
   }
   .slot .ops button:hover { border-color: #167060; color: #dfe5f0; }
   .slot .ops button.play { border-color: #167060; color: #7fd8c0; }
-  #towerbtns { margin-top: 8px; }
+  #startbtn { width: 100%; margin: 10px 0 2px; font-size: 16px;
+              padding: 11px 22px; }
+  #towerbtns { margin-top: 8px; display: flex; justify-content: center;
+               gap: 8px; flex-wrap: wrap; }
   #towerbtns button, #towerbtns label {
     background: none; border: 1px solid #2c3648; border-radius: 4px;
-    color: #9fb7d8; font-size: 12.5px; padding: 5px 12px; margin-right: 8px;
+    color: #9fb7d8; font-size: 12.5px; padding: 5px 12px;
     cursor: pointer; font-family: inherit; display: inline-block;
+    margin: 0;
   }
   #towerbtns button:hover, #towerbtns label:hover {
     border-color: #167060; color: #dfe5f0; }
   #towers .empty { font-size: 12.5px; color: #77809a; padding: 4px 10px; }
+  /* EXE line at the card's foot in towers mode: which copy is loaded,
+   * with quiet Change / Forget actions beside it. */
+  #exerow { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+            border-top: 1px solid #2c3648; padding-top: 10px; }
+  #exerow #status { flex: 1 1 auto; text-align: left; margin-top: 0; }
+  .mini { background: none; border: 1px solid #2c3648; border-radius: 4px;
+          color: #9fb7d8; font-size: 11.5px; padding: 3px 9px;
+          cursor: pointer; font-family: inherit; flex: 0 0 auto; }
+  .mini:hover { border-color: #167060; color: #dfe5f0; }
+  .mini.warn:hover { border-color: #5a3040; color: #d8a0b0; }
   #findhelp { font-size: 13px; color: #aab3c5; text-align: left;
-              max-width: 500px; margin: 10px auto 0; padding: 0 24px; }
+              margin: 10px auto 0; }
   #findhelp summary { cursor: pointer; color: #9fb7d8; text-align: center; }
-  #findhelp ul { padding-left: 18px; line-height: 1.5; }
-  #crash {
+  #findhelp ul { padding-left: 18px; line-height: 1.5;
+                 max-height: 34vh; overflow-y: auto; }
+  #pagefoot { position: absolute; bottom: 0; left: 0; right: 0; z-index: 2;
+              text-align: center; padding: 8px 12px 22px; }
+  #pagefoot .privacy { font-size: 12px; color: #9aa3b8; margin: 2px 0;
+                       text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #crash, #modal {
     display: none; position: fixed; inset: 0; z-index: 50;
     background: rgba(8,10,16,.92); color: #e8ded0;
     align-items: center; justify-content: center; text-align: center;
   }
-  #crash .card { background: #1a2130; border: 1px solid #5a3040;
-    border-radius: 8px; padding: 24px 32px; max-width: 520px; }
+  #crash .card, #modal .card {
+    background: #1a2130; border: 1px solid #2c3648;
+    border-radius: 8px; padding: 22px 30px;
+    width: min(440px, calc(100vw - 40px)); box-sizing: border-box; }
+  #crash .card { border-color: #5a3040; max-width: 520px; width: auto; }
   #crash code { display: block; margin: 10px 0; font-size: 12px;
     color: #c9a45a; word-break: break-all; }
+  /* ---- In-page dialog (replaces prompt/confirm/alert) ---- */
+  #modal { background: rgba(8,10,16,.78); z-index: 60; }
+  #modal h3 { margin: 0 0 8px; font-size: 17px; color: #e8ded0;
+              font-weight: normal; letter-spacing: .5px; }
+  #modal .body { font-size: 13.5px; color: #aab3c5; line-height: 1.5;
+                 margin: 0 0 12px; }
+  #minput {
+    display: block; width: 100%; box-sizing: border-box;
+    background: #10141c; color: #eef2fa; border: 1px solid #37435a;
+    border-radius: 5px; padding: 9px 11px; font-size: 15px;
+    font-family: inherit; outline: none;
+  }
+  #minput:focus { border-color: #167060; }
+  #minput.bad { border-color: #7a3448; }
+  #merror { font-size: 12px; color: #d8a0b0; min-height: 16px;
+            text-align: left; margin: 5px 2px 0; }
+  #modal .mrow { display: flex; justify-content: flex-end; gap: 8px;
+                 margin-top: 12px; }
+  #modal .mrow button {
+    border-radius: 5px; padding: 8px 18px; font-size: 14px;
+    font-family: inherit; cursor: pointer;
+  }
+  #mcancel { background: none; border: 1px solid #2c3648; color: #9fb7d8; }
+  #mcancel:hover { border-color: #167060; color: #dfe5f0; }
+  #mok { background: #167060; border: 0; color: #eef2fa; }
+  #mok:hover { background: #1d8a76; }
+  #mok[disabled] { background: #2a3040; color: #6a7288; cursor: default; }
+  #modal.danger #mok { background: #7a3448; }
+  #modal.danger #mok:hover { background: #93415a; }
   #ver { position: fixed; bottom: 6px; right: 10px; font-size: 11px;
-         color: #5a6378; }
+         color: #7a8398; z-index: 3;
+         text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 </style>
 </head>
 <body>
-  <div id="setup">
+  <div id="stage">
     <img id="hero" src="hero.png" width="640" height="480"
          alt="A contemporary glass tower entrance at dusk bearing the sign CONCILIA TOWER, its warm lobby glowing through the glass, rendered in the dithered style of the 1994 SimTower splash screen">
+    <div id="shade"></div>
     <h1>ConciliaTower</h1>
-    <p class="tagline">the faithful <em>SimTower</em> port &mdash; in your browser</p>
-    <p>Bring your own copy of <b>SIMTOWER.EXE</b> &mdash; or the compressed
-       <b>SIMTOWER.EX_</b> straight off the CD; this page expands it. It is
-       parsed <b>entirely in your browser</b> to load the game's original
-       art and sound &mdash; there is no server, and the file never leaves
-       your machine.</p>
-    <label class="pick">Choose SIMTOWER.EXE<input type="file" id="exefile" multiple></label>
-    <button class="start" id="startbtn" disabled>Start</button>
-    <button class="start" id="forgetbtn" style="display:none; background:#5a3040"
-            title="Remove the remembered copy from this browser">Forget my copy</button>
-    <div id="status">Waiting for your EXE&hellip;</div>
-    <div id="hashnote" style="font-size:12px; color:#c9a45a; max-width:480px;
-         margin:6px auto 0; display:none"></div>
-    <div id="towers">
-      <h2>Your towers</h2>
-      <div id="slotlist"></div>
-      <div id="towerbtns">
-        <button id="newslotbtn" type="button">New tower</button>
-        <label>Import .sav / .TDT<input type="file" id="importfile"
-               accept=".sav,.tdt,.twr" style="display:none"></label>
+    <div id="menu">
+      <p class="tagline">the faithful <em>SimTower</em> port &mdash; in your browser</p>
+      <input type="file" id="exefile" multiple>
+      <div id="setupmode">
+        <p>Bring your own copy of <b>SIMTOWER.EXE</b> &mdash; or the
+           compressed <b>SIMTOWER.EX_</b> straight off the CD; this page
+           expands it. It is parsed <b>entirely in your browser</b> to load
+           the game's original art and sound &mdash; there is no server, and
+           the file never leaves your machine.</p>
+        <label class="pick" for="exefile">Choose SIMTOWER.EXE</label>
+        <div class="drophint">&hellip;or drop the file anywhere on this page</div>
+        <details id="findhelp">
+          <summary>Where do I find SIMTOWER.EXE?</summary>
+          <ul>
+            <li>It's the game's main program file &mdash; named
+                <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>, found in an
+                installed <code>SIMTOWER</code> folder.</li>
+            <li><b>Only have the CD (or a CD image)?</b> The disc carries a
+                <em>compressed</em> copy named <code>SIMTOWER.EX_</code> (note
+                the underscore) &mdash; drop that here as-is; this page expands
+                it for you. Open a CD image with 7-Zip or any unarchiver to
+                get at it. No installer needed.</li>
+            <li><b>Floppy disks?</b> Disks 2 and 3 hold
+                <code>SIMTOWER.E1_</code> and <code>SIMTOWER.E2_</code> &mdash;
+                select the two together and drop both at once.</li>
+            <li><b>No disc?</b> SimTower hasn't been sold in decades; copies
+                circulate on game-preservation sites (a web search for
+                &ldquo;SimTower Windows download&rdquo; gets you there).
+                Downloads are usually a ZIP or CD image &mdash; look inside for
+                <code>SIMTOWER.EXE</code> or <code>SIMTOWER.EX_</code>.</li>
+            <li>All known US releases work (1.0 and 1.1b). The
+                <b>Macintosh</b> version won't &mdash; it stores its art
+                differently. Windows version only.</li>
+            <li>Picked the wrong file? No harm &mdash; this page checks the
+                file's structure and tells you what it got instead.</li>
+          </ul>
+        </details>
       </div>
+      <div id="towersmode" style="display:none">
+        <div id="towers">
+          <h2>Your towers</h2>
+          <div id="slotlist"></div>
+        </div>
+        <button class="start" id="startbtn" disabled>Play</button>
+        <div id="towerbtns">
+          <button id="newslotbtn" type="button">New tower</button>
+          <label for="importfile">Import .sav / .TDT</label>
+          <input type="file" id="importfile" accept=".sav,.tdt,.twr">
+        </div>
+      </div>
+      <div id="exerow">
+        <div id="status">Waiting for your EXE&hellip;</div>
+        <label class="mini" for="exefile" id="changebtn"
+               style="display:none"
+               title="Load a different SIMTOWER.EXE">Change</label>
+        <button class="mini warn" id="forgetbtn" style="display:none"
+                title="Remove the remembered copy from this browser">Forget</button>
+      </div>
+      <div id="hashnote"></div>
     </div>
-    <details id="findhelp">
-      <summary>Where do I find SIMTOWER.EXE?</summary>
-      <ul>
-        <li>It's the game's main program file &mdash; named
-            <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>, found in an
-            installed <code>SIMTOWER</code> folder.</li>
-        <li><b>Only have the CD (or a CD image)?</b> The disc carries a
-            <em>compressed</em> copy named <code>SIMTOWER.EX_</code> (note
-            the underscore) &mdash; drop that here as-is; this page expands
-            it for you. Open a CD image with 7-Zip or any unarchiver to
-            get at it. No installer needed.</li>
-        <li><b>Floppy disks?</b> Disks 2 and 3 hold
-            <code>SIMTOWER.E1_</code> and <code>SIMTOWER.E2_</code> &mdash;
-            select the two together and drop both at once.</li>
-        <li><b>No disc?</b> SimTower hasn't been sold in decades; copies
-            circulate on game-preservation sites (a web search for
-            &ldquo;SimTower Windows download&rdquo; gets you there).
-            Downloads are usually a ZIP or CD image &mdash; look inside for
-            <code>SIMTOWER.EXE</code> or <code>SIMTOWER.EX_</code>.</li>
-        <li>All known US releases work (1.0 and 1.1b). The
-            <b>Macintosh</b> version won't &mdash; it stores its art
-            differently. Windows version only.</li>
-        <li>Picked the wrong file? No harm &mdash; this page checks the
-            file's structure and tells you what it got instead.</li>
-      </ul>
-    </details>
-    <p class="privacy">Your EXE and saves live in this browser's local
-       storage only &mdash; upload once, it's remembered here.
-       Sound starts with your first click (browser rule, not ours).</p>
-    <p class="privacy">Open source &mdash;
-       <a href="https://github.com/Jonahss/concilia-tower" target="_blank"
-          rel="noopener">github.com/Jonahss/concilia-tower</a></p>
+    <div id="pagefoot">
+      <p class="privacy">Your EXE and saves live in this browser's local
+         storage only &mdash; upload once, it's remembered here.
+         Sound starts with your first click (browser rule, not ours).</p>
+      <p class="privacy">Open source &mdash;
+         <a href="https://github.com/Jonahss/concilia-tower" target="_blank"
+            rel="noopener">github.com/Jonahss/concilia-tower</a></p>
+    </div>
   </div>
   <div id="canvaswrap">
     <button id="fsbtn" title="Fullscreen">&#x26F6;</button>
@@ -179,6 +269,16 @@
     <canvas id="canvas" width="960" height="720"
             oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
   </div>
+  <div id="modal"><form class="card" id="modalform">
+    <h3 id="mtitle"></h3>
+    <p class="body" id="mbody"></p>
+    <input id="minput" autocomplete="off" spellcheck="false" maxlength="24">
+    <div id="merror"></div>
+    <div class="mrow">
+      <button id="mcancel" type="button">Cancel</button>
+      <button id="mok" type="submit">OK</button>
+    </div>
+  </form></div>
   <div id="crash"><div class="card">
     <h1 style="font-size:20px">The tower fell over</h1>
     <p>The game hit an internal error. Your last save is safe in this
@@ -195,7 +295,91 @@
   var statusEl = document.getElementById('status');
   var startBtn = document.getElementById('startbtn');
   var forgetBtn = document.getElementById('forgetbtn');
+  var changeBtn = document.getElementById('changebtn');
   var hashNote = document.getElementById('hashnote');
+
+  /* The menu card has two faces: setup (get an EXE in) and towers
+   * (manage + play). The EXE gates the switch — upload up front, then
+   * tower management. */
+  function setMenuMode(towers) {
+    document.getElementById('setupmode').style.display =
+      towers ? 'none' : 'block';
+    document.getElementById('towersmode').style.display =
+      towers ? 'block' : 'none';
+    changeBtn.style.display = towers ? 'inline-block' : 'none';
+  }
+
+  /* ---- In-page dialog, replacing prompt()/confirm()/alert(). ----
+   * ctModal returns a Promise: the input's value (or true when there is
+   * no input) on OK, null on Cancel/Escape. A validate callback gets the
+   * live value and returns an error string (OK disabled) or null. */
+  var modalEl = document.getElementById('modal');
+  var modalState = null;
+  function ctModal(o) {
+    return new Promise(function (res) {
+      modalState = { resolve: res, validate: o.validate || null,
+                     hasInput: 'input' in o };
+      document.getElementById('mtitle').textContent = o.title || '';
+      document.getElementById('mbody').textContent = o.body || '';
+      document.getElementById('mbody').style.display =
+        o.body ? 'block' : 'none';
+      var input = document.getElementById('minput');
+      var err = document.getElementById('merror');
+      input.style.display = modalState.hasInput ? 'block' : 'none';
+      err.style.display = modalState.hasInput ? 'block' : 'none';
+      input.value = modalState.hasInput ? (o.input || '') : '';
+      input.classList.remove('bad');
+      err.textContent = '';
+      document.getElementById('mok').textContent = o.okLabel || 'OK';
+      document.getElementById('mok').disabled = false;
+      document.getElementById('mcancel').style.display =
+        o.noCancel ? 'none' : 'inline-block';
+      modalEl.className = o.danger ? 'danger' : '';
+      modalEl.style.display = 'flex';
+      if (modalState.hasInput) { input.focus(); input.select(); }
+      else document.getElementById('mok').focus();
+    });
+  }
+  function ctAlert(title, body) {
+    return ctModal({ title: title, body: body, noCancel: true });
+  }
+  function ctConfirm(o) {
+    return ctModal(o).then(function (v) { return v !== null; });
+  }
+  function modalClose(value) {
+    var st = modalState;
+    modalState = null;
+    modalEl.style.display = 'none';
+    if (st) st.resolve(value);
+  }
+  function modalValidate() {
+    if (!modalState || !modalState.hasInput) return null;
+    var input = document.getElementById('minput');
+    var msg = modalState.validate ? modalState.validate(input.value) : null;
+    document.getElementById('merror').textContent = msg || '';
+    input.classList.toggle('bad', !!msg);
+    document.getElementById('mok').disabled = !!msg || !input.value;
+    return msg;
+  }
+  document.getElementById('minput').addEventListener('input', modalValidate);
+  document.getElementById('modalform').addEventListener('submit',
+    function (ev) {
+      ev.preventDefault();
+      if (!modalState) return;
+      if (modalState.hasInput) {
+        var v = document.getElementById('minput').value;
+        if (!v || modalValidate()) return;
+        modalClose(v);
+      } else modalClose(true);
+    });
+  document.getElementById('mcancel').addEventListener('click',
+    function () { modalClose(null); });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && modalState) { ev.preventDefault(); modalClose(null); }
+  });
+  modalEl.addEventListener('mousedown', function (ev) {
+    if (ev.target === modalEl) modalClose(null);
+  });
 
   /* Known builds, by SHA-256. 'verified' = the build every mechanic was
    * byte-verified against; 'working' = structure-checked and boot-tested.
@@ -377,6 +561,7 @@
     exeBytes = bytes;
     startBtn.disabled = false;
     forgetBtn.style.display = persisted ? 'inline-block' : 'none';
+    setMenuMode(true);
     checkHash(bytes).then(function (hash) {
       var known = hash && KNOWN_BUILDS[hash];
       var mark = '';
@@ -399,7 +584,7 @@
         hashNote.style.display = 'none';
       }
       statusEl.textContent = label + ' (' + (bytes.length / 1024 | 0) +
-        ' KB)' + mark + '. Ready.';
+        ' KB)' + mark;
     });
   }
 
@@ -509,6 +694,7 @@
       startBtn.disabled = true;
       forgetBtn.style.display = 'none';
       hashNote.style.display = 'none';
+      setMenuMode(false);
       statusEl.textContent = 'Copy forgotten. Waiting for your EXE…';
     });
   });
@@ -519,7 +705,6 @@
    * --save= path it is launched with; everything here is plain FS
    * bookkeeping around that. .sav backups are this-browser-format
    * (wasm layout); .TDT is the portable format for 1994 SimTower. */
-  var towersEl = document.getElementById('towers');
   var slotListEl = document.getElementById('slotlist');
   var DEFAULT_SLOT = 'concilliatower';   /* pre-manager saves live here */
   var currentSlot = null;
@@ -549,6 +734,18 @@
       if (names.indexOf(n) < 0) names.push(n);
     });
     return names.sort();
+  }
+  /* Shared name rules for every naming dialog; `except` lets a rename
+   * keep its own current name without tripping the taken check. */
+  function nameValidator(except) {
+    return function (v) {
+      if (!validSlotName(v))
+        return 'Letters, digits, space, - _ . — up to 24 characters, ' +
+               'starting with a letter or digit.';
+      if (v !== except && listSlotNames().indexOf(v) >= 0)
+        return 'A tower named "' + v + '" already exists.';
+      return null;
+    };
   }
   function slotMeta(name) {
     try {
@@ -602,14 +799,16 @@
 
   function renderSlots() {
     if (!Module.engineReady) return;
-    towersEl.style.display = 'block';
     slotListEl.innerHTML = '';
     var names = listSlotNames();
     if (names.length && names.indexOf(currentSlot) < 0) currentSlot = names[0];
+    startBtn.textContent = names.length
+      ? 'Play — ' + currentSlot : 'Start building';
     if (!names.length) {
       var d = document.createElement('div');
       d.className = 'empty';
-      d.textContent = 'No towers yet — Start builds a fresh lot.';
+      d.textContent = 'No towers yet — Start builds a fresh lot, or ' +
+                      'New tower names one first.';
       slotListEl.appendChild(d);
       return;
     }
@@ -627,9 +826,9 @@
     var onDisk = slotExists(name);
     if (staged) {
       meta.textContent = 'imported ' + pendingTdt.src +
-                         ' — press Start to open it';
+                         ' — press Play to open it';
     } else if (!onDisk) {
-      meta.textContent = 'empty lot — press Start to begin building';
+      meta.textContent = 'empty lot — press Play to begin building';
     } else {
       var m = slotMeta(name), bits = [];
       if (m && m.exact)
@@ -680,65 +879,77 @@
     try {
       downloadBytes(name + '.sav', FS.readFile(slotPath(name)));
       ctEvent('export-sav');
+    } catch (e) {
+      ctAlert('Export failed', 'Could not read that save: ' + e.message);
     }
-    catch (e) { alert('Could not read that save: ' + e.message); }
   }
   function exportSlotTdt(name) {
     /* Headless engine-side conversion (ct_sav_to_tdt KEEPALIVE) —
      * no need to open the tower first. */
-    if (!Module.engineReady) { alert('Engine still loading — one moment.'); return; }
+    if (!Module.engineReady) {
+      ctAlert('One moment', 'The engine is still loading — try again in ' +
+              'a few seconds.');
+      return;
+    }
     try {
       var p = Module.ccall('ct_sav_to_tdt', 'string', ['string'],
                            [slotPath(name)]);
-      if (!p) { alert('Could not convert that save to .TDT.'); return; }
+      if (!p) {
+        ctAlert('Export failed', 'Could not convert that save to .TDT.');
+        return;
+      }
       downloadBytes(name + '.TDT', FS.readFile(p));
       ctEvent('export-tdt');
-    } catch (e) { alert('TDT export failed: ' + e.message); }
-  }
-  function takenName(to) {
-    if (!validSlotName(to)) {
-      alert('Tower names: letters, digits, space, - _ . (max 24 chars).');
-      return true;
-    }
-    if (listSlotNames().indexOf(to) >= 0) {
-      alert('A tower named "' + to + '" already exists.');
-      return true;
-    }
-    return false;
+    } catch (e) { ctAlert('Export failed', 'TDT export failed: ' + e.message); }
   }
   function renameSlot(name) {
-    var to = prompt('New name for "' + name + '":', name);
-    if (!to || to === name || takenName(to)) return;
-    ['', '.1', '.2', '.3'].forEach(function (g) {
-      try { FS.rename(slotPath(name) + g, slotPath(to) + g); } catch (e) {}
+    ctModal({ title: 'Rename tower',
+              body: 'New name for "' + name + '":',
+              input: name, validate: nameValidator(name),
+              okLabel: 'Rename' }).then(function (to) {
+      if (!to || to === name) return;
+      ['', '.1', '.2', '.3'].forEach(function (g) {
+        try { FS.rename(slotPath(name) + g, slotPath(to) + g); } catch (e) {}
+      });
+      if (currentSlot === name) currentSlot = to;
+      try { localStorage.setItem('ct-slot', currentSlot); } catch (e) {}
+      syncPersist(renderSlots);
     });
-    if (currentSlot === name) currentSlot = to;
-    try { localStorage.setItem('ct-slot', currentSlot); } catch (e) {}
-    syncPersist(renderSlots);
   }
   function duplicateSlot(name) {
-    var to = prompt('Name for the copy:', name + ' copy');
-    if (!to || takenName(to)) return;
-    try { FS.writeFile(slotPath(to), FS.readFile(slotPath(name))); }
-    catch (e) { alert('Copy failed: ' + e.message); return; }
-    syncPersist(renderSlots);
+    ctModal({ title: 'Duplicate tower',
+              body: 'Name for the copy of "' + name + '":',
+              input: name + ' copy', validate: nameValidator(null),
+              okLabel: 'Duplicate' }).then(function (to) {
+      if (!to) return;
+      try { FS.writeFile(slotPath(to), FS.readFile(slotPath(name))); }
+      catch (e) { ctAlert('Copy failed', e.message); return; }
+      syncPersist(renderSlots);
+    });
   }
   function deleteSlot(name) {
-    if (!confirm('Delete tower "' + name + '"? This cannot be undone.'))
-      return;
-    ['', '.1', '.2', '.3'].forEach(function (g) {
-      try { FS.unlink(slotPath(name) + g); } catch (e) {}
+    ctConfirm({ title: 'Delete tower',
+                body: 'Delete tower "' + name + '"? This cannot be undone.',
+                okLabel: 'Delete', danger: true }).then(function (yes) {
+      if (!yes) return;
+      ['', '.1', '.2', '.3'].forEach(function (g) {
+        try { FS.unlink(slotPath(name) + g); } catch (e) {}
+      });
+      if (pendingTdt && pendingTdt.slot === name) pendingTdt = null;
+      draftSlots = draftSlots.filter(function (n) { return n !== name; });
+      syncPersist(renderSlots);
     });
-    if (pendingTdt && pendingTdt.slot === name) pendingTdt = null;
-    draftSlots = draftSlots.filter(function (n) { return n !== name; });
-    syncPersist(renderSlots);
   }
   document.getElementById('newslotbtn').addEventListener('click', function () {
-    var to = prompt('Name your new tower:', 'My Tower');
-    if (!to || takenName(to)) return;
-    draftSlots.push(to);
-    ctEvent('new-tower');
-    selectSlot(to);
+    ctModal({ title: 'New tower',
+              body: 'Name your new tower — it starts as an empty lot.',
+              input: 'My Tower', validate: nameValidator(null),
+              okLabel: 'Create' }).then(function (to) {
+      if (!to) return;
+      draftSlots.push(to);
+      ctEvent('new-tower');
+      selectSlot(to);
+    });
   });
   document.getElementById('importfile').addEventListener('change', function (e) {
     var f = e.target.files && e.target.files[0];
@@ -749,35 +960,54 @@
                        .replace(/[^A-Za-z0-9 _.-]/g, '').slice(0, 24) ||
                  'Imported';
       if (/\.(tdt|twr)$/i.test(f.name)) {
-        var slot = prompt('Import "' + f.name + '" as a new tower named:',
-                          base);
-        if (!slot || takenName(slot)) return;
-        pendingTdt = { slot: slot, bytes: bytes, src: f.name };
-        ctEvent('import-tdt');
-        selectSlot(slot);
+        ctModal({ title: 'Import tower',
+                  body: 'Import "' + f.name + '" as a new tower named:',
+                  input: base, validate: nameValidator(null),
+                  okLabel: 'Import' }).then(function (slot) {
+          if (!slot) return;
+          pendingTdt = { slot: slot, bytes: bytes, src: f.name };
+          ctEvent('import-tdt');
+          selectSlot(slot);
+        });
         return;
       }
       /* .sav restore — verify the CTWR magic before trusting it */
       if (!(bytes.length > 20 && bytes[0] === 0x43 && bytes[1] === 0x54 &&
             bytes[2] === 0x57 && bytes[3] === 0x52)) {
-        alert('That is not a ConciliaTower .sav backup. Original 1994 ' +
-              'towers are .TDT files — those import here too.');
+        ctAlert('Not a ConciliaTower backup',
+                'That is not a ConciliaTower .sav backup. Original 1994 ' +
+                'towers are .TDT files — those import here too.');
         return;
       }
-      var slot = prompt('Restore backup as a tower named:', base);
-      if (!slot) return;
-      if (!validSlotName(slot)) { takenName(slot); return; }
-      if (listSlotNames().indexOf(slot) >= 0 &&
-          !confirm('Overwrite the existing tower "' + slot + '"?')) return;
-      FS.writeFile(slotPath(slot), bytes);
-      ctEvent('import-sav');
-      syncPersist(function () { selectSlot(slot); });
+      ctModal({ title: 'Restore backup',
+                body: 'Restore "' + f.name + '" as a tower named:',
+                input: base,
+                validate: function (v) {
+                  return validSlotName(v) ? null :
+                    'Letters, digits, space, - _ . — up to 24 characters, ' +
+                    'starting with a letter or digit.';
+                },
+                okLabel: 'Restore' }).then(function (slot) {
+        if (!slot) return;
+        var write = function () {
+          FS.writeFile(slotPath(slot), bytes);
+          ctEvent('import-sav');
+          syncPersist(function () { selectSlot(slot); });
+        };
+        if (listSlotNames().indexOf(slot) >= 0) {
+          ctConfirm({ title: 'Overwrite tower',
+                      body: 'Overwrite the existing tower "' + slot + '"?',
+                      okLabel: 'Overwrite', danger: true })
+            .then(function (yes) { if (yes) write(); });
+        } else write();
+      });
     }).catch(function (err) {
-      alert('Import failed: ' + err.message);
+      ctAlert('Import failed', err.message);
     });
   });
 
-  /* Returning visitor: the remembered copy arms Start immediately. */
+  /* Returning visitor: the remembered copy arms Play immediately and
+   * the menu goes straight to tower management. */
   exeLoad().then(function (bytes) {
     if (bytes && !exeBytes) acceptExe(bytes, 'Remembered SIMTOWER.EXE', true);
   }).catch(function () {});
@@ -928,7 +1158,7 @@
         pendingTdt = null;
       }
       try { localStorage.setItem('ct-slot', currentSlot); } catch (e) {}
-      document.getElementById('setup').style.display = 'none';
+      document.getElementById('stage').style.display = 'none';
       document.getElementById('canvaswrap').style.display = 'block';
       Module.callMain(args);
       Module.canvas.focus();
@@ -974,18 +1204,19 @@
     Module.canvas.focus();
   });
 
-  /* Drag-and-drop the EXE anywhere on the landing card. */
-  var setupEl = document.getElementById('setup');
-  setupEl.addEventListener('dragover', function (ev) {
+  /* Drag-and-drop the EXE anywhere on the title screen. */
+  var stageEl = document.getElementById('stage');
+  var menuEl = document.getElementById('menu');
+  stageEl.addEventListener('dragover', function (ev) {
     ev.preventDefault();
-    setupEl.style.borderColor = '#2e8a78';
+    menuEl.style.borderColor = '#2e8a78';
   });
-  setupEl.addEventListener('dragleave', function () {
-    setupEl.style.borderColor = '#2c3648';
+  stageEl.addEventListener('dragleave', function () {
+    menuEl.style.borderColor = '#37435a';
   });
-  setupEl.addEventListener('drop', function (ev) {
+  stageEl.addEventListener('drop', function (ev) {
     ev.preventDefault();
-    setupEl.style.borderColor = '#2c3648';
+    menuEl.style.borderColor = '#37435a';
     ingest(ev.dataTransfer.files);
   });
 

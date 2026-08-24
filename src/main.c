@@ -351,6 +351,9 @@ typedef struct {
     TTF_Font       *font;
     TTF_Font       *font_small;
     TTF_Font       *font_info;   /* 13px — time.rml stats/date size */
+    TTF_Font       *font_dlg;    /* 12px regular — Win31 dialog labels
+                                  * (the 14px bold overflows the DTMP
+                                  * label rects; Jonah 2026-08-23) */
     int             running;
     int             screen_w, screen_h;
     int             show_debug;   /* Toggle diagnostic labels */
@@ -2913,7 +2916,10 @@ static void open_person_popup_at(uint16_t pid, int x, int y);
 static void draw_person_strip(const uint16_t *pids, int n, int x, int y);
 static uint16_t person_strip_hit(const uint16_t *pids, int n, int x, int y,
                                  int mx, int my);
-#define PSTRIP_PITCH 18
+/* 8px figure cells packed nearly shoulder-to-shoulder, like the EXE's
+ * tenant-dialog people lists (1100:28bc; was 18 — Jonah 2026-08-23:
+ * "less padding, packed closer together"). */
+#define PSTRIP_PITCH 10
 #define PSTRIP_H     36
 
 /* Riders strip under the elevator dialog: everyone aboard this shaft's
@@ -7087,16 +7093,23 @@ static void draw_field31_text(SDL_Rect r, const char *s, SDL_Color c)
     }
 }
 
-/* Field label: right-aligned inside its template rect and vertically
- * centered on the ADJACENT field row (labels rects are 16 tall against
- * 18-tall fields offset by -2px in the DTMP — centering on the rect
- * alone leaves the text riding high; Jonah 2026-08-17). */
-static void draw_label31(SDL_Rect r, const char *s, SDL_Color c)
+/* Field label: right-aligned inside its template rect, in the regular-
+ * weight dialog font (bold 14 overflows the DTMP label rects), and
+ * vertically centered on its ADJACENT field's rect — the templates
+ * offset label rects a few px from their fields, so centering on the
+ * label rect alone leaves the pair misaligned (Jonah 2026-08-23). */
+static void draw_label31(SDL_Rect r, SDL_Rect field, const char *s, SDL_Color c)
 {
-    int tw, th;
-    SDL_Texture *t = render_text(s, c, &tw, &th);
+    TTF_Font *f = game.font_dlg ? game.font_dlg : game.font;
+    if (!f || !s || !s[0]) return;
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(f, s, c);
+    if (!surf) return;
+    SDL_Texture *t = SDL_CreateTextureFromSurface(game.renderer, surf);
+    int tw = surf->w, th = surf->h;
+    SDL_FreeSurface(surf);
     if (!t) return;
-    SDL_Rect d = { r.x + r.w - tw - 4, r.y + (r.h - th) / 2 + 1, tw, th };
+    /* Same centering math as draw_field31_text, against the field row. */
+    SDL_Rect d = { r.x + r.w - tw - 4, field.y + (field.h - th) / 2, tw, th };
     SDL_RenderCopy(game.renderer, t, NULL, &d);
     SDL_DestroyTexture(t);
 }
@@ -7536,7 +7549,7 @@ static void draw_person_strip(const uint16_t *pids, int n, int x, int y)
     for (int k = 0; k < n; k++) {
         if (!pids[k]) continue;
         /* the original's people lists blit the figure sheet 1:1 */
-        if (draw_person_figure(pids[k], x + k * PSTRIP_PITCH + 4, y + 6, 1))
+        if (draw_person_figure(pids[k], x + k * PSTRIP_PITCH + 1, y + 6, 1))
             continue;
         if (qs) {
             int fig = (pids[k] * 7) % 40;   /* legacy silhouette fallback */
@@ -7699,10 +7712,10 @@ static void render_inspect_popup(void)
                    : 10;                                  /* hotels */
         SDL_Rect lr = TIABS(ti_item(L.tp, lbl_id));
         if (L.has_eval) {
-            draw_label31(lr, "Eval", ink);
+            draw_label31(lr, g, "Eval", ink);
             draw_eval_gauge31(g, L.eval_val, 80, L.eval_hi);
         } else {
-            draw_label31(lr, L.cls == TI_CLS_SHOP
+            draw_label31(lr, g, L.cls == TI_CLS_SHOP
                          ? "Patronage" : "Today's Patronage", ink);
             SDL_Rect bar = { g.x, g.y, g.w - 34, g.h };
             draw_field31(bar);
@@ -7716,53 +7729,43 @@ static void render_inspect_popup(void)
             stats_label(g.x + g.w - 28, g.y + 3, num, ink);
         }
     } else if (L.cls == TI_CLS_CINEMA) {
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 11).x,
-                        wy + ti_item(L.tp, 11).y, ti_item(L.tp, 11).w,
-                        ti_item(L.tp, 11).h }, "Playing", ink);
+        draw_label31(TIABS(ti_item(L.tp, 11)), TIABS(ti_item(L.tp, 6)),
+                     "Playing", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 6)), L.movie, ink);
     } else if (L.cls == TI_CLS_ESC || L.cls == TI_CLS_STAIR) {
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 8).x,
-                        wy + ti_item(L.tp, 8).y, ti_item(L.tp, 8).w,
-                        ti_item(L.tp, 8).h }, "Now on board", ink);
+        draw_label31(TIABS(ti_item(L.tp, 8)), TIABS(ti_item(L.tp, 6)),
+                     "Now on board", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 6)), L.val9, ink);
     }
 
     /* items 9-14: the per-class label/field rows */
     switch (L.cls) {
     case TI_CLS_OFFICE: case TI_CLS_CONDO:
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 10).x,
-                        wy + ti_item(L.tp, 10).y, ti_item(L.tp, 10).w,
-                        ti_item(L.tp, 10).h }, "Length", ink);
+        draw_label31(TIABS(ti_item(L.tp, 10)), TIABS(ti_item(L.tp, 9)),
+                     "Length", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 11).x,
-                     wy + ti_item(L.tp, 11).y, ti_item(L.tp, 11).w,
-                     ti_item(L.tp, 11).h },
+        draw_label31(TIABS(ti_item(L.tp, 11)), TIABS(L.price_box),
                      L.cls == TI_CLS_CONDO ? "Price" : "Rent", ink);
         break;
     case TI_CLS_HS: case TI_CLS_HT: case TI_CLS_HSU:
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 9).x,
-                        wy + ti_item(L.tp, 9).y, ti_item(L.tp, 9).w,
-                        ti_item(L.tp, 9).h }, "Rate", ink);
+        draw_label31(TIABS(ti_item(L.tp, 9)), TIABS(L.price_box),
+                     "Rate", ink);
         break;
     case TI_CLS_SHOP:
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 10).x,
-                        wy + ti_item(L.tp, 10).y, ti_item(L.tp, 10).w,
-                        ti_item(L.tp, 10).h }, "Rent", ink);
+        draw_label31(TIABS(ti_item(L.tp, 10)), TIABS(L.price_box),
+                     "Rent", ink);
         break;
     case TI_CLS_FOOD:
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 12).x,
-                        wy + ti_item(L.tp, 12).y, ti_item(L.tp, 12).w,
-                        ti_item(L.tp, 12).h }, "Yesterday's Profit", ink);
+        draw_label31(TIABS(ti_item(L.tp, 12)), TIABS(ti_item(L.tp, 9)),
+                     "Yesterday's Profit", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 9)), L.val9, ink);
         break;
     case TI_CLS_CINEMA:
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 12).x,
-                        wy + ti_item(L.tp, 12).y, ti_item(L.tp, 12).w,
-                        ti_item(L.tp, 12).h }, "Today's Income", ink);
+        draw_label31(TIABS(ti_item(L.tp, 12)), TIABS(ti_item(L.tp, 10)),
+                     "Today's Income", ink);
         draw_field31_text(TIABS(ti_item(L.tp, 10)), L.val10, ink);
-        draw_label31((SDL_Rect){ wx + ti_item(L.tp, 14).x,
-                        wy + ti_item(L.tp, 14).y, ti_item(L.tp, 14).w,
-                        ti_item(L.tp, 14).h }, "Length of Showing", ink);
+        draw_label31(TIABS(ti_item(L.tp, 14)), TIABS(ti_item(L.tp, 5)),
+                     "Length of Showing", ink);
         break;
     default:
         break;
@@ -9842,12 +9845,24 @@ static void init_fonts(void)
         NULL
     };
     
+    /* Dialog labels want the regular weight — bold 14 is wider than the
+     * byte-exact DTMP label rects allow ("Length" clipped, 2026-08-23). */
+    const char *dlg_paths[] = {
+        "/fonts/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        NULL
+    };
+
     for (int i = 0; font_paths[i]; i++) {
         game.font = TTF_OpenFont(font_paths[i], 14);
         if (game.font) {
             printf("Font loaded: %s\n", font_paths[i]);
             game.font_small = TTF_OpenFont(font_paths[i], 11);
             game.font_info = TTF_OpenFont(font_paths[i], 13);
+            for (int j = 0; dlg_paths[j] && !game.font_dlg; j++)
+                game.font_dlg = TTF_OpenFont(dlg_paths[j], 12);
+            if (!game.font_dlg) game.font_dlg = game.font_info;
             return;
         }
     }
@@ -11365,7 +11380,7 @@ int main(int argc, char *argv[])
                 static const char *TICK_FB[8] = {
                     "Income from Office", "Income from Hotel",
                     "Income from Condo sale", "Income from Restaurant",
-                    "Income from Shop", "Income from Fast Food",
+                    "Income from Fast Food", "Income from Retail Shop",
                     "Income from Movie Theater", "Income from Party Hall" };
                 for (int i = 0; tick_m && i < 8; i++) {
                     if (!(tick_m & (1u << i))) continue;

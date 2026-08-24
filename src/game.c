@@ -721,8 +721,10 @@ static void fin_bank_income(GameSim *sim, ItemType t, long amt)
      * books (bank 0x3EF via SetStatusMsgConditional 1118:0a49; strings
      * survey gap #4). Queue the bank index for the frontend, which
      * rate-limits the feed to one line per category per day. Bank
-     * order: Office/Hotel/Condo sale/Restaurant/Shop/Fast Food/Movie/
-     * Party Hall. */
+     * order (dumped from STRL 0x3EF, 2026-08-23): Office/Hotel/Condo
+     * sale/Restaurant/FAST FOOD/RETAIL SHOP/Movie/Party Hall — fast
+     * food comes BEFORE shop (a fast food used to flash "Income from
+     * Retail Shop"; Nisan's beta report). */
     if (c >= 0 && amt > 0) {
         int idx = -1;
         switch (t) {
@@ -731,8 +733,8 @@ static void fin_bank_income(GameSim *sim, ItemType t, long amt)
         case ITEM_HOTEL_SUITE:  idx = 1; break;
         case ITEM_CONDO:        idx = 2; break;
         case ITEM_RESTAURANT:   idx = 3; break;
-        case ITEM_SHOP:         idx = 4; break;
-        case ITEM_FAST_FOOD:    idx = 5; break;
+        case ITEM_FAST_FOOD:    idx = 4; break;
+        case ITEM_SHOP:         idx = 5; break;
         case ITEM_CINEMA:       idx = 6; break;
         case ITEM_PARTY_HALL:   idx = 7; break;
         default: break;
@@ -1928,7 +1930,12 @@ void game_update(GameSim *sim, Tower *tower)
                         rent += r;
                         fin_bank_income(sim, t->type, r);
                     }
-                    if (t->state == TENANT_OCCUPIED) payers++;
+                    /* Every biller rings. At the 4:59AM settle offices sit
+                     * in their overnight TENANT_VACANT state, so counting
+                     * only OCCUPIED left payers==0 every quarter — the
+                     * morning ka-ching run never queued (Nisan's beta
+                     * report, 2026-08-23). */
+                    payers++;
                     /* the shop new-let immunity window closes after its
                      * first full quarter (tenure = EXE +0x17) */
                     if (t->type == ITEM_SHOP && t->tenure < 0xFF)
