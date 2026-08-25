@@ -32,8 +32,8 @@
   #herobox {
     position: relative; width: min(960px, 100vw);
     min-height: min(720px, 75vw);   /* hero.png is 4:3 — 720px tall at 960 */
-    display: flex; align-items: center; justify-content: center;
-    padding: 28px 0; box-sizing: border-box;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 0 0 28px; box-sizing: border-box;
   }
   #hero {
     position: absolute; inset: 0; width: 100%; height: 100%;
@@ -55,7 +55,11 @@
     border: 1px solid rgba(196,183,168,.28); border-radius: 3px;
     box-shadow: 0 12px 40px rgba(0,0,0,.5);
     width: min(520px, calc(100vw - 24px));
-    padding: 16px 26px 20px; text-align: center; box-sizing: border-box;
+    padding: 12px 20px 16px; text-align: center; box-sizing: border-box;
+    /* Top-anchored below the CONCILIA TOWER sign (~y300 of 960x720):
+     * growing content (find-help open, tower list) extends the card
+     * DOWN instead of re-centering it up over the sign. */
+    margin-top: min(320px, 33vw);
   }
   #menu p.tagline { font-size: 23px; letter-spacing: .5px; color: #f0eadf;
                     margin: 4px 0 2px; text-align: center; }
@@ -137,7 +141,6 @@
   }
   #towerbtns button:hover, #towerbtns label:hover {
     border-color: #c08a44; color: #f0e9df; }
-  #towers .empty { font-size: 13.5px; color: #9a938a; padding: 4px 10px; }
   /* EXE line at the card's foot in towers mode: which copy is loaded,
    * with quiet Change / Forget actions beside it. On the setup face the
    * row is just a bare output line — no rule above it. */
@@ -205,9 +208,6 @@
                    cursor: default; }
   #modal.danger #mok { background: #9e4a42; color: #f5eee8; }
   #modal.danger #mok:hover { background: #b25a50; }
-  #ver { position: fixed; bottom: 6px; right: 10px; font-size: 11px;
-         color: #8c8880; z-index: 3;
-         text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 </style>
 </head>
 <body>
@@ -309,7 +309,6 @@
        send Jonah a screenshot of this box (build __CT_VERSION__).</p>
     <button class="start" onclick="location.reload()">Reload</button>
   </div></div>
-  <div id="ver">build __CT_VERSION__</div>
 
 <script>
   var exeBytes = null;
@@ -825,15 +824,8 @@
     var names = listSlotNames();
     if (names.length && names.indexOf(currentSlot) < 0) currentSlot = names[0];
     startBtn.textContent = names.length
-      ? 'Play — ' + currentSlot : 'Start building';
-    if (!names.length) {
-      var d = document.createElement('div');
-      d.className = 'empty';
-      d.textContent = 'No towers yet — Start builds a fresh lot, or ' +
-                      'New tower names one first.';
-      slotListEl.appendChild(d);
-      return;
-    }
+      ? 'Play — ' + currentSlot : 'Play';
+    if (!names.length) return;
     names.forEach(function (n) { slotListEl.appendChild(slotRow(n)); });
   }
 
