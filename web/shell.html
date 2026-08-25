@@ -35,13 +35,18 @@
     display: flex; align-items: flex-start; justify-content: center;
     padding: 0 0 28px; box-sizing: border-box;
   }
+  /* The hero keeps its natural 4:3 size pinned to the top — a growing
+   * card (find-help open, long tower list) extends past its bottom onto
+   * the plain page instead of re-zooming the image. */
   #hero {
-    position: absolute; inset: 0; width: 100%; height: 100%;
+    position: absolute; top: 0; left: 0; width: 100%;
+    height: min(720px, 75vw);
     object-fit: cover; object-position: center top;
     image-rendering: pixelated; z-index: 0;
   }
   #shade {
-    position: absolute; inset: 0; z-index: 1;
+    position: absolute; top: 0; left: 0; right: 0;
+    height: min(720px, 75vw); z-index: 1;
     background: linear-gradient(rgba(8,9,10,.12) 0%, rgba(8,9,10,.28) 45%,
                                 rgba(8,9,10,.55) 100%);
   }
@@ -56,10 +61,10 @@
     box-shadow: 0 12px 40px rgba(0,0,0,.5);
     width: min(520px, calc(100vw - 24px));
     padding: 12px 20px 16px; text-align: center; box-sizing: border-box;
-    /* Top-anchored below the CONCILIA TOWER sign (~y300 of 960x720):
+    /* Top-anchored below the CONCILIA TOWER sign (~y187 of 960x720):
      * growing content (find-help open, tower list) extends the card
      * DOWN instead of re-centering it up over the sign. */
-    margin-top: min(320px, 33vw);
+    margin-top: min(250px, 26vw);
   }
   #menu p.tagline { font-size: 23px; letter-spacing: .5px; color: #f0eadf;
                     margin: 4px 0 2px; text-align: center; }
@@ -716,7 +721,7 @@
       forgetBtn.style.display = 'none';
       hashNote.style.display = 'none';
       setMenuMode(false);
-      statusEl.textContent = 'Copy forgotten.';
+      statusEl.textContent = '';
     });
   });
 
