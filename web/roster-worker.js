@@ -79,6 +79,52 @@ async function handleReport(req, env) {
   return new Response('ok', { status: 200 });
 }
 
+/* ---- Event counters (replaced GoatCounter, 2026-08-24) ----
+ * One KV key per event name per UTC day (e:<date>:<name>); the count
+ * rides in metadata so the dashboard aggregates from list() alone.
+ * get+put isn't atomic — two simultaneous hits can drop a count; at
+ * this scale that's an acceptable trade for staying on plain KV. */
+const EVENT_RE = /^[a-z0-9-]{1,24}(\/d\d{1,5})?$/i;
+
+async function handleEvent(req, env) {
+  if ((req.headers.get('Content-Length') | 0) > 1024)
+    return new Response('too big', { status: 413 });
+  let body;
+  try { body = await req.json(); } catch (e) {
+    return new Response('bad json', { status: 400 });
+  }
+  const name = body.e;
+  if (typeof name !== 'string' || !EVENT_RE.test(name))
+    return new Response('bad event', { status: 400 });
+  const day = new Date().toISOString().slice(0, 10);
+  const kvKey = 'e:' + day + ':' + name.toLowerCase();
+  const c = (((await env.TOWERS.get(kvKey, 'json')) | 0)) + 1;
+  await env.TOWERS.put(kvKey, JSON.stringify(c), { metadata: { c } });
+  return new Response('ok', { status: 200 });
+}
+
+/* Aggregate counters grouped on the base name (before any '/dNN' day
+ * tag the star/pop funnel events carry): [name, {total, today}]. */
+async function listEvents(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const agg = new Map();
+  let cursor;
+  do {
+    const page = await env.TOWERS.list({ prefix: 'e:', cursor });
+    for (const k of page.keys) {
+      const m = /^e:(\d{4}-\d{2}-\d{2}):([^/]+)/.exec(k.name);
+      if (!m) continue;
+      const c = (k.metadata && k.metadata.c) | 0;
+      const a = agg.get(m[2]) || { total: 0, today: 0 };
+      a.total += c;
+      if (m[1] === today) a.today += c;
+      agg.set(m[2], a);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return [...agg.entries()].sort((x, y) => y[1].total - x[1].total);
+}
+
 async function listTowers(env) {
   const towers = [];
   let cursor;
@@ -114,7 +160,7 @@ function esc(t) {
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-function rosterPage(towers) {
+function rosterPage(towers, events) {
   const rows = towers.map((t) => `
     <tr>
       <td class="nm">${esc(t.n || t.key.split('/')[1] || '?')}</td>
@@ -136,6 +182,9 @@ function rosterPage(towers) {
   body { margin: 0; padding: 24px; background: #10131a; color: #cfd6e4;
          font: 15px/1.5 system-ui, sans-serif; }
   h1 { font-size: 20px; margin: 0 0 4px; color: #eef2fa; }
+  h2 { font-size: 16px; margin: 28px 0 4px; color: #eef2fa;
+       font-weight: 600; }
+  table.counters { width: auto; min-width: 320px; }
   .sub { color: #7d879c; font-size: 13px; margin-bottom: 20px; }
   .wrap { max-width: 1000px; margin: 0 auto; }
   .scroll { overflow-x: auto; }
@@ -163,6 +212,17 @@ function rosterPage(towers) {
 <th>Peak</th><th>Day</th><th>Funds</th><th>Last seen</th><th>First seen</th></tr></thead>
 <tbody>${rows || ''}</tbody></table></div>
 ${rows ? '' : '<div class="empty">No towers yet — the roster fills as people play.</div>'}
+<h2>Counters</h2>
+<div class="sub">everything the game reports · totals since 2026-08-24
+ · <a href="/events.json">json</a></div>
+<div class="scroll"><table class="counters">
+<thead><tr><th>Event</th><th>Today</th><th>All time</th></tr></thead>
+<tbody>${events.map(([n, a]) => `
+    <tr><td class="nm">${esc(n)}</td>
+    <td class="num">${a.today.toLocaleString('en-US')}</td>
+    <td class="num">${a.total.toLocaleString('en-US')}</td></tr>`).join('')}
+</tbody></table></div>
+${events.length ? '' : '<div class="empty">No events counted yet.</div>'}
 <footer>ConciliaTower · anonymous per-tower telemetry · no accounts, no cookies</footer>
 </div></body></html>`;
 }
@@ -172,8 +232,11 @@ export default {
     const url = new URL(req.url);
     if (req.method === 'OPTIONS')
       return new Response(null, { status: 204, headers: corsHeaders(req) });
-    if (req.method === 'POST' && url.pathname === '/report') {
-      const res = await handleReport(req, env);
+    if (req.method === 'POST' &&
+        (url.pathname === '/report' || url.pathname === '/event')) {
+      const res = url.pathname === '/report'
+        ? await handleReport(req, env)
+        : await handleEvent(req, env);
       for (const [k, v] of Object.entries(corsHeaders(req)))
         res.headers.set(k, v);
       return res;
@@ -183,8 +246,16 @@ export default {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(req) },
       });
     }
+    if (req.method === 'GET' && url.pathname === '/events.json') {
+      return new Response(
+        JSON.stringify(Object.fromEntries(await listEvents(env)), null, 1), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(req) },
+      });
+    }
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '')) {
-      return new Response(rosterPage(await listTowers(env)), {
+      const [towers, events] =
+        await Promise.all([listTowers(env), listEvents(env)]);
+      return new Response(rosterPage(towers, events), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }

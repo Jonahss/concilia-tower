@@ -14,7 +14,8 @@
     margin: 0; min-height: 100vh; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     background: #161616; color: #d8d8d4;
-    font-family: Georgia, 'Times New Roman', serif;
+    font-family: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue',
+                 Arial, sans-serif;
   }
   h1 { position: absolute; width: 1px; height: 1px; overflow: hidden;
        clip: rect(0 0 0 0); white-space: nowrap; }
@@ -41,38 +42,39 @@
   }
   #shade {
     position: absolute; inset: 0; z-index: 1;
-    background: linear-gradient(rgba(6,8,14,.05) 0%, rgba(6,8,14,.15) 45%,
-                                rgba(6,8,14,.5) 100%);
+    background: linear-gradient(rgba(8,9,10,.12) 0%, rgba(8,9,10,.28) 45%,
+                                rgba(8,9,10,.55) 100%);
   }
-  /* The menu card borrows the game's star-up dialog palette: the
-   * silver-gray dialog ground (#ccc), the gold of the star itself, and
-   * the pale blue-gray of the ring of small stars around it. */
+  /* The menu card complements the hero itself: translucent dusk slate
+   * (the concrete's #151819..#3d454a) with the lobby's warm amber glow
+   * (#b1947f / #5b4129) as the accent. Square-ish corners. */
   #menu {
-    position: relative; z-index: 2; color: #26261f;
-    background: rgba(211,211,206,.96);
-    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
-    border: 1px solid #8f8f86; border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    position: relative; z-index: 2; color: #e9e3d9;
+    background: rgba(20,23,24,.82);
+    -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
+    border: 1px solid rgba(196,183,168,.28); border-radius: 3px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5);
     width: min(520px, calc(100vw - 24px));
     padding: 16px 26px 20px; text-align: center; box-sizing: border-box;
   }
-  .tagline { font-size: 17px; letter-spacing: 1px; color: #26261f;
-             margin: 2px 0 0; }
-  #menu p { font-size: 15px; line-height: 1.55; color: #3d403c; }
-  #menu a { color: #3e6b6b; }
+  #menu p.tagline { font-size: 23px; letter-spacing: .5px; color: #f0eadf;
+                    margin: 4px 0 2px; text-align: center; }
+  #menu p { font-size: 15px; line-height: 1.55; color: #c2bab0;
+            text-align: left; }
+  #menu a { color: #d8b06a; }
   input[type=file] { display: none; }
   label.pick, button.start {
     display: inline-block; cursor: pointer; margin: 8px 6px 0;
-    background: #d9b800; color: #211c00; border: 0; border-radius: 5px;
+    background: #c08a44; color: #241708; border: 0; border-radius: 3px;
     padding: 10px 22px; font-size: 16px; font-family: inherit;
   }
-  label.pick:hover, button.start:hover { background: #eecb0a; }
-  button.start[disabled] { background: #b8b8b0; color: #7c7c74;
-                           cursor: default; }
-  #status { font-size: 14px; color: #3d4a4a; min-height: 18px;
-            margin-top: 10px; }
-  #hashnote { font-size: 13px; color: #7c5f00; margin: 6px auto 0;
-              display: none; }
+  label.pick:hover, button.start:hover { background: #d09a52; }
+  button.start[disabled] { background: rgba(120,115,108,.35);
+                           color: #8d867c; cursor: default; }
+  #status { font-size: 14px; color: #b5ada1; min-height: 18px;
+            margin-top: 10px; text-align: left; }
+  #hashnote { font-size: 13px; color: #d8a95c; margin: 6px auto 0;
+              display: none; text-align: left; }
   #canvaswrap { display: none; position: relative; }
   canvas {
     display: block; image-rendering: pixelated;
@@ -99,103 +101,112 @@
     width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
   }
   #towers { margin: 12px 0 4px; text-align: left; }
-  #towers h2 { font-size: 15px; letter-spacing: 1px; color: #26261f;
+  #towers h2 { font-size: 15px; letter-spacing: 1px; color: #d8d1c6;
                margin: 0 0 8px; font-weight: normal;
-               border-bottom: 1px solid #a9a9a0; padding-bottom: 6px; }
+               border-bottom: 1px solid rgba(196,183,168,.25);
+               padding-bottom: 6px; }
   #slotlist { max-height: min(300px, 38vh); overflow-y: auto; }
   .slot { display: flex; align-items: center; gap: 10px;
-          padding: 7px 10px; border-radius: 5px; cursor: pointer; }
-  .slot:hover { background: rgba(158,184,184,.28); }
-  .slot.sel { background: rgba(217,184,0,.16); outline: 1px solid #b39700; }
+          padding: 7px 10px; border-radius: 3px; cursor: pointer; }
+  .slot:hover { background: rgba(196,183,168,.12); }
+  .slot.sel { background: rgba(192,138,68,.16);
+              outline: 1px solid rgba(192,138,68,.55); }
   .slot .who { flex: 1 1 auto; min-width: 0; }
-  .slot .nm { font-size: 15px; color: #21211b; overflow: hidden;
+  .slot .nm { font-size: 15px; color: #ece6dc; overflow: hidden;
               text-overflow: ellipsis; white-space: nowrap; }
-  .slot .meta { font-size: 12.5px; color: #5c5f5a; }
+  .slot .meta { font-size: 12.5px; color: #9a938a; }
   .slot .ops { flex: 0 0 auto; white-space: nowrap; }
   .slot .ops button {
-    background: none; border: 1px solid #9aa8a8; border-radius: 4px;
-    color: #3d4a4a; font-size: 13px; padding: 3px 7px; margin-left: 4px;
+    background: none; border: 1px solid rgba(196,183,168,.35);
+    border-radius: 2px;
+    color: #cfc7bb; font-size: 13px; padding: 3px 7px; margin-left: 4px;
     cursor: pointer; font-family: inherit;
   }
-  .slot .ops button:hover { border-color: #b39700; color: #21211b; }
-  .slot .ops button.play { border-color: #b39700; color: #7c6300; }
+  .slot .ops button:hover { border-color: #c08a44; color: #f0e9df; }
+  .slot .ops button.play { border-color: #c08a44; color: #e2b877; }
   #startbtn { width: 100%; margin: 10px 0 2px; font-size: 17px;
               padding: 11px 22px; }
   #towerbtns { margin-top: 8px; display: flex; justify-content: center;
                gap: 8px; flex-wrap: wrap; }
   #towerbtns button, #towerbtns label {
-    background: none; border: 1px solid #9aa8a8; border-radius: 4px;
-    color: #3d4a4a; font-size: 13.5px; padding: 5px 12px;
+    background: none; border: 1px solid rgba(196,183,168,.35);
+    border-radius: 2px;
+    color: #cfc7bb; font-size: 13.5px; padding: 5px 12px;
     cursor: pointer; font-family: inherit; display: inline-block;
     margin: 0;
   }
   #towerbtns button:hover, #towerbtns label:hover {
-    border-color: #b39700; color: #21211b; }
-  #towers .empty { font-size: 13.5px; color: #5c5f5a; padding: 4px 10px; }
+    border-color: #c08a44; color: #f0e9df; }
+  #towers .empty { font-size: 13.5px; color: #9a938a; padding: 4px 10px; }
   /* EXE line at the card's foot in towers mode: which copy is loaded,
    * with quiet Change / Forget actions beside it. On the setup face the
    * row is just a bare output line — no rule above it. */
   #exerow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  #menu.towers #exerow { margin-top: 12px; border-top: 1px solid #a9a9a0;
+  #menu.towers #exerow { margin-top: 12px;
+                         border-top: 1px solid rgba(196,183,168,.25);
                          padding-top: 10px; }
-  #exerow #status { flex: 1 1 auto; text-align: left; margin-top: 0; }
-  .mini { background: none; border: 1px solid #9aa8a8; border-radius: 4px;
-          color: #4a5555; font-size: 12.5px; padding: 3px 9px;
+  #exerow #status { flex: 1 1 auto; margin-top: 0; }
+  .mini { background: none; border: 1px solid rgba(196,183,168,.35);
+          border-radius: 2px;
+          color: #b8b0a5; font-size: 12.5px; padding: 3px 9px;
           cursor: pointer; font-family: inherit; flex: 0 0 auto; }
-  .mini:hover { border-color: #b39700; color: #21211b; }
-  .mini.warn:hover { border-color: #a04545; color: #7c2f2f; }
-  #findhelp { font-size: 14px; color: #3d403c; text-align: left;
+  .mini:hover { border-color: #c08a44; color: #f0e9df; }
+  .mini.warn:hover { border-color: #b25a50; color: #d88a80; }
+  #findhelp { font-size: 14px; color: #c2bab0; text-align: left;
               margin: 10px auto 0; }
-  #findhelp summary { cursor: pointer; color: #3e6b6b; text-align: center; }
+  #findhelp summary { cursor: pointer; color: #d8b06a; text-align: center; }
   #findhelp ul { padding-left: 18px; line-height: 1.5;
                  max-height: 34vh; overflow-y: auto; }
   #pagefoot { position: absolute; bottom: 0; left: 0; right: 0; z-index: 2;
               text-align: center; padding: 8px 12px 18px; }
-  #pagefoot .privacy { font-size: 13px; color: #a9a9a4; margin: 2px 0;
+  #pagefoot .privacy { font-size: 13px; color: #a29b91; margin: 2px 0;
                        text-shadow: 0 1px 3px rgba(0,0,0,.8); }
   #crash, #modal {
     display: none; position: fixed; inset: 0; z-index: 50;
-    background: rgba(10,10,8,.8); color: #26261f;
+    background: rgba(8,9,10,.75); color: #e9e3d9;
     align-items: center; justify-content: center; text-align: center;
   }
   #crash .card, #modal .card {
-    background: #d3d3ce; border: 1px solid #8f8f86;
-    border-radius: 8px; padding: 22px 30px;
+    background: rgba(24,27,28,.94); border: 1px solid rgba(196,183,168,.3);
+    border-radius: 3px; padding: 22px 30px;
     width: min(440px, calc(100vw - 40px)); box-sizing: border-box; }
-  #crash .card { border-color: #a04545; max-width: 520px; width: auto; }
+  #crash .card { border-color: #b25a50; max-width: 520px; width: auto; }
   #crash code { display: block; margin: 10px 0; font-size: 13px;
-    color: #7c5f00; word-break: break-all; }
+    color: #d8a95c; word-break: break-all; }
   /* ---- In-page dialog (replaces prompt/confirm/alert) ---- */
-  #modal { background: rgba(10,10,8,.7); z-index: 60; }
-  #modal h3 { margin: 0 0 8px; font-size: 18px; color: #26261f;
+  #modal { background: rgba(8,9,10,.65); z-index: 60; }
+  #modal h3 { margin: 0 0 8px; font-size: 18px; color: #ece6dc;
               font-weight: normal; letter-spacing: .5px; }
-  #modal .body { font-size: 14.5px; color: #3d403c; line-height: 1.5;
-                 margin: 0 0 12px; }
+  #modal .body { font-size: 14.5px; color: #c2bab0; line-height: 1.5;
+                 margin: 0 0 12px; text-align: left; }
   #minput {
     display: block; width: 100%; box-sizing: border-box;
-    background: #fff; color: #1a1a12; border: 1px solid #8f8f86;
-    border-radius: 5px; padding: 9px 11px; font-size: 16px;
+    background: rgba(0,0,0,.4); color: #f2ece2;
+    border: 1px solid rgba(196,183,168,.35);
+    border-radius: 3px; padding: 9px 11px; font-size: 16px;
     font-family: inherit; outline: none;
   }
-  #minput:focus { border-color: #b39700; }
-  #minput.bad { border-color: #a04545; }
-  #merror { font-size: 13px; color: #8a3030; min-height: 16px;
+  #minput:focus { border-color: #c08a44; }
+  #minput.bad { border-color: #b25a50; }
+  #merror { font-size: 13px; color: #d88a80; min-height: 16px;
             text-align: left; margin: 5px 2px 0; }
   #modal .mrow { display: flex; justify-content: flex-end; gap: 8px;
                  margin-top: 12px; }
   #modal .mrow button {
-    border-radius: 5px; padding: 8px 18px; font-size: 15px;
+    border-radius: 3px; padding: 8px 18px; font-size: 15px;
     font-family: inherit; cursor: pointer;
   }
-  #mcancel { background: none; border: 1px solid #9aa8a8; color: #3d4a4a; }
-  #mcancel:hover { border-color: #b39700; color: #21211b; }
-  #mok { background: #d9b800; border: 0; color: #211c00; }
-  #mok:hover { background: #eecb0a; }
-  #mok[disabled] { background: #b8b8b0; color: #7c7c74; cursor: default; }
-  #modal.danger #mok { background: #a04545; color: #f5eee8; }
-  #modal.danger #mok:hover { background: #b55050; }
+  #mcancel { background: none; border: 1px solid rgba(196,183,168,.35);
+             color: #cfc7bb; }
+  #mcancel:hover { border-color: #c08a44; color: #f0e9df; }
+  #mok { background: #c08a44; border: 0; color: #241708; }
+  #mok:hover { background: #d09a52; }
+  #mok[disabled] { background: rgba(120,115,108,.35); color: #8d867c;
+                   cursor: default; }
+  #modal.danger #mok { background: #9e4a42; color: #f5eee8; }
+  #modal.danger #mok:hover { background: #b25a50; }
   #ver { position: fixed; bottom: 6px; right: 10px; font-size: 11px;
-         color: #8c8c86; z-index: 3;
+         color: #8c8880; z-index: 3;
          text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 </style>
 </head>
@@ -1046,21 +1057,24 @@
     ingest(e.target.files);
   });
 
-  /* ---- Analytics (GoatCounter) --------------------------------------
-   * Cookie-less pageview counts + a few gameplay events, public site
-   * only — localhost/dev/e2e hosts stay silent. No PII, no cookies, so
-   * no consent banner needed. Dashboard: the GoatCounter site with the
-   * code below (Jonah's account). Tip: visiting the page with
-   * #toggle-goatcounter in the URL excludes your own browser. */
+  /* ---- Analytics (self-hosted) --------------------------------------
+   * Cookie-less pageview + gameplay-event tallies, kept in the same
+   * Cloudflare Worker/KV as the tower roster — nothing third-party
+   * (GoatCounter retired 2026-08-24). Public site only — localhost/
+   * dev/e2e hosts stay silent. Counters show on the roster page. */
   var gcOn = /\.github\.io$/.test(location.hostname) ||
              /(^|\.)kvetch\.io$/.test(location.hostname);
-  var gcQueue = [];
+  var EVENTS = 'https://conciliatower-roster.jonahss.workers.dev/event';
   function ctEvent(name) {
     if (!gcOn) return;
-    if (window.goatcounter && window.goatcounter.count)
-      window.goatcounter.count({ path: name, event: true });
-    else gcQueue.push(name);
+    try {
+      /* String body = a CORS "simple request" — no preflight needed. */
+      fetch(EVENTS, { method: 'POST', body: JSON.stringify({ e: name }),
+                      mode: 'cors', keepalive: true })
+        .catch(function () {});
+    } catch (e) {}
   }
+  ctEvent('pageview');
 
   /* ---- Tower roster (Cloudflare Worker + KV) ------------------------
    * Where GoatCounter counts anonymous aggregates, the roster keeps one
@@ -1109,21 +1123,6 @@
   window.ctDayEvent = function (day, pop, star, money) {
     ctRoster({ n: currentSlot, d: day, p: pop, s: star, m: money });
   };
-  if (gcOn) {
-    var gcs = document.createElement('script');
-    gcs.async = true;
-    gcs.src = 'https://gc.zgo.at/count.js';
-    gcs.setAttribute('data-goatcounter',
-                     'https://conciliatower.goatcounter.com/count');
-    gcs.addEventListener('load', function () {
-      gcQueue.splice(0).forEach(function (n) {
-        if (window.goatcounter && window.goatcounter.count)
-          window.goatcounter.count({ path: n, event: true });
-      });
-    });
-    document.head.appendChild(gcs);
-  }
-
   var Module = {
     canvas: document.getElementById('canvas'),
     noInitialRun: true,
@@ -1218,14 +1217,14 @@
   var menuEl = document.getElementById('menu');
   stageEl.addEventListener('dragover', function (ev) {
     ev.preventDefault();
-    menuEl.style.borderColor = '#b39700';
+    menuEl.style.borderColor = '#c08a44';
   });
   stageEl.addEventListener('dragleave', function () {
-    menuEl.style.borderColor = '#8f8f86';
+    menuEl.style.borderColor = 'rgba(196,183,168,.28)';
   });
   stageEl.addEventListener('drop', function (ev) {
     ev.preventDefault();
-    menuEl.style.borderColor = '#8f8f86';
+    menuEl.style.borderColor = 'rgba(196,183,168,.28)';
     ingest(ev.dataTransfer.files);
   });
 
