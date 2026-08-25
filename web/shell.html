@@ -6,26 +6,33 @@
 <title>ConciliaTower — the faithful SimTower port</title>
 <meta name="description" content="A faithful port of SimTower (1994) that runs in your browser. Bring your own SIMTOWER.EXE — parsed client-side, nothing uploaded.">
 <meta property="og:title" content="ConciliaTower">
-<meta property="og:description" content="The faithful SimTower port — in your browser. Bring your own SIMTOWER.EXE.">
+<meta property="og:description" content="Play SimTower in your web browser. Bring your own SIMTOWER.EXE.">
 <meta property="og:image" content="https://jonahss.github.io/concilia-tower/hero.png">
 <style>
   :root { color-scheme: dark; }
   body {
     margin: 0; min-height: 100vh; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    background: #10141c; color: #cfd6e4;
+    background: #161616; color: #d8d8d4;
     font-family: Georgia, 'Times New Roman', serif;
   }
   h1 { position: absolute; width: 1px; height: 1px; overflow: hidden;
        clip: rect(0 0 0 0); white-space: nowrap; }
 
-  /* ---- Title screen: the hero fills the viewport, the menu floats
-   * over the lobby like a game main menu. ---- */
+  /* ---- Title screen: the hero is capped at the game's own size — the
+   * 960x720 canvas the engine opens at — centered on a plain dark page,
+   * with the menu floating over it like a game main menu. ---- */
   #stage {
     position: relative; width: 100%; min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
-    justify-content: center; overflow: hidden; padding: 84px 0 64px;
+    justify-content: center; padding: 24px 0 72px;
     box-sizing: border-box;
+  }
+  #herobox {
+    position: relative; width: min(960px, 100vw);
+    min-height: min(720px, 75vw);   /* hero.png is 4:3 — 720px tall at 960 */
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px 0; box-sizing: border-box;
   }
   #hero {
     position: absolute; inset: 0; width: 100%; height: 100%;
@@ -34,51 +41,53 @@
   }
   #shade {
     position: absolute; inset: 0; z-index: 1;
-    background: linear-gradient(rgba(6,8,14,.10) 0%, rgba(6,8,14,.25) 45%,
-                                rgba(6,8,14,.72) 100%);
+    background: linear-gradient(rgba(6,8,14,.05) 0%, rgba(6,8,14,.15) 45%,
+                                rgba(6,8,14,.5) 100%);
   }
+  /* The menu card borrows the game's star-up dialog palette: the
+   * silver-gray dialog ground (#ccc), the gold of the star itself, and
+   * the pale blue-gray of the ring of small stars around it. */
   #menu {
-    position: relative; z-index: 2;
-    background: rgba(13,17,26,.88);
+    position: relative; z-index: 2; color: #26261f;
+    background: rgba(211,211,206,.96);
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
-    border: 1px solid #37435a; border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0,0,0,.55);
-    width: min(500px, calc(100vw - 24px));
+    border: 1px solid #8f8f86; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    width: min(520px, calc(100vw - 24px));
     padding: 16px 26px 20px; text-align: center; box-sizing: border-box;
   }
-  .tagline { font-size: 15px; letter-spacing: 1px; color: #cfd6e4;
+  .tagline { font-size: 17px; letter-spacing: 1px; color: #26261f;
              margin: 2px 0 0; }
-  .tagline em { color: #e8ded0; }
-  #menu p { font-size: 14px; line-height: 1.55; color: #aab3c5; }
+  #menu p { font-size: 15px; line-height: 1.55; color: #3d403c; }
+  #menu a { color: #3e6b6b; }
   input[type=file] { display: none; }
   label.pick, button.start {
     display: inline-block; cursor: pointer; margin: 8px 6px 0;
-    background: #167060; color: #eef2fa; border: 0; border-radius: 5px;
-    padding: 10px 22px; font-size: 15px; font-family: inherit;
+    background: #d9b800; color: #211c00; border: 0; border-radius: 5px;
+    padding: 10px 22px; font-size: 16px; font-family: inherit;
   }
-  label.pick:hover, button.start:hover { background: #1d8a76; }
-  button.start[disabled] { background: #2a3040; color: #6a7288;
+  label.pick:hover, button.start:hover { background: #eecb0a; }
+  button.start[disabled] { background: #b8b8b0; color: #7c7c74;
                            cursor: default; }
-  .drophint { font-size: 12px; color: #77809a; margin-top: 8px; }
-  #status { font-size: 13px; color: #9fb7d8; min-height: 18px;
+  #status { font-size: 14px; color: #3d4a4a; min-height: 18px;
             margin-top: 10px; }
-  #hashnote { font-size: 12px; color: #c9a45a; margin: 6px auto 0;
+  #hashnote { font-size: 13px; color: #7c5f00; margin: 6px auto 0;
               display: none; }
   #canvaswrap { display: none; position: relative; }
   canvas {
     display: block; image-rendering: pixelated;
-    border: 1px solid #2c3648; background: #000;
+    border: 1px solid #333; background: #000;
   }
   #mutebtn, #fsbtn {
     position: absolute; top: 6px; z-index: 5;
-    background: rgba(16,20,28,.75); color: #cfd6e4;
-    border: 1px solid #2c3648; border-radius: 5px;
+    background: rgba(20,20,20,.75); color: #d8d8d4;
+    border: 1px solid #3a3a36; border-radius: 5px;
     padding: 4px 10px; font-size: 14px; cursor: pointer;
   }
   #mutebtn { right: 6px; }
   #fsbtn { right: 52px; }
-  #mutebtn:hover, #fsbtn:hover { background: rgba(43,74,134,.85); }
-  a { color: #7fa7dd; }
+  #mutebtn:hover, #fsbtn:hover { background: rgba(70,70,66,.85); }
+  a { color: #9eb8b8; }
   /* Keep the tower on screen on small windows; fill (integer-ish) in
    * fullscreen. Emscripten's SDL maps mouse coords through the CSS size. */
   #canvaswrap canvas { max-width: 100vw; height: auto; }
@@ -90,135 +99,140 @@
     width: min(100vw, calc(100vh * 4 / 3)); height: auto; border: 0;
   }
   #towers { margin: 12px 0 4px; text-align: left; }
-  #towers h2 { font-size: 14px; letter-spacing: 1px; color: #cfd6e4;
+  #towers h2 { font-size: 15px; letter-spacing: 1px; color: #26261f;
                margin: 0 0 8px; font-weight: normal;
-               border-bottom: 1px solid #2c3648; padding-bottom: 6px; }
+               border-bottom: 1px solid #a9a9a0; padding-bottom: 6px; }
   #slotlist { max-height: min(300px, 38vh); overflow-y: auto; }
   .slot { display: flex; align-items: center; gap: 10px;
           padding: 7px 10px; border-radius: 5px; cursor: pointer; }
-  .slot:hover { background: #202839; }
-  .slot.sel { background: #1d2b33; outline: 1px solid #167060; }
+  .slot:hover { background: rgba(158,184,184,.28); }
+  .slot.sel { background: rgba(217,184,0,.16); outline: 1px solid #b39700; }
   .slot .who { flex: 1 1 auto; min-width: 0; }
-  .slot .nm { font-size: 14px; color: #dfe5f0; overflow: hidden;
+  .slot .nm { font-size: 15px; color: #21211b; overflow: hidden;
               text-overflow: ellipsis; white-space: nowrap; }
-  .slot .meta { font-size: 11.5px; color: #8a93a6; }
+  .slot .meta { font-size: 12.5px; color: #5c5f5a; }
   .slot .ops { flex: 0 0 auto; white-space: nowrap; }
   .slot .ops button {
-    background: none; border: 1px solid #2c3648; border-radius: 4px;
-    color: #9fb7d8; font-size: 12px; padding: 3px 7px; margin-left: 4px;
+    background: none; border: 1px solid #9aa8a8; border-radius: 4px;
+    color: #3d4a4a; font-size: 13px; padding: 3px 7px; margin-left: 4px;
     cursor: pointer; font-family: inherit;
   }
-  .slot .ops button:hover { border-color: #167060; color: #dfe5f0; }
-  .slot .ops button.play { border-color: #167060; color: #7fd8c0; }
-  #startbtn { width: 100%; margin: 10px 0 2px; font-size: 16px;
+  .slot .ops button:hover { border-color: #b39700; color: #21211b; }
+  .slot .ops button.play { border-color: #b39700; color: #7c6300; }
+  #startbtn { width: 100%; margin: 10px 0 2px; font-size: 17px;
               padding: 11px 22px; }
   #towerbtns { margin-top: 8px; display: flex; justify-content: center;
                gap: 8px; flex-wrap: wrap; }
   #towerbtns button, #towerbtns label {
-    background: none; border: 1px solid #2c3648; border-radius: 4px;
-    color: #9fb7d8; font-size: 12.5px; padding: 5px 12px;
+    background: none; border: 1px solid #9aa8a8; border-radius: 4px;
+    color: #3d4a4a; font-size: 13.5px; padding: 5px 12px;
     cursor: pointer; font-family: inherit; display: inline-block;
     margin: 0;
   }
   #towerbtns button:hover, #towerbtns label:hover {
-    border-color: #167060; color: #dfe5f0; }
-  #towers .empty { font-size: 12.5px; color: #77809a; padding: 4px 10px; }
+    border-color: #b39700; color: #21211b; }
+  #towers .empty { font-size: 13.5px; color: #5c5f5a; padding: 4px 10px; }
   /* EXE line at the card's foot in towers mode: which copy is loaded,
-   * with quiet Change / Forget actions beside it. */
-  #exerow { display: flex; align-items: center; gap: 8px; margin-top: 12px;
-            border-top: 1px solid #2c3648; padding-top: 10px; }
+   * with quiet Change / Forget actions beside it. On the setup face the
+   * row is just a bare output line — no rule above it. */
+  #exerow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  #menu.towers #exerow { margin-top: 12px; border-top: 1px solid #a9a9a0;
+                         padding-top: 10px; }
   #exerow #status { flex: 1 1 auto; text-align: left; margin-top: 0; }
-  .mini { background: none; border: 1px solid #2c3648; border-radius: 4px;
-          color: #9fb7d8; font-size: 11.5px; padding: 3px 9px;
+  .mini { background: none; border: 1px solid #9aa8a8; border-radius: 4px;
+          color: #4a5555; font-size: 12.5px; padding: 3px 9px;
           cursor: pointer; font-family: inherit; flex: 0 0 auto; }
-  .mini:hover { border-color: #167060; color: #dfe5f0; }
-  .mini.warn:hover { border-color: #5a3040; color: #d8a0b0; }
-  #findhelp { font-size: 13px; color: #aab3c5; text-align: left;
+  .mini:hover { border-color: #b39700; color: #21211b; }
+  .mini.warn:hover { border-color: #a04545; color: #7c2f2f; }
+  #findhelp { font-size: 14px; color: #3d403c; text-align: left;
               margin: 10px auto 0; }
-  #findhelp summary { cursor: pointer; color: #9fb7d8; text-align: center; }
+  #findhelp summary { cursor: pointer; color: #3e6b6b; text-align: center; }
   #findhelp ul { padding-left: 18px; line-height: 1.5;
                  max-height: 34vh; overflow-y: auto; }
   #pagefoot { position: absolute; bottom: 0; left: 0; right: 0; z-index: 2;
-              text-align: center; padding: 8px 12px 22px; }
-  #pagefoot .privacy { font-size: 12px; color: #9aa3b8; margin: 2px 0;
+              text-align: center; padding: 8px 12px 18px; }
+  #pagefoot .privacy { font-size: 13px; color: #a9a9a4; margin: 2px 0;
                        text-shadow: 0 1px 3px rgba(0,0,0,.8); }
   #crash, #modal {
     display: none; position: fixed; inset: 0; z-index: 50;
-    background: rgba(8,10,16,.92); color: #e8ded0;
+    background: rgba(10,10,8,.8); color: #26261f;
     align-items: center; justify-content: center; text-align: center;
   }
   #crash .card, #modal .card {
-    background: #1a2130; border: 1px solid #2c3648;
+    background: #d3d3ce; border: 1px solid #8f8f86;
     border-radius: 8px; padding: 22px 30px;
     width: min(440px, calc(100vw - 40px)); box-sizing: border-box; }
-  #crash .card { border-color: #5a3040; max-width: 520px; width: auto; }
-  #crash code { display: block; margin: 10px 0; font-size: 12px;
-    color: #c9a45a; word-break: break-all; }
+  #crash .card { border-color: #a04545; max-width: 520px; width: auto; }
+  #crash code { display: block; margin: 10px 0; font-size: 13px;
+    color: #7c5f00; word-break: break-all; }
   /* ---- In-page dialog (replaces prompt/confirm/alert) ---- */
-  #modal { background: rgba(8,10,16,.78); z-index: 60; }
-  #modal h3 { margin: 0 0 8px; font-size: 17px; color: #e8ded0;
+  #modal { background: rgba(10,10,8,.7); z-index: 60; }
+  #modal h3 { margin: 0 0 8px; font-size: 18px; color: #26261f;
               font-weight: normal; letter-spacing: .5px; }
-  #modal .body { font-size: 13.5px; color: #aab3c5; line-height: 1.5;
+  #modal .body { font-size: 14.5px; color: #3d403c; line-height: 1.5;
                  margin: 0 0 12px; }
   #minput {
     display: block; width: 100%; box-sizing: border-box;
-    background: #10141c; color: #eef2fa; border: 1px solid #37435a;
-    border-radius: 5px; padding: 9px 11px; font-size: 15px;
+    background: #fff; color: #1a1a12; border: 1px solid #8f8f86;
+    border-radius: 5px; padding: 9px 11px; font-size: 16px;
     font-family: inherit; outline: none;
   }
-  #minput:focus { border-color: #167060; }
-  #minput.bad { border-color: #7a3448; }
-  #merror { font-size: 12px; color: #d8a0b0; min-height: 16px;
+  #minput:focus { border-color: #b39700; }
+  #minput.bad { border-color: #a04545; }
+  #merror { font-size: 13px; color: #8a3030; min-height: 16px;
             text-align: left; margin: 5px 2px 0; }
   #modal .mrow { display: flex; justify-content: flex-end; gap: 8px;
                  margin-top: 12px; }
   #modal .mrow button {
-    border-radius: 5px; padding: 8px 18px; font-size: 14px;
+    border-radius: 5px; padding: 8px 18px; font-size: 15px;
     font-family: inherit; cursor: pointer;
   }
-  #mcancel { background: none; border: 1px solid #2c3648; color: #9fb7d8; }
-  #mcancel:hover { border-color: #167060; color: #dfe5f0; }
-  #mok { background: #167060; border: 0; color: #eef2fa; }
-  #mok:hover { background: #1d8a76; }
-  #mok[disabled] { background: #2a3040; color: #6a7288; cursor: default; }
-  #modal.danger #mok { background: #7a3448; }
-  #modal.danger #mok:hover { background: #93415a; }
+  #mcancel { background: none; border: 1px solid #9aa8a8; color: #3d4a4a; }
+  #mcancel:hover { border-color: #b39700; color: #21211b; }
+  #mok { background: #d9b800; border: 0; color: #211c00; }
+  #mok:hover { background: #eecb0a; }
+  #mok[disabled] { background: #b8b8b0; color: #7c7c74; cursor: default; }
+  #modal.danger #mok { background: #a04545; color: #f5eee8; }
+  #modal.danger #mok:hover { background: #b55050; }
   #ver { position: fixed; bottom: 6px; right: 10px; font-size: 11px;
-         color: #7a8398; z-index: 3;
+         color: #8c8c86; z-index: 3;
          text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 </style>
 </head>
 <body>
   <div id="stage">
+    <div id="herobox">
     <img id="hero" src="hero.png" width="640" height="480"
          alt="A contemporary glass tower entrance at dusk bearing the sign CONCILIA TOWER, its warm lobby glowing through the glass, rendered in the dithered style of the 1994 SimTower splash screen">
     <div id="shade"></div>
     <h1>ConciliaTower</h1>
     <div id="menu">
-      <p class="tagline">the faithful <em>SimTower</em> port &mdash; in your browser</p>
+      <p class="tagline">Play <em>SimTower</em> in your web browser</p>
       <input type="file" id="exefile" multiple>
       <div id="setupmode">
-        <p>Bring your own copy of <b>SIMTOWER.EXE</b> &mdash; or the
-           compressed <b>SIMTOWER.EX_</b> straight off the CD; this page
-           expands it. It is parsed <b>entirely in your browser</b> to load
-           the game's original art and sound &mdash; there is no server, and
-           the file never leaves your machine.</p>
-        <label class="pick" for="exefile">Choose SIMTOWER.EXE</label>
-        <div class="drophint">&hellip;or drop the file anywhere on this page</div>
+        <p>All the SimTower code has been rewritten from scratch, but the
+           original game assets such as images and sound need to be loaded
+           from the original game.</p>
+        <p>Insert your own copy of <b>SIMTOWER.EXE</b>, or the compressed
+           <b>SIMTOWER.EX_</b>. This page will parse it locally, extract
+           the assets, and let you play the game. Nothing is uploaded to a
+           server (besides a few analytics shown
+           <a href="https://conciliatower-roster.jonahss.workers.dev/"
+              target="_blank" rel="noopener">here</a>).</p>
+        <label class="pick" for="exefile">Load SimTower.EXE</label>
         <details id="findhelp">
           <summary>Where do I find SIMTOWER.EXE?</summary>
           <ul>
             <li>It's the game's main program file &mdash; named
                 <b>SIMTOWER.EXE</b>, about <b>6&nbsp;MB</b>, found in an
                 installed <code>SIMTOWER</code> folder.</li>
-            <li><b>Only have the CD (or a CD image)?</b> The disc carries a
-                <em>compressed</em> copy named <code>SIMTOWER.EX_</code> (note
-                the underscore) &mdash; drop that here as-is; this page expands
-                it for you. Open a CD image with 7-Zip or any unarchiver to
-                get at it. No installer needed.</li>
+            <li><b>Have the CD (or a CD image)?</b> The disc carries a
+                compressed copy named <code>SIMTOWER.EX_</code> (note
+                the underscore). Open a CD image with 7-Zip or any
+                unarchiver to get at it.</li>
             <li><b>Floppy disks?</b> Disks 2 and 3 hold
                 <code>SIMTOWER.E1_</code> and <code>SIMTOWER.E2_</code> &mdash;
-                select the two together and drop both at once.</li>
+                select the two together and load both at once.</li>
             <li><b>No disc?</b> SimTower hasn't been sold in decades; copies
                 circulate on game-preservation sites (a web search for
                 &ldquo;SimTower Windows download&rdquo; gets you there).
@@ -227,8 +241,6 @@
             <li>All known US releases work (1.0 and 1.1b). The
                 <b>Macintosh</b> version won't &mdash; it stores its art
                 differently. Windows version only.</li>
-            <li>Picked the wrong file? No harm &mdash; this page checks the
-                file's structure and tells you what it got instead.</li>
           </ul>
         </details>
       </div>
@@ -245,7 +257,7 @@
         </div>
       </div>
       <div id="exerow">
-        <div id="status">Waiting for your EXE&hellip;</div>
+        <div id="status"></div>
         <label class="mini" for="exefile" id="changebtn"
                style="display:none"
                title="Load a different SIMTOWER.EXE">Change</label>
@@ -254,10 +266,8 @@
       </div>
       <div id="hashnote"></div>
     </div>
+    </div>
     <div id="pagefoot">
-      <p class="privacy">Your EXE and saves live in this browser's local
-         storage only &mdash; upload once, it's remembered here.
-         Sound starts with your first click (browser rule, not ours).</p>
       <p class="privacy">Open source &mdash;
          <a href="https://github.com/Jonahss/concilia-tower" target="_blank"
             rel="noopener">github.com/Jonahss/concilia-tower</a></p>
@@ -284,7 +294,7 @@
     <p>The game hit an internal error. Your last save is safe in this
        browser. Reloading the page picks it back up.</p>
     <code id="crashmsg"></code>
-    <p style="font-size:12px; color:#8a93a6">If this keeps happening,
+    <p style="font-size:13px; color:#5c5f5a">If this keeps happening,
        send Jonah a screenshot of this box (build __CT_VERSION__).</p>
     <button class="start" onclick="location.reload()">Reload</button>
   </div></div>
@@ -306,6 +316,7 @@
       towers ? 'none' : 'block';
     document.getElementById('towersmode').style.display =
       towers ? 'block' : 'none';
+    document.getElementById('menu').classList.toggle('towers', !!towers);
     changeBtn.style.display = towers ? 'inline-block' : 'none';
   }
 
@@ -594,7 +605,7 @@
     hashNote.textContent = message;
     statusEl.textContent = exeBytes
       ? statusEl.textContent
-      : 'That wasn’t it — see the note below. Waiting for your EXE…';
+      : 'That wasn’t it — see the note below.';
   }
 
   /* --- KWAJ expansion (SIMTOWER.EX_ off the CD / floppy media) ---
@@ -695,7 +706,7 @@
       forgetBtn.style.display = 'none';
       hashNote.style.display = 'none';
       setMenuMode(false);
-      statusEl.textContent = 'Copy forgotten. Waiting for your EXE…';
+      statusEl.textContent = 'Copy forgotten.';
     });
   });
 
@@ -1129,8 +1140,6 @@
       });
     }],
     onRuntimeInitialized: function () {
-      statusEl.textContent = exeBytes ? statusEl.textContent
-                                      : 'Engine ready. Waiting for your EXE…';
       Module.engineReady = true;
       renderSlots();    /* IDBFS is loaded (run dependency) — list towers */
     },
@@ -1209,14 +1218,14 @@
   var menuEl = document.getElementById('menu');
   stageEl.addEventListener('dragover', function (ev) {
     ev.preventDefault();
-    menuEl.style.borderColor = '#2e8a78';
+    menuEl.style.borderColor = '#b39700';
   });
   stageEl.addEventListener('dragleave', function () {
-    menuEl.style.borderColor = '#37435a';
+    menuEl.style.borderColor = '#8f8f86';
   });
   stageEl.addEventListener('drop', function (ev) {
     ev.preventDefault();
-    menuEl.style.borderColor = '#37435a';
+    menuEl.style.borderColor = '#8f8f86';
     ingest(ev.dataTransfer.files);
   });
 
