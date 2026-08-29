@@ -27,7 +27,8 @@ const STUB = `<!doctype html>
   p { color: #7d879c; margin: 0 0 28px; }
   a { color: #7fa7dd; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px;
+       text-align: left; width: fit-content; margin-inline: auto; }
   .news { margin-top: 44px; }
   .news p { margin-bottom: 12px; font-size: 15px; }
   .news form { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -44,6 +45,7 @@ const STUB = `<!doctype html>
   <ul>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
     <li><a href="https://www.wyldcard.io">🃏 Wyldcard — E-Ink Trading Cards</a></li>
+    <li><a href="https://github.com/Jonahss/creative-writing">✍️ Creative Writing</a></li>
     <li><a href="https://github.com/Jonahss">GitHub</a></li>
   </ul>
   <div class="news">
