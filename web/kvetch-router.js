@@ -43,6 +43,7 @@ const STUB = `<!doctype html>
   <p>Jonah's corner of the internet — proper site coming.</p>
   <ul>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
+    <li><a href="https://www.wyldcard.io">🃏 Wyldcard — tabletop cards with e-paper screens</a></li>
     <li><a href="https://github.com/Jonahss">GitHub</a></li>
   </ul>
   <div class="news">
