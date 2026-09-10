@@ -45,7 +45,7 @@ const STUB = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
  @media (max-width:700px) { .mesh { background-size:230% auto; background-position:50% -10vw; -webkit-mask-image:linear-gradient(#000 0, #000 34vw, transparent 66vw); mask-image:linear-gradient(#000 0, #000 34vw, transparent 66vw); } main { padding-top:min(46vw, 260px); } }
 </style></head><body><div class="mesh"></div><main>
   <h1>kvetch.io</h1>
-  <p class=tag>Jonah's corner of the internet — proper site coming.</p>
+  <p class=tag>Jonah's corner of the internet.</p>
   <ul>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
     <li><a href="https://www.wyldcard.io">🃏 Wyldcard — E-Ink Trading Cards</a></li>
