@@ -48,15 +48,15 @@ const STUB = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
   <p class=tag>Jonah's corner of the internet.</p>
   <ul>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
-    <li><a href="https://www.wyldcard.io">🃏 Wyldcard — E-Ink Trading Cards</a></li>
-    <li><a href="https://www.wyldcard.io/blog">📝 Blog — write-ups on ConciliaTower, Wyldcard, and the rest</a></li>
     <li><a href="https://anystation.net">📡 anystation — calling any station: a public board reachable by any protocol</a></li>
+    <li><a href="https://www.wyldcard.io">🃏 Wyldcard — E-Ink Trading Cards</a></li>
     <li><a href="https://github.com/Jonahss/creative-writing">✍️ Creative Writing</a></li>
     <li><a href="https://github.com/Jonahss">GitHub</a></li>
+    <li><a href="https://www.wyldcard.io/blog">📝 Blog — write-ups on ConciliaTower, Wyldcard, and the rest</a></li>
   </ul>
   <div class="news">
-    <p>Occasional emails when something new happens — same list as
-       <a href="https://www.wyldcard.io">Wyldcard</a>.</p>
+    <p>Occasional emails when something new happens. Past posts live in the
+       <a href="https://www.wyldcard.io/blog">blog archive</a>.</p>
     <form action="https://buttondown.com/api/emails/embed-subscribe/wyldcard" method="post">
       <input type="email" name="email" placeholder="you@example.com" aria-label="Email address" required>
       <button type="submit">Sign up</button>
