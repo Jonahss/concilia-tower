@@ -620,6 +620,8 @@ typedef struct {
 #define ACT_FIRE_RESCUE   28   /* Options menu 40008 (10e8:01e2 mid-fire
                                   chopper purchase) */
 #define ACT_EXPORT_SAV    30   /* Game menu: portable web-save download */
+#define ACT_MANUAL        31   /* Help menu: original 1994 manual (archive.org)
+                                  in a new tab (Jonah 2026-09-11) */
 #define ACT_MASS_PRICING  29   /* Port tool (Jonah 2026-08-12): bulk rent-
                                   class changes; no EXE counterpart */
 
@@ -743,6 +745,14 @@ static const MenuItem menu_windows[] = {
 };
 #define MENU_WINDOWS_COUNT 6
 
+/* Help menu — the original's Help (SimTower.HLP) is a WinHelp file we
+ * can't render; point at the scanned 1994 user's manual instead. */
+#define MANUAL_URL "https://archive.org/details/SimTower_-_Manual_-_PC"
+static const MenuItem menu_help[] = {
+    { "SimTower Manual (1994)", ITEM_NONE, ACT_MANUAL },
+};
+#define MENU_HELP_COUNT 1
+
 /* Top-level menus */
 typedef struct {
     const char     *label;
@@ -760,8 +770,9 @@ static const TopMenu top_menus[] = {
     { "Options",    menu_options,     MENU_OPTIONS_COUNT },
     { "Windows",    menu_windows,     MENU_WINDOWS_COUNT },
     { "View",       menu_view,        MENU_VIEW_COUNT },
+    { "Help",       menu_help,        MENU_HELP_COUNT },
 };
-#define TOP_MENU_COUNT 9
+#define TOP_MENU_COUNT 10
 
 /* Get pixel position of top menu item */
 static void get_top_menu_rect(int idx, int *x, int *y, int *w, int *h)
@@ -8853,6 +8864,21 @@ static void do_export_sav(void)
     }
 }
 
+/* Open a web page outside the game. Web: a new tab. The click that got
+ * us here happened in the browser's event handler but this runs from the
+ * animation frame, so it relies on transient user activation (a few
+ * seconds after any click) rather than being inside the click itself.
+ * Native: SDL_OpenURL (xdg-open and friends). */
+static void open_url(const char *url)
+{
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ window.open(UTF8ToString($0), '_blank', 'noopener'); }, url);
+#else
+    if (SDL_OpenURL(url) != 0)
+        printf("Open this in a browser: %s\n", url);
+#endif
+}
+
 static void execute_menu_item(const MenuItem *item)
 {
     if (item->build_type != ITEM_NONE) {
@@ -8935,6 +8961,10 @@ static void execute_menu_item(const MenuItem *item)
                               : "There is no fire");
         break;
     case ACT_MASS_PRICING: game.show_masspricing ^= 1; break;
+    case ACT_MANUAL:
+        open_url(MANUAL_URL);
+        add_event_message("Opening the 1994 manual in a new tab...");
+        break;
     case ACT_ANIM_PEOPLE:  game.anim_people ^= 1;  break;
     case ACT_ANIM_EFFECTS: game.anim_effects ^= 1; break;
     case ACT_SND_ELEV:     game.snd_elev ^= 1;   break;
