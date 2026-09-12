@@ -49,6 +49,7 @@ const STUB = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
   <ul>
     <li><a href="/conciliatower/">🏢 ConciliaTower — SimTower, faithfully, in your browser</a></li>
     <li><a href="https://www.wyldcard.io">🃏 Wyldcard — E-Ink Trading Cards</a></li>
+    <li><a href="https://www.wyldcard.io/blog">📝 Blog — write-ups on ConciliaTower, Wyldcard, and the rest</a></li>
     <li><a href="https://anystation.net">📡 anystation — calling any station: a public board reachable by any protocol</a></li>
     <li><a href="https://github.com/Jonahss/creative-writing">✍️ Creative Writing</a></li>
     <li><a href="https://github.com/Jonahss">GitHub</a></li>
