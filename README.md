@@ -19,7 +19,9 @@ running natively on Linux, using the original game's own bitmaps and sounds.
 
 ## Play it in your browser
 
-**→ [jonahss.github.io/concilia-tower](https://jonahss.github.io/concilia-tower/)**
+**→ [kvetch.io/conciliatower](https://kvetch.io/conciliatower/)** (mirror: [jonahss.github.io/concilia-tower](https://jonahss.github.io/concilia-tower/))
+
+The story of how it was built: [A complete and faithful SimTower remake, playable in the browser](https://www.wyldcard.io/blog/simtower-remake-playable-in-browser/).
 
 The same engine, compiled to WebAssembly. Bring your own `SIMTOWER.EXE` — it
 is parsed entirely in your browser (there is no server) and remembered
