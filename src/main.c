@@ -774,12 +774,21 @@ static const TopMenu top_menus[] = {
 };
 #define TOP_MENU_COUNT 10
 
+/* Width of a top-level menu label cell. ONE definition: the bar drawing,
+ * the bar hit-test and the dropdown anchor all use it. They used to
+ * disagree (8 vs 7 px/char) and the dropdowns drifted right by one pixel
+ * per character of every label before them (Jonah, 2026-09-11). */
+static int top_menu_width(int i)
+{
+    return (int)strlen(top_menus[i].label) * 7 + MENU_ITEM_PAD * 2;
+}
+
 /* Get pixel position of top menu item */
 static void get_top_menu_rect(int idx, int *x, int *y, int *w, int *h)
 {
     int cx = 4;
     for (int i = 0; i < TOP_MENU_COUNT; i++) {
-        int tw = (int)strlen(top_menus[i].label) * 8 + MENU_ITEM_PAD * 2;
+        int tw = top_menu_width(i);
         if (i == idx) {
             *x = cx; *y = HUD_HEIGHT; *w = tw; *h = MENU_BAR_H;
             return;
@@ -5427,7 +5436,7 @@ static void render_menu_bar(void)
     /* Draw top-level menu labels */
     int cx = 8;
     for (int i = 0; i < TOP_MENU_COUNT; i++) {
-        int tw = (int)strlen(top_menus[i].label) * 7 + MENU_ITEM_PAD * 2;
+        int tw = top_menu_width(i);
         
         int is_active = (game.menu_open == i);
         int is_hover = (game.menu_bar_hover == i && game.menu_open < 0);
@@ -8753,7 +8762,7 @@ static int menu_bar_hit_test(int mx, int my)
     if (my < HUD_HEIGHT || my >= HUD_HEIGHT + MENU_BAR_H) return -1;
     int cx = 8;
     for (int i = 0; i < TOP_MENU_COUNT; i++) {
-        int tw = (int)strlen(top_menus[i].label) * 7 + MENU_ITEM_PAD * 2;
+        int tw = top_menu_width(i);
         if (mx >= cx && mx < cx + tw) return i;
         cx += tw;
     }
