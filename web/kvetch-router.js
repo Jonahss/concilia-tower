@@ -77,10 +77,16 @@ export default {
       const upstream = await fetch(GAME_ORIGIN + '/' + rest + url.search, {
         cf: { cacheTtl: 300, cacheEverything: true },
       });
-      /* Re-head the response so CF is free to cache/stream it. */
+      /* Re-head the response so CF is free to cache/stream it. The
+       * bundle's file names never change (index.html/js/wasm), so browsers
+       * must revalidate on every load or a deploy stays invisible for hours
+       * (Jonah couldn't see the Help menu, 2026-09-11). Edge still caches
+       * for cacheTtl above; GitHub's ETag makes the revalidation a 304. */
+      const headers = new Headers(upstream.headers);
+      headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
       return new Response(upstream.body, {
         status: upstream.status,
-        headers: upstream.headers,
+        headers,
       });
     }
     if (url.pathname === '/mesh.png')
